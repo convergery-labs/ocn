@@ -1,0 +1,24 @@
+services:
+  agent-template:
+    build: .
+    container_name: agent-template
+    environment:
+      - OPENAI_API_KEY=""
+      - GITHUB_PERSONAL_ACCESS_TOKEN=""
+    stdin_open: true
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./reports:/app/reports
+    develop:
+      watch:
+        - action: sync+restart
+          path: ./src
+          target: /app
+    tty: true
+    networks:
+      - agents-net
+
+networks:
+  agents-net:
+    external: true

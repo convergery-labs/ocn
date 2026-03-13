@@ -1,0 +1,47 @@
+{
+    "protocolVersion": "0.2.9",
+    "name": "AI News Aggregator",
+    "description": "Fetches the past week of AI news from Google News, extracts article content, and generates themed markdown reports covering Compute, Energy, Economics, and Research.",
+    "url": "http://localhost:8000/",
+    "preferredTransport": "JSONRPC",
+    "provider": {
+        "organization": "Nasiko AI Projects",
+        "url": "https://github.com/ashishsharma/nasiko"
+    },
+    "iconUrl": "http://localhost:8000/icon.png",
+    "version": "1.0.0",
+    "documentationUrl": "http://localhost:8000/docs",
+    "capabilities": {
+        "streaming": false,
+        "pushNotifications": false,
+        "stateTransitionHistory": true,
+        "chat_agent": true
+    },
+    "securitySchemes": {},
+    "security": [],
+    "defaultInputModes": [
+        "text/plain"
+    ],
+    "defaultOutputModes": [
+        "text/plain"
+    ],
+    "skills": [
+        {
+            "id": "fetch_ai_news",
+            "name": "Fetch AI News",
+            "description": "Retrieves recent AI news articles from Google News for the past 7 days."
+        },
+        {
+            "id": "fetch_article_content",
+            "name": "Fetch Article Content",
+            "description": "Extracts the full text content of a news article from its URL."
+        },
+        {
+            "id": "save_themed_report",
+            "name": "Save Themed Report",
+            "description": "Saves a compiled AI news report to a themed markdown file (Compute, Energy, Economics, or Research)."
+        }
+    ],
+    "supportsAuthenticatedExtendedCard": false,
+    "signatures": []
+}
