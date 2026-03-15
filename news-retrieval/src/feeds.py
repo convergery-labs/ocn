@@ -20,6 +20,15 @@ AI_NEWS_FEEDS = [
     # Research – models, papers, benchmarks
     "https://feeds.arstechnica.com/arstechnica/technology-lab",
     "https://huggingface.co/blog/feed.xml",
+    # Robotics & Physical AI
+    "https://spectrum.ieee.org/feeds/feed.rss",
+    "https://www.therobotreport.com/feed/",
+    # Edge & Local AI – on-device inference, consumer hardware
+    "https://www.tomshardware.com/feeds/all",
+    "https://www.hackster.io/feed",
+    # AI in Science – research breakthroughs, nature, math
+    "https://www.quantamagazine.org/feed/",
+    "https://feeds.nature.com/nature/rss/current",
     # Policy – regulation, governance, ethics
     "https://www.lawfaremedia.org/feed",
     "https://www.eff.org/rss/updates.xml",
