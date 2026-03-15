@@ -118,6 +118,10 @@ class NewsAgent:
 
         self.llm = ChatOpenAI(
             model="gpt-5.4",
+            # model="openai/gpt-5.4",
+            openai_api_key=os.environ.get("OPENAI_API_KEY"),
+            # openai_api_key=os.environ.get("OPENROUTER_API_KEY"),
+            # openai_api_base="https://openrouter.ai/api/v1",
             temperature=0,
             streaming=False,
             http_client=httpx.Client(http2=False),

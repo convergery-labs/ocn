@@ -48,8 +48,9 @@ def make_fetch_news_tool(feeds: List[str], tool_name: str = "fetch_news"):
         cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
         articles = []
 
-        for feed_url in feeds:
+        def _parse_feed(feed_url: str) -> list:
             feed = feedparser.parse(feed_url)
+            results = []
             for entry in feed.entries:
                 pub_date = None
                 if hasattr(entry, "published_parsed") and entry.published_parsed:
@@ -58,7 +59,7 @@ def make_fetch_news_tool(feeds: List[str], tool_name: str = "fetch_news"):
                     )
                     if pub_date < cutoff:
                         continue
-                articles.append(
+                results.append(
                     {
                         "title": entry.get("title", ""),
                         "url": entry.get("link", ""),
@@ -67,6 +68,11 @@ def make_fetch_news_tool(feeds: List[str], tool_name: str = "fetch_news"):
                         "_pub_date": pub_date,
                     }
                 )
+            return results
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            for feed_articles in executor.map(_parse_feed, feeds):
+                articles.extend(feed_articles)
 
         articles.sort(
             key=lambda a: a["_pub_date"] or datetime.min.replace(
