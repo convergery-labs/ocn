@@ -135,6 +135,7 @@ class NewsAgent:
         feeds: List[str],
         taxonomy: List[str],
         fetch_tool_name: str = "fetch_news",
+        weekly_feeds: List[str] | None = None,
     ):
         """
         Initialise the agent.
@@ -157,6 +158,7 @@ class NewsAgent:
             tool_name=fetch_tool_name,
             article_registry=self._article_registry,
             total_counter=self,
+            weekly_feeds=weekly_feeds,
         )
         save_report = make_save_report_tool(
             self._report_collector, article_registry=self._article_registry

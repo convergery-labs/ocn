@@ -31,6 +31,7 @@ def make_fetch_news_tool(
     tool_name: str = "fetch_news",
     article_registry: dict | None = None,
     total_counter=None,
+    weekly_feeds: List[str] | None = None,
 ):
     """
     Return a LangChain @tool that fetches articles from the given RSS feeds.
@@ -58,6 +59,15 @@ def make_fetch_news_tool(
             each containing title, url, published date, and source.
         """
         cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
+        active_feeds = list(feeds)
+        if weekly_feeds and days_back >= 7:
+            active_feeds.extend(weekly_feeds)
+            logger.info(
+                "[FEEDS] days_back=%d including %d weekly feeds (total %d)",
+                days_back,
+                len(weekly_feeds),
+                len(active_feeds),
+            )
         articles = []
 
         def _parse_feed(feed_url: str) -> list:
@@ -92,11 +102,11 @@ def make_fetch_news_tool(
 
         t0 = time.perf_counter()
         with ThreadPoolExecutor(max_workers=10) as executor:
-            for feed_articles in executor.map(_parse_feed, feeds):
+            for feed_articles in executor.map(_parse_feed, active_feeds):
                 articles.extend(feed_articles)
         logger.info(
             "[TIMER] fetch_news total: feeds=%d articles=%d elapsed=%.2fs",
-            len(feeds),
+            len(active_feeds),
             len(articles),
             time.perf_counter() - t0,
         )
@@ -182,7 +192,7 @@ def fetch_articles_content(urls: List[str]) -> str:
     return json.dumps(results, indent=2)
 
 
-_URL_RE = re.compile(r"^https?://\S+$", re.MULTILINE)
+_URL_RE = re.compile(r"https?://[^\s\)\]>\"']+", re.MULTILINE)
 
 
 def make_save_report_tool(

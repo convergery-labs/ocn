@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from agent import NewsAgent
-from feeds import AI_NEWS_FEEDS, SMART_MONEY_FEEDS
+from feeds import AI_NEWS_FEEDS, AI_NEWS_FEEDS_WEEKLY, SMART_MONEY_FEEDS
 from models import (
     JsonRpcRequest, JsonRpcResponse, Task, TaskStatus, Artifact, ArtifactPart
 )
@@ -56,6 +56,7 @@ ai_agent = NewsAgent(
     feeds=AI_NEWS_FEEDS,
     taxonomy=AI_TAXONOMY,
     fetch_tool_name="fetch_ai_news",
+    weekly_feeds=AI_NEWS_FEEDS_WEEKLY,
 )
 
 smart_money_agent = NewsAgent(
