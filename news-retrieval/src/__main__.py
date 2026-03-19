@@ -158,8 +158,8 @@ async def health():
     """Return the health status of the server and its dependencies."""
     checks = {}
 
-    # api_key = os.environ.get("OPENROUTER_API_KEY", "")
-    api_key = os.environ.get("OPENAI_API_KEY", "")
+    api_key = os.environ.get("OPENROUTER_API_KEY", "")
+    # api_key = os.environ.get("OPENAI_API_KEY", "")
     checks["api_key_configured"] = bool(api_key)
 
     reports_dir = os.environ.get("REPORTS_DIR", "/app/reports")
@@ -285,7 +285,7 @@ async def smart_money_summary(request: NewsRequest):
 if __name__ == "__main__":
     @click.command()
     @click.option('--host', default='0.0.0.0')
-    @click.option('--port', default=5000)
+    @click.option('--port', default=8000)
     def main(host: str, port: int):
         uvicorn.run(app, host=host, port=port)
 
