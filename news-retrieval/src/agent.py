@@ -1,12 +1,57 @@
 """Core agent logic for the News Aggregator."""
 import os
+import time
+import logging
 import httpx
 from typing import List
+
+logger = logging.getLogger(__name__)
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.agents import AgentExecutor, create_tool_calling_agent
+from langchain_core.callbacks import BaseCallbackHandler
+from langchain_core.outputs import LLMResult
 
 from tools import make_fetch_news_tool, fetch_articles_content, make_save_report_tool
+
+
+class _LLMTimingCallback(BaseCallbackHandler):
+    """Log duration and token usage for every LLM call."""
+
+    def __init__(self, agent_name: str):
+        self._agent_name = agent_name
+        self._call_start: float = 0.0
+        self._call_index: int = 0
+
+    def on_chat_model_start(self, serialized, messages, **kwargs):
+        self._call_start = time.perf_counter()
+        self._call_index += 1
+        # Count tokens in the prompt as a rough size indicator
+        total_chars = sum(
+            len(m.content) if hasattr(m, "content") and isinstance(m.content, str) else 0
+            for batch in messages
+            for m in batch
+        )
+        logger.info(
+            "[LLM] agent=%s call=%d started prompt_chars=%d",
+            self._agent_name,
+            self._call_index,
+            total_chars,
+        )
+
+    def on_llm_end(self, response: LLMResult, **kwargs):
+        elapsed = time.perf_counter() - self._call_start
+        usage = {}
+        if response.llm_output:
+            usage = response.llm_output.get("token_usage", {})
+        logger.info(
+            "[LLM] agent=%s call=%d elapsed=%.2fs prompt_tokens=%s completion_tokens=%s",
+            self._agent_name,
+            self._call_index,
+            elapsed,
+            usage.get("prompt_tokens", "?"),
+            usage.get("completion_tokens", "?"),
+        )
 
 _SYSTEM_PROMPT_TEMPLATE = """You are a {domain} news aggregator agent. When asked to gather
 news, proceed immediately using the following defaults unless the request
@@ -104,9 +149,18 @@ class NewsAgent:
         """
         self.name = name
         self._report_collector: dict = {}
+        self._article_registry: dict = {}  # url -> title; URLs removed as reports are saved
+        self._total_fetched: int = 0
 
-        fetch_news = make_fetch_news_tool(feeds, tool_name=fetch_tool_name)
-        save_report = make_save_report_tool(self._report_collector)
+        fetch_news = make_fetch_news_tool(
+            feeds,
+            tool_name=fetch_tool_name,
+            article_registry=self._article_registry,
+            total_counter=self,
+        )
+        save_report = make_save_report_tool(
+            self._report_collector, article_registry=self._article_registry
+        )
         self.tools = [fetch_news, fetch_articles_content, save_report]
 
         taxonomy_str = "\n".join(f"  - {cat}" for cat in taxonomy)
@@ -116,15 +170,20 @@ class NewsAgent:
             taxonomy=taxonomy_str,
         )
 
+        # Callback must be created before the LLM so it can be passed directly.
+        # Passing it only to AgentExecutor is not reliable — LangChain does not
+        # always propagate executor-level callbacks down to the LLM layer.
+        self._llm_callback = _LLMTimingCallback(name)
         self.llm = ChatOpenAI(
-            model="gpt-5.4",
-            # model="openai/gpt-5.4",
-            openai_api_key=os.environ.get("OPENAI_API_KEY"),
-            # openai_api_key=os.environ.get("OPENROUTER_API_KEY"),
-            # openai_api_base="https://openrouter.ai/api/v1",
+            # model="gpt-5.4",
+            model="openai/gpt-5.4",
+            # openai_api_key=os.environ.get("OPENAI_API_KEY"),
+            openai_api_key=os.environ.get("OPENROUTER_API_KEY"),
+            openai_api_base="https://openrouter.ai/api/v1",
             temperature=0,
             streaming=False,
             http_client=httpx.Client(http2=False),
+            callbacks=[self._llm_callback],
         )
 
         prompt = ChatPromptTemplate.from_messages(
@@ -139,7 +198,7 @@ class NewsAgent:
         self.agent_executor = AgentExecutor(
             agent=agent,
             tools=self.tools,
-            verbose=True,
+            verbose=False,
             max_iterations=150,
             handle_parsing_errors=True,
             stream_runnable=False,
@@ -151,6 +210,24 @@ class NewsAgent:
         self._report_collector.clear()
         return reports
 
+    def _log_coverage(self):
+        uncategorized = dict(self._article_registry)
+        if uncategorized:
+            logger.info(
+                "[COVERAGE] agent=%s uncategorized=%d/%d articles",
+                self.name,
+                len(uncategorized),
+                self._total_fetched,
+            )
+            for url, title in uncategorized.items():
+                logger.info("[COVERAGE] uncategorized: %s | %s", title, url)
+        else:
+            logger.info(
+                "[COVERAGE] agent=%s all %d articles categorized",
+                self.name,
+                self._total_fetched,
+            )
+
     def process_message(self, message_text: str) -> dict:
         """
         Process a free-form message from a parent agent or orchestrator.
@@ -160,7 +237,9 @@ class NewsAgent:
             mapping category name → full markdown content).
         """
         self._report_collector.clear()
+        self._article_registry.clear()
         result = self.agent_executor.invoke({"input": message_text})
+        self._log_coverage()
         return {"summary": result["output"], "reports": self._collect_reports()}
 
     def run(
@@ -178,8 +257,17 @@ class NewsAgent:
             mapping category name → full markdown content).
         """
         self._report_collector.clear()
+        self._article_registry.clear()
         instruction = _build_instruction(
             days_back, max_articles, summary_depth, focus
         )
+        t0 = time.perf_counter()
         result = self.agent_executor.invoke({"input": instruction})
+        logger.info(
+            "[TIMER] agent=%s run total elapsed=%.2fs reports=%d",
+            self.name,
+            time.perf_counter() - t0,
+            len(self._report_collector),
+        )
+        self._log_coverage()
         return {"summary": result["output"], "reports": self._collect_reports()}

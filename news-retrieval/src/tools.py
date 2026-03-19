@@ -1,12 +1,17 @@
 """Tools for news aggregator agents."""
 import os
+import re
 import json
+import time
+import logging
 import feedparser
 import trafilatura
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import List
+
+logger = logging.getLogger(__name__)
 
 from langchain_core.tools import tool
 
@@ -21,13 +26,20 @@ _HEADERS = {
 OUTPUT_DIR = os.environ.get("REPORTS_DIR", "/app/reports")
 
 
-def make_fetch_news_tool(feeds: List[str], tool_name: str = "fetch_news"):
+def make_fetch_news_tool(
+    feeds: List[str],
+    tool_name: str = "fetch_news",
+    article_registry: dict | None = None,
+    total_counter=None,
+):
     """
     Return a LangChain @tool that fetches articles from the given RSS feeds.
 
     Args:
         feeds: List of RSS feed URLs to poll.
         tool_name: Name to give the tool (must be unique per agent).
+        article_registry: If provided, fetched articles are stored here keyed
+                          by URL so callers can later detect uncategorized ones.
 
     Returns:
         A LangChain tool function.
@@ -49,7 +61,9 @@ def make_fetch_news_tool(feeds: List[str], tool_name: str = "fetch_news"):
         articles = []
 
         def _parse_feed(feed_url: str) -> list:
+            t0 = time.perf_counter()
             feed = feedparser.parse(feed_url)
+            elapsed = time.perf_counter() - t0
             results = []
             for entry in feed.entries:
                 pub_date = None
@@ -68,11 +82,24 @@ def make_fetch_news_tool(feeds: List[str], tool_name: str = "fetch_news"):
                         "_pub_date": pub_date,
                     }
                 )
+            logger.info(
+                "[TIMER] feed=%s articles=%d elapsed=%.2fs",
+                feed_url,
+                len(results),
+                elapsed,
+            )
             return results
 
+        t0 = time.perf_counter()
         with ThreadPoolExecutor(max_workers=10) as executor:
             for feed_articles in executor.map(_parse_feed, feeds):
                 articles.extend(feed_articles)
+        logger.info(
+            "[TIMER] fetch_news total: feeds=%d articles=%d elapsed=%.2fs",
+            len(feeds),
+            len(articles),
+            time.perf_counter() - t0,
+        )
 
         articles.sort(
             key=lambda a: a["_pub_date"] or datetime.min.replace(
@@ -86,6 +113,12 @@ def make_fetch_news_tool(feeds: List[str], tool_name: str = "fetch_news"):
         for article in articles:
             del article["_pub_date"]
 
+        if article_registry is not None:
+            article_registry.clear()
+            article_registry.update({a["url"]: a["title"] for a in articles})
+        if total_counter is not None:
+            total_counter._total_fetched = len(articles)
+
         return json.dumps(articles, indent=2)
 
     return fetch_news
@@ -94,18 +127,29 @@ def make_fetch_news_tool(feeds: List[str], tool_name: str = "fetch_news"):
 def _fetch_one(url: str) -> dict:
     """Fetch and extract content from a single URL."""
     try:
+        t0 = time.perf_counter()
         response = requests.get(
             url, headers=_HEADERS, timeout=15, allow_redirects=True
         )
+        http_elapsed = time.perf_counter() - t0
         response.raise_for_status()
+        t1 = time.perf_counter()
         content = trafilatura.extract(
             response.text,
             include_comments=False,
             include_tables=False,
             url=response.url,
         )
+        extract_elapsed = time.perf_counter() - t1
+        logger.info(
+            "[TIMER] article http=%.2fs extract=%.2fs url=%s",
+            http_elapsed,
+            extract_elapsed,
+            url,
+        )
         return {"url": url, "content": content or ""}
     except Exception as e:
+        logger.warning("[TIMER] article error=%.2fs url=%s err=%s", time.perf_counter() - t0, url, e)
         return {"url": url, "content": f"Error: {str(e)}"}
 
 
@@ -124,15 +168,27 @@ def fetch_articles_content(urls: List[str]) -> str:
         JSON string mapping each URL to its full extracted text content.
     """
     results = {}
+    t0 = time.perf_counter()
     with ThreadPoolExecutor(max_workers=10) as executor:
         futures = {executor.submit(_fetch_one, url): url for url in urls}
         for future in as_completed(futures):
             result = future.result()
             results[result["url"]] = result["content"]
+    logger.info(
+        "[TIMER] fetch_articles_content total: urls=%d elapsed=%.2fs",
+        len(urls),
+        time.perf_counter() - t0,
+    )
     return json.dumps(results, indent=2)
 
 
-def make_save_report_tool(collector: dict | None = None):
+_URL_RE = re.compile(r"^https?://\S+$", re.MULTILINE)
+
+
+def make_save_report_tool(
+    collector: dict | None = None,
+    article_registry: dict | None = None,
+):
     """
     Return a LangChain @tool that saves reports to disk and optionally
     records their content in the provided collector dict.
@@ -140,6 +196,8 @@ def make_save_report_tool(collector: dict | None = None):
     Args:
         collector: If provided, each saved report's content is stored here
                    under its theme name so callers can include it in responses.
+        article_registry: If provided, URLs found in each report are removed
+                          from the registry so the remainder are uncategorized.
     """
     @tool
     def save_themed_report(theme: str, content: str) -> str:
@@ -164,6 +222,10 @@ def make_save_report_tool(collector: dict | None = None):
 
         if collector is not None:
             collector[theme] = content
+
+        if article_registry is not None:
+            for url in _URL_RE.findall(content):
+                article_registry.pop(url, None)
 
         return f"Report saved to {filepath}"
 

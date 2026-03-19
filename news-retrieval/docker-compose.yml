@@ -6,7 +6,7 @@ services:
       - .env
     stdin_open: true
     ports:
-      - "5000:5000"
+      - "8000:8000"
     volumes:
       - ./reports:/app/reports
     develop:
