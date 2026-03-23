@@ -2,17 +2,17 @@
 import logging
 import os
 import uuid
-import click
-import uvicorn
 from datetime import datetime
 from typing import Literal, Optional
 
+import click
+import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from agent import NewsAgent
-from feeds import AI_NEWS_FEEDS, AI_NEWS_FEEDS_WEEKLY, SMART_MONEY_FEEDS
+from ai_news import agent as ai_agent
+from smart_money import agent as smart_money_agent
 from models import (
     JsonRpcRequest, JsonRpcResponse, Task, TaskStatus, Artifact, ArtifactPart
 )
@@ -21,50 +21,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("news-aggregator")
 
 app = FastAPI(title="News Aggregator")
-
-# ---------------------------------------------------------------------------
-# Agent instances
-# ---------------------------------------------------------------------------
-
-AI_TAXONOMY = [
-    "AI Agents & Automation",
-    "AI Models & Research",
-    "AI Hardware & Semiconductors",
-    "Data Center Infrastructure",
-    "Energy & Sustainability",
-    "Robotics & Physical AI",
-    "Edge & Local AI",
-    "Enterprise AI & Productivity",
-    "AI Security & Privacy",
-    "AI Policy & Governance",
-    "AI Funding & Startups",
-    "AI in Science & Society",
-]
-
-SMART_MONEY_TAXONOMY = [
-    "Agentic Payments & AI Wallets",
-    "Machine Economy & AI-to-AI Transactions",
-    "Stablecoins & On-Chain Settlement",
-    "Cross-Border Payments & Real-Time Settlement",
-    "Embedded Finance & API Banking",
-    "AI Fraud Detection & Compliance",
-    "Treasury Automation & Enterprise Finance",
-]
-
-ai_agent = NewsAgent(
-    name="AI",
-    feeds=AI_NEWS_FEEDS,
-    taxonomy=AI_TAXONOMY,
-    fetch_tool_name="fetch_ai_news",
-    weekly_feeds=AI_NEWS_FEEDS_WEEKLY,
-)
-
-smart_money_agent = NewsAgent(
-    name="Smart Money",
-    feeds=SMART_MONEY_FEEDS,
-    taxonomy=SMART_MONEY_TAXONOMY,
-    fetch_tool_name="fetch_smart_money_news",
-)
 
 # ---------------------------------------------------------------------------
 # Usage docs
@@ -132,15 +88,20 @@ _USAGE = {
 class NewsRequest(BaseModel):
     """Parameters for a news aggregation run."""
 
-    days_back: int = Field(default=7, ge=1, description="Days back to fetch articles.")
+    days_back: int = Field(
+        default=7, ge=1, description="Days back to fetch articles."
+    )
     max_articles: Optional[int] = Field(
-        default=None, ge=1, description="Cap on total articles fetched; null for no limit."
+        default=None,
+        ge=1,
+        description="Cap on total articles fetched; null for no limit.",
     )
     summary_depth: Literal["brief", "detailed"] = Field(
         default="detailed", description="Depth of per-article summaries."
     )
     focus: Optional[str] = Field(
-        default=None, description="Optional instruction to narrow topics covered."
+        default=None,
+        description="Optional instruction to narrow topics covered.",
     )
 
 
@@ -198,10 +159,16 @@ async def handle_rpc(request: JsonRpcRequest):
         if part.kind == "text" and part.text
     )
     session_id = request.params.session_id
-    logger.info(f"A2A message received: {input_text[:80]}... (session={session_id})")
+    logger.info(
+        "A2A message received: %s... (session=%s)", input_text[:80], session_id
+    )
 
     text_lower = input_text.lower()
-    if "smart money" in text_lower or "fintech" in text_lower or "payments" in text_lower:
+    if (
+        "smart money" in text_lower
+        or "fintech" in text_lower
+        or "payments" in text_lower
+    ):
         selected_agent = smart_money_agent
         logger.info("Routing to Smart Money agent")
     else:
@@ -232,9 +199,10 @@ async def ai_news_summary(request: NewsRequest):
     """Run the AI news aggregation agent and return the full result."""
     max_articles = request.max_articles if request.max_articles is not None else 0
     logger.info(
-        f"AI news run: days_back={request.days_back}, "
-        f"max_articles={max_articles or 'unlimited'}, "
-        f"summary_depth={request.summary_depth}"
+        "AI news run: days_back=%s, max_articles=%s, summary_depth=%s",
+        request.days_back,
+        max_articles or "unlimited",
+        request.summary_depth,
     )
     result = ai_agent.run(
         days_back=request.days_back,
@@ -260,9 +228,10 @@ async def smart_money_summary(request: NewsRequest):
     """Run the Smart Money aggregation agent and return the full result."""
     max_articles = request.max_articles if request.max_articles is not None else 0
     logger.info(
-        f"Smart Money run: days_back={request.days_back}, "
-        f"max_articles={max_articles or 'unlimited'}, "
-        f"summary_depth={request.summary_depth}"
+        "Smart Money run: days_back=%s, max_articles=%s, summary_depth=%s",
+        request.days_back,
+        max_articles or "unlimited",
+        request.summary_depth,
     )
     result = smart_money_agent.run(
         days_back=request.days_back,
@@ -285,9 +254,10 @@ async def smart_money_summary(request: NewsRequest):
 
 if __name__ == "__main__":
     @click.command()
-    @click.option('--host', default='0.0.0.0')
-    @click.option('--port', default=8000)
+    @click.option("--host", default="0.0.0.0")
+    @click.option("--port", default=8000)
     def main(host: str, port: int):
+        """Start the uvicorn server."""
         uvicorn.run(app, host=host, port=port)
 
     main()
