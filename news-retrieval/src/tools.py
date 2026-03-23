@@ -1,6 +1,7 @@
 """Tools for news aggregator agents."""
 import os
 import re
+import html
 import json
 import time
 import logging
@@ -12,6 +13,15 @@ from datetime import datetime, timedelta, timezone
 from typing import List
 
 logger = logging.getLogger(__name__)
+
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _clean_summary(raw: str) -> str:
+    """Strip HTML tags, unescape entities, and collapse whitespace."""
+    text = _HTML_TAG_RE.sub(" ", raw)
+    text = html.unescape(text)
+    return " ".join(text.split())
 
 from langchain_core.tools import tool
 
@@ -89,6 +99,7 @@ def make_fetch_news_tool(
                         "url": entry.get("link", ""),
                         "published": entry.get("published", ""),
                         "source": feed.feed.get("title", feed_url),
+                        "summary": _clean_summary(entry.get("summary", "")),
                         "_pub_date": pub_date,
                     }
                 )

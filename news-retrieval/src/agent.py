@@ -1,18 +1,22 @@
 """Core agent logic for the News Aggregator."""
+import json
 import os
 import time
 import logging
+import threading
 import httpx
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait as futures_wait
+from datetime import datetime
 from typing import List
+
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 from langchain_openai import ChatOpenAI
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.outputs import LLMResult
 
-from tools import make_fetch_news_tool, fetch_articles_content, make_save_report_tool
+from tools import make_fetch_news_tool, make_save_report_tool
 
 
 class _LLMTimingCallback(BaseCallbackHandler):
@@ -22,11 +26,13 @@ class _LLMTimingCallback(BaseCallbackHandler):
         self._agent_name = agent_name
         self._call_start: float = 0.0
         self._call_index: int = 0
+        self._lock = threading.Lock()
 
     def on_chat_model_start(self, serialized, messages, **kwargs):
+        with self._lock:
+            self._call_index += 1
+            call_index = self._call_index
         self._call_start = time.perf_counter()
-        self._call_index += 1
-        # Count tokens in the prompt as a rough size indicator
         total_chars = sum(
             len(m.content) if hasattr(m, "content") and isinstance(m.content, str) else 0
             for batch in messages
@@ -35,7 +41,7 @@ class _LLMTimingCallback(BaseCallbackHandler):
         logger.info(
             "[LLM] agent=%s call=%d started prompt_chars=%d",
             self._agent_name,
-            self._call_index,
+            call_index,
             total_chars,
         )
 
@@ -45,88 +51,65 @@ class _LLMTimingCallback(BaseCallbackHandler):
         if response.llm_output:
             usage = response.llm_output.get("token_usage", {})
         logger.info(
-            "[LLM] agent=%s call=%d elapsed=%.2fs prompt_tokens=%s completion_tokens=%s",
+            "[LLM] agent=%s elapsed=%.2fs prompt_tokens=%s completion_tokens=%s",
             self._agent_name,
-            self._call_index,
             elapsed,
             usage.get("prompt_tokens", "?"),
             usage.get("completion_tokens", "?"),
         )
 
-_SYSTEM_PROMPT_TEMPLATE = """You are a {domain} news aggregator agent. When asked to gather
-news, proceed immediately using the following defaults unless the request
-explicitly overrides them:
 
-  - days_back: 7
-  - max_articles: 0 (no limit — fetch whatever the feeds provide)
-  - summary_depth: detailed
+class _RateLimiter:
+    """Token bucket rate limiter for concurrent threads."""
 
-Never ask for clarification. If a parameter is not specified, use its default.
+    def __init__(self, rate: float):
+        """Args: rate: max calls per second (also the burst cap)."""
+        self._rate = rate
+        self._tokens = float(rate)
+        self._last_refill = time.perf_counter()
+        self._lock = threading.Lock()
 
-General approach:
-1. Call {fetch_tool_name} with the specified (or default) days_back and
-max_articles values.
-2. Call fetch_articles_content once, passing ALL article URLs as a list.
-3. After receiving all article content, immediately begin calling
-save_themed_report for each category — do NOT produce any intermediate text.
-Assign each article to the single most relevant category from the taxonomy
-below. Only produce a report for a category if at least 2 articles belong to
-it. Call save_themed_report once per qualifying category, passing the full
-markdown report content directly in the tool call.
-
-Taxonomy — use these category names exactly, spelled and capitalised as shown:
-{taxonomy}
-
-Report format for each category:
-- Top-level heading: category name and today's date.
-- One section per relevant article:
-    - Article title as a sub-heading.
-    - Source URL on its own line.
-    - A concise summary paragraph (length as specified; default: 2-4
-      sentences).
-- A final "Category Summary" section: a detailed, synthesised narrative
-  covering the major trends, implications, and dynamics across all articles
-  in this category. Write several paragraphs — go beyond listing.
-
-CRITICAL: After fetching articles, your next action MUST be tool calls to
-save_themed_report — never a text response. Do not summarise, explain, or
-describe what you are about to do. Just call the tools. Category names in
-every save_themed_report call must match the taxonomy exactly.
-"""
+    def acquire(self):
+        """Block until a token is available."""
+        while True:
+            with self._lock:
+                now = time.perf_counter()
+                self._tokens = min(
+                    self._rate,
+                    self._tokens + (now - self._last_refill) * self._rate,
+                )
+                self._last_refill = now
+                if self._tokens >= 1:
+                    self._tokens -= 1
+                    return
+            time.sleep(0.05)
 
 
-def _build_instruction(
-    days_back: int,
-    max_articles: int,
-    summary_depth: str,
-    focus: str | None = None,
-) -> str:
-    """Build the per-run instruction message passed to the agent."""
-    article_limit = str(max_articles) if max_articles else "all available"
-    summary_spec = (
-        "1-2 sentence summary per article"
-        if summary_depth == "brief"
-        else "2-4 sentence summary per article"
-    )
-    focus_line = f"- Focus: {focus}\n" if focus else ""
-    return (
-        f"Gather news with the following parameters:\n"
-        f"- Time period: past {days_back} days\n"
-        f"- Max articles to fetch: {article_limit}\n"
-        f"- Per-article format: {summary_spec}\n"
-        f"{focus_line}"
-        f"\nAssign articles to categories from the taxonomy in the system "
-        f"prompt (minimum 2 articles per category) and save a report for "
-        f"every qualifying category before finishing."
-    )
+_PASS1_BATCH_SIZE = 5
+
+
+class _ArticleAssignment(BaseModel):
+    url: str
+    category: str  # exact taxonomy name, or "none"
+
+
+class _BatchCategories(BaseModel):
+    assignments: list[_ArticleAssignment]
+
+
+class _RunParams(BaseModel):
+    days_back: int = 7
+    summary_depth: str = "detailed"  # "brief" or "detailed"
+    focus: str | None = None
 
 
 class NewsAgent:
     """
     A generalizable news agent.
 
-    A configurable LangChain-based agent that fetches news from provided RSS
-    feeds and writes per-category markdown reports using a given taxonomy.
+    Uses a two-pass parallel pipeline:
+    - Pass 1: Categorize each article in parallel using RSS summaries
+    - Pass 2: Write one report per qualifying category in parallel
     """
 
     def __init__(
@@ -137,77 +120,41 @@ class NewsAgent:
         fetch_tool_name: str = "fetch_news",
         weekly_feeds: List[str] | None = None,
     ):
-        """
-        Initialise the agent.
-
-        Args:
-            name: Human-readable domain name used in the system prompt
-                  (e.g. "AI", "Smart Money").
-            feeds: List of RSS feed URLs to poll.
-            taxonomy: List of category names the agent must use verbatim.
-            fetch_tool_name: Unique tool name for the fetch tool (must differ
-                             between agents sharing the same process).
-        """
         self.name = name
+        self._taxonomy = taxonomy
+        self._taxonomy_set = set(taxonomy)
         self._report_collector: dict = {}
-        self._article_registry: dict = {}  # url -> title; URLs removed as reports are saved
+        self._article_registry: dict = {}
         self._total_fetched: int = 0
 
-        fetch_news = make_fetch_news_tool(
+        self._fetch_news = make_fetch_news_tool(
             feeds,
             tool_name=fetch_tool_name,
             article_registry=self._article_registry,
             total_counter=self,
             weekly_feeds=weekly_feeds,
         )
-        save_report = make_save_report_tool(
+        self._save_report = make_save_report_tool(
             self._report_collector, article_registry=self._article_registry
         )
-        self.tools = [fetch_news, fetch_articles_content, save_report]
 
-        taxonomy_str = "\n".join(f"  - {cat}" for cat in taxonomy)
-        system_prompt = _SYSTEM_PROMPT_TEMPLATE.format(
-            domain=name,
-            fetch_tool_name=fetch_tool_name,
-            taxonomy=taxonomy_str,
-        )
-
-        # Callback must be created before the LLM so it can be passed directly.
-        # Passing it only to AgentExecutor is not reliable — LangChain does not
-        # always propagate executor-level callbacks down to the LLM layer.
+        self._rate_limiter = _RateLimiter(rate=15.0)
         self._llm_callback = _LLMTimingCallback(name)
-        self.llm = ChatOpenAI(
-            # model="gpt-5.4",
-            model="openai/gpt-5.4",
-            # openai_api_key=os.environ.get("OPENAI_API_KEY"),
+        _llm_common = dict(
             openai_api_key=os.environ.get("OPENROUTER_API_KEY"),
             openai_api_base="https://openrouter.ai/api/v1",
             temperature=0,
             streaming=False,
-            http_client=httpx.Client(http2=False),
+            max_retries=0,
+            http_client=httpx.Client(http2=False, timeout=60.0),
             callbacks=[self._llm_callback],
         )
-
-        prompt = ChatPromptTemplate.from_messages(
-            [
-                ("system", system_prompt),
-                ("user", "{input}"),
-                MessagesPlaceholder(variable_name="agent_scratchpad"),
-            ]
-        )
-
-        agent = create_tool_calling_agent(self.llm, self.tools, prompt)
-        self.agent_executor = AgentExecutor(
-            agent=agent,
-            tools=self.tools,
-            verbose=False,
-            max_iterations=150,
-            handle_parsing_errors=True,
-            stream_runnable=False,
-        )
+        # Pass 1: OpenAI JSON-schema structured output — fast and reliable for categorization
+        self._llm_pass1 = ChatOpenAI(model="openai/gpt-4o-mini", **_llm_common)
+        # Pass 2: Haiku — higher output token throughput for report generation
+        self.llm = ChatOpenAI(model="anthropic/claude-haiku-4-5", **_llm_common)
 
     def _collect_reports(self) -> dict:
-        """Return collected reports and clear the collector for the next run."""
         reports = dict(self._report_collector)
         self._report_collector.clear()
         return reports
@@ -230,19 +177,115 @@ class NewsAgent:
                 self._total_fetched,
             )
 
-    def process_message(self, message_text: str) -> dict:
-        """
-        Process a free-form message from a parent agent or orchestrator.
+    def _pass1_categorize(self, articles, focus=None):
+        """Categorize articles in parallel batches. Returns dict[category, list[url]]."""
+        taxonomy_str = "\n".join(f"  - {cat}" for cat in self._taxonomy)
+        focus_line = f"\nAdditional focus: {focus}" if focus else ""
+        system_msg = (
+            f"You are a {self.name} news categorization assistant.\n"
+            f"Assign each article to the single most relevant category from the taxonomy below.\n"
+            f"Use the category name exactly as given. If no category fits, use \"none\".\n"
+            f"Return one assignment per article using the article's exact URL.\n\n"
+            f"Taxonomy:\n{taxonomy_str}{focus_line}"
+        )
+        structured_llm = self._llm_pass1.with_structured_output(_BatchCategories)
 
-        Returns:
-            Dict with 'summary' (agent final output) and 'reports' (dict
-            mapping category name → full markdown content).
-        """
-        self._report_collector.clear()
-        self._article_registry.clear()
-        result = self.agent_executor.invoke({"input": message_text})
-        self._log_coverage()
-        return {"summary": result["output"], "reports": self._collect_reports()}
+        def _categorize_batch(batch):
+            self._rate_limiter.acquire()
+            articles_text = "\n\n".join(
+                f"Article {i + 1}:\nURL: {a['url']}\nTitle: \"{a['title']}\"\n"
+                f"Source: {a['source']}\nSummary: {a.get('summary', '')}"
+                for i, a in enumerate(batch)
+            )
+            result = structured_llm.invoke([
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": articles_text},
+            ])
+            return [(assignment.url, assignment.category) for assignment in result.assignments]
+
+        batches = [articles[i:i + _PASS1_BATCH_SIZE] for i in range(0, len(articles), _PASS1_BATCH_SIZE)]
+        category_map: dict[str, list[str]] = {}
+        t0 = time.perf_counter()
+        executor = ThreadPoolExecutor(max_workers=15)
+        try:
+            futures = {executor.submit(_categorize_batch, b): b for b in batches}
+            done, not_done = futures_wait(futures, timeout=90)
+            if not_done:
+                logger.warning("[PASS1] agent=%s %d batches timed out", self.name, len(not_done))
+            for future in done:
+                try:
+                    for url, category in future.result():
+                        if category != "none" and category in self._taxonomy_set:
+                            category_map.setdefault(category, []).append(url)
+                except Exception as e:
+                    logger.warning("[PASS1] agent=%s batch failed err=%s", self.name, e)
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
+        qualifying = {cat: urls for cat, urls in category_map.items() if len(urls) >= 2}
+        logger.info(
+            "[PASS1] agent=%s articles=%d batches=%d qualifying_categories=%d elapsed=%.2fs",
+            self.name, len(articles), len(batches), len(qualifying), time.perf_counter() - t0,
+        )
+        return qualifying
+
+    def _pass2_write_reports(self, qualifying, article_meta, summary_depth):
+        """Write one report per qualifying category in parallel. Returns dict[category, markdown]."""
+        today = datetime.now().strftime("%Y-%m-%d")
+
+        def _write_one(category, urls):
+            self._rate_limiter.acquire()
+            articles = [article_meta[url] for url in urls if url in article_meta]
+            articles_text = "\n---\n".join(
+                f"Title: {a['title']}\nURL: {a['url']}\nSummary: {a.get('summary', '')}"
+                for a in articles
+            )
+            system_msg = (
+                f"You are a {self.name} news analyst. Write a complete markdown report for the "
+                f"category \"{category}\" using the article summaries provided.\n\n"
+                f"Report format:\n"
+                f"# {category} — {today}\n\n"
+                f"## {{Article Title}}\n"
+                f"{{url}}\n"
+                f"{{summary paragraph}}\n\n"
+                f"[one section per article]\n\n"
+                f"## Category Summary\n"
+                f"[Several paragraphs synthesizing major trends, implications, and dynamics. "
+                f"Go beyond listing — provide insight and analysis.]\n\n"
+                f"Use article titles and URLs exactly as given."
+            )
+            user_msg = f"Category: {category}\n\nArticles:\n{articles_text}"
+            result = self.llm.invoke([
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
+            ])
+            return category, result.content
+
+        reports = {}
+        t0 = time.perf_counter()
+        executor = ThreadPoolExecutor(max_workers=15)
+        try:
+            futures = {
+                executor.submit(_write_one, cat, urls): cat
+                for cat, urls in qualifying.items()
+            }
+            done, not_done = futures_wait(futures, timeout=120)
+            if not_done:
+                logger.warning("[PASS2] agent=%s %d reports timed out", self.name, len(not_done))
+            for future in done:
+                try:
+                    category, markdown = future.result()
+                    reports[category] = markdown
+                except Exception as e:
+                    logger.warning("[PASS2] agent=%s report failed err=%s", self.name, e)
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
+        logger.info(
+            "[PASS2] agent=%s categories=%d reports=%d elapsed=%.2fs",
+            self.name, len(qualifying), len(reports), time.perf_counter() - t0,
+        )
+        return reports
 
     def run(
         self,
@@ -252,24 +295,65 @@ class NewsAgent:
         focus: str | None = None,
     ) -> dict:
         """
-        Run the agent with explicit parameters.
+        Run the two-pass pipeline.
 
         Returns:
-            Dict with 'summary' (agent final output) and 'reports' (dict
-            mapping category name → full markdown content).
+            Dict with 'summary' and 'reports' (category name → markdown content).
         """
         self._report_collector.clear()
         self._article_registry.clear()
-        instruction = _build_instruction(
-            days_back, max_articles, summary_depth, focus
-        )
         t0 = time.perf_counter()
-        result = self.agent_executor.invoke({"input": instruction})
+
+        raw_json = self._fetch_news.invoke({"days_back": days_back, "max_articles": max_articles})
+        articles = json.loads(raw_json)
+        if not articles:
+            return {"summary": "No articles found.", "reports": {}}
+
+        article_meta = {a["url"]: a for a in articles}
+
+        qualifying = self._pass1_categorize(articles, focus=focus)
+        if not qualifying:
+            return {"summary": "No qualifying categories.", "reports": {}}
+
+        reports = self._pass2_write_reports(qualifying, article_meta, summary_depth)
+
+        for category, report_md in reports.items():
+            self._save_report.invoke({"theme": category, "content": report_md})
+
         logger.info(
             "[TIMER] agent=%s run total elapsed=%.2fs reports=%d",
-            self.name,
-            time.perf_counter() - t0,
-            len(self._report_collector),
+            self.name, time.perf_counter() - t0, len(self._report_collector),
         )
         self._log_coverage()
-        return {"summary": result["output"], "reports": self._collect_reports()}
+        return {
+            "summary": f"Completed {self.name} digest: {len(qualifying)} categories.",
+            "reports": self._collect_reports(),
+        }
+
+    def process_message(self, message_text: str) -> dict:
+        """
+        Process a free-form message from a parent agent or orchestrator.
+
+        Returns:
+            Dict with 'summary' and 'reports' (category name → markdown content).
+        """
+        params_llm = self._llm_pass1.with_structured_output(_RunParams)
+        params = params_llm.invoke([
+            {"role": "system", "content": (
+                "Extract run parameters from the user's news request.\n"
+                "- days_back: number of days back to fetch (default 7; "
+                "'today', 'last day', 'past day' = 1)\n"
+                "- summary_depth: 'brief' if they want short summaries, else 'detailed'\n"
+                "- focus: any specific topic focus mentioned, or null"
+            )},
+            {"role": "user", "content": message_text},
+        ])
+        logger.info(
+            "[PARAMS] agent=%s days_back=%d summary_depth=%s focus=%s",
+            self.name, params.days_back, params.summary_depth, params.focus,
+        )
+        return self.run(
+            days_back=params.days_back,
+            summary_depth=params.summary_depth,
+            focus=params.focus,
+        )
