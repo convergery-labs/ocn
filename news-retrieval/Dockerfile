@@ -8,8 +8,7 @@ RUN pip install --no-cache-dir \
     fastapi>=0.109.0 \
     uvicorn>=0.27.0 \
     pydantic>=2.6.0 \
-    "langchain>=0.2.0,<0.3.0" \
-    "langchain-openai>=0.1.0,<0.2.0" \
+    openai>=1.0.0 \
     click>=8.1.7 \
     feedparser>=6.0.11 \
     httpx>=0.27.0

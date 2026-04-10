@@ -9,6 +9,7 @@ services:
       - "8000:8000"
     volumes:
       - ./reports:/app/reports
+      - ./data:/app/data
     develop:
       watch:
         - action: sync+restart
