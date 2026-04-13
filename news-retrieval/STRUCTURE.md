@@ -11,12 +11,12 @@
 | `CLAUDE.md` | AI assistant instructions: documentation index, Jira board, structural guide, maintenance rules |
 | `STRUCTURE.md` | This file |
 | `docs/architecture.md` | Internal architecture notes and design decisions |
-| `data/` | SQLite database file (`sources.db`) — persisted via Docker volume mount at `/app/data` |
+| `data/` | Unused — legacy SQLite directory. PostgreSQL data is persisted in the `pgdata` Docker named volume |
 | `reports/` | Generated output — one `.md` file per category per run (e.g. `ai_models_&_research_2026-04-09.md`). Not committed in normal operation |
 | `src/__main__.py` | CLI entry point — `click` + `uvicorn.run` |
 | `src/app.py` | FastAPI app factory and lifespan hook |
 | `src/pipeline.py` | Two-pass aggregation pipeline (fetch → categorise → report) |
-| `src/db.py` | SQLite connection factory, schema init |
+| `src/db.py` | PostgreSQL connection (`psycopg2`), `_Connection` wrapper with portable placeholder normalisation, `DuplicateError`, ambient transaction via `ContextVar`, schema init |
 | `src/seed.py` | Idempotent seed for all four tables |
 | `src/models/` | Pydantic request models + SQL query functions per entity |
 | `src/routes/` | FastAPI `APIRouter` definitions, one file per resource |
@@ -70,6 +70,7 @@ POST /run
 | `feedparser` | RSS/Atom feed parsing |
 | `httpx` | HTTP/1.1 client used inside the OpenAI SDK |
 | `click` | CLI entry point (`--host`, `--port` flags) |
+| `psycopg2-binary` | PostgreSQL database driver |
 
 ### Runtime requirements
 
@@ -77,7 +78,11 @@ POST /run
 |--------------------|---------|-------------|
 | `OPENROUTER_API_KEY` | — | Required. Used as the OpenAI-compatible API key for OpenRouter |
 | `REPORTS_DIR` | `/app/reports` | Directory where markdown reports are written |
-| `DB_PATH` | `/app/data/sources.db` | Path to the SQLite database file |
+| `POSTGRES_HOST` | `localhost` | PostgreSQL server hostname |
+| `POSTGRES_PORT` | `5432` | PostgreSQL server port |
+| `POSTGRES_DB` | `ocn` | Database name |
+| `POSTGRES_USER` | `ocn` | Database user |
+| `POSTGRES_PASSWORD` | — | Database password |
 | Docker network `agents-net` | external | Shared bridge network for inter-agent communication |
 
 ### External services
