@@ -1,6 +1,7 @@
 """Routes for /frequencies."""
 from fastapi import APIRouter, HTTPException
 
+from db import DuplicateError
 from models.frequencies import FrequencyIn, create_frequency, list_frequencies
 
 router = APIRouter()
@@ -17,10 +18,8 @@ async def post_frequency(body: FrequencyIn) -> dict:
     """Add a new polling frequency."""
     try:
         return create_frequency(body)
-    except Exception as exc:
-        if "UNIQUE" in str(exc):
-            raise HTTPException(
-                status_code=409,
-                detail=f"Frequency '{body.name}' already exists.",
-            )
-        raise
+    except DuplicateError:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Frequency '{body.name}' already exists.",
+        )

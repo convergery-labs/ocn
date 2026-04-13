@@ -3,6 +3,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
+from db import DuplicateError
 from models.taxonomies import TaxonomyIn, create_taxonomy, list_taxonomies
 
 router = APIRouter()
@@ -23,13 +24,11 @@ async def post_taxonomy(body: TaxonomyIn) -> dict:
         return create_taxonomy(body)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    except Exception as exc:
-        if "UNIQUE" in str(exc):
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"Category '{body.category}' already exists "
-                    f"for domain_id {body.domain_id}."
-                ),
-            )
-        raise
+    except DuplicateError:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Category '{body.category}' already exists "
+                f"for domain_id {body.domain_id}."
+            ),
+        )

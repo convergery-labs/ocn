@@ -71,7 +71,7 @@ def create_source(body: SourceIn) -> dict:
 
     Raises:
         ValueError: if domain_id or frequency_id not found.
-        sqlite3.IntegrityError: if URL already exists.
+        DuplicateError: if URL already exists.
     """
     with get_db() as conn:
         if not conn.execute(
@@ -93,11 +93,13 @@ def create_source(body: SourceIn) -> dict:
                 (url, domain_id, frequency_id, name, description)
             VALUES
                 (:url, :domain_id, :frequency_id, :name, :description)
+            RETURNING id
             """,
             body.model_dump(),
         )
+        new_id = cursor.fetchone()["id"]
         row = conn.execute(
             "SELECT * FROM sources WHERE id = ?",
-            (cursor.lastrowid,),
+            (new_id,),
         ).fetchone()
     return dict(row)

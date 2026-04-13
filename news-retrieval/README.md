@@ -1,40 +1,66 @@
-# Agent Template
+# OCN News Aggregator
 
-This is a template for building [A2A (Agent-to-Agent)](https://github.com/ashishsharma/nasiko) compatible agents.
+Fetches RSS feeds, categorises articles by domain and taxonomy using LLMs, and generates themed markdown reports.
 
-It implements the A2A JSON-RPC 2.0 protocol using FastAPI, giving you complete control over your stack.
+## Stack
 
-## Frameworks
-- **Server**: FastAPI
-- **Agent Logic**: LangChain (Pre-configured)
+- **Server**: FastAPI + uvicorn
+- **Database**: SQLite (persisted via Docker volume)
+- **LLMs**: `openai/gpt-4o-mini` (categorisation) and `anthropic/claude-haiku-4-5` (report generation) via OpenRouter
 
-## Structure
+## Quick start
 
-- `src/main.py`: **Protocol Implementation**. A FastAPI server that handles the A2A JSON-RPC `message/send` requests.
-- `src/models.py`: **Data Models**. A2A protocol Pydantic models (Message, Task, etc.).
-- `src/tools.py`: **Tools Definition**. Define your agent's tools here. **Edit this file.**
-- `src/agent.py`: **Core Logic**. Configures the LangChain agent and tools. **Edit this file.**
-- `AgentCard.json`: Agent metadata (auto-generated).
-- `Dockerfile`: Standard Python Dockerfile.
+```bash
+# Copy .env.example and add your key
+cp .env.example .env
 
-## How to Use
+docker compose up
+```
 
-1.  **Copy this directory** to create a new agent.
-2.  **Edit `src/tools.py`**:
-    *   Define your tools using the `@tool` decorator.
-3.  **Edit `src/agent.py`**:
-    *   Customize the LangChain `prompt` and `llm`.
-    *   Import your tools from `src.tools` and register them.
-4.  **Build and Run**:
-    ```bash
-    docker build -t my-agent .
-    docker run -p 8000:8000 -e OPENAI_API_KEY=your_key my-agent
-    ```
+The API is available at `http://localhost:8000`. Interactive docs at `/docs`.
 
-## Protocol Details
+## Environment variables
 
-This template implements:
-- `POST /`: JSON-RPC 2.0 endpoint.
-  - Method: `message/send`
-  - Params: A2A Message format
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `OPENROUTER_API_KEY` | Yes | API key for OpenRouter |
+| `REPORTS_DIR` | No | Output directory for reports (default: `/app/reports`) |
+| `DB_PATH` | No | SQLite database path (default: `/app/data/sources.db`) |
 
+## API
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/run` | Fetch, categorise, and generate reports |
+| `GET` | `/domains` | List all domains |
+| `POST` | `/domains` | Create a domain with inline taxonomy |
+| `GET` | `/sources` | List all sources |
+| `POST` | `/sources` | Add a source |
+| `GET` | `/frequencies` | List frequencies |
+| `GET` | `/taxonomies` | List taxonomy categories |
+| `GET` | `/health` | Health check |
+
+### Run the pipeline
+
+```bash
+curl -X POST http://localhost:8000/run \
+  -H "Content-Type: application/json" \
+  -d '{"domain": "ai_news", "days_back": 7}'
+```
+
+Reports are written to `./reports/` as markdown files, one per qualifying category.
+
+### Add a domain with taxonomy
+
+```bash
+curl -X POST http://localhost:8000/domains \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "My Domain",
+    "slug": "my_domain",
+    "taxonomy": [
+      {"category": "Category A"},
+      {"category": "Category B"}
+    ]
+  }'
+```

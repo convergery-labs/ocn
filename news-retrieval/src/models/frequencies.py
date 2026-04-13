@@ -24,18 +24,20 @@ def create_frequency(body: FrequencyIn) -> dict:
     """Insert a new frequency and return the created row.
 
     Raises:
-        sqlite3.IntegrityError: if name already exists.
+        DuplicateError: if name already exists.
     """
     with get_db() as conn:
         cursor = conn.execute(
             """
             INSERT INTO frequencies (name, min_days_back)
             VALUES (:name, :min_days_back)
+            RETURNING id
             """,
             body.model_dump(),
         )
+        new_id = cursor.fetchone()["id"]
         row = conn.execute(
             "SELECT * FROM frequencies WHERE id = ?",
-            (cursor.lastrowid,),
+            (new_id,),
         ).fetchone()
     return dict(row)

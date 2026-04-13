@@ -3,6 +3,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
+from db import DuplicateError
 from models.sources import SourceIn, create_source, list_sources
 
 router = APIRouter()
@@ -23,10 +24,8 @@ async def post_source(body: SourceIn) -> dict:
         return create_source(body)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    except Exception as exc:
-        if "UNIQUE" in str(exc):
-            raise HTTPException(
-                status_code=409,
-                detail=f"URL '{body.url}' already exists.",
-            )
-        raise
+    except DuplicateError:
+        raise HTTPException(
+            status_code=409,
+            detail=f"URL '{body.url}' already exists.",
+        )

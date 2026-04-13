@@ -37,13 +37,12 @@ ocn/
 ├── README.md
 ├── CLAUDE.md
 ├── STRUCTURE.md
-├── data/                 # SQLite database (Docker volume)
 ├── reports/              # generated — one .md per category per run
 └── src/
     ├── __main__.py       # CLI entry point (uvicorn + click)
     ├── app.py            # FastAPI app factory and lifespan
     ├── pipeline.py       # Two-pass aggregation pipeline (fetch → categorise → report)
-    ├── db.py             # SQLite connection, context manager, schema init
+    ├── db.py             # PostgreSQL connection, _Connection wrapper, DuplicateError, schema init
     ├── seed.py           # Idempotent seed for frequencies, domains, taxonomies, sources
     ├── models/           # DB query functions + Pydantic models (repository layer)
     │   ├── domains.py

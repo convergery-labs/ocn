@@ -5,7 +5,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel, Field
 
 import pipeline as pl
-from models.domains import get_domain_configs
+from models.domains import get_domain_config
 
 
 class RunRequest(BaseModel):
@@ -43,12 +43,10 @@ def execute(request: RunRequest) -> dict:
         KeyError: if the domain slug is not found in the database.
         ValueError: if the domain has no taxonomy categories.
     """
-    configs = get_domain_configs()
-    config = configs.get(request.domain)
+    config = get_domain_config(request.domain)
     if config is None:
         raise KeyError(
-            f"Unknown domain '{request.domain}'. "
-            f"Known domains: {list(configs)}"
+            f"Unknown domain slug: '{request.domain}'."
         )
     if not config["taxonomy"]:
         raise ValueError(

@@ -1,25 +1,92 @@
 """Database access layer for the OCN news aggregator."""
+import contextvars
 import os
-import sqlite3
-import threading
+import re
 from contextlib import contextmanager
 from typing import Generator
 
-DB_PATH = os.environ.get("DB_PATH", "/app/data/sources.db")
+import psycopg2
+import psycopg2.errors
+import psycopg2.extensions
+import psycopg2.extras
 
-_local = threading.local()
+_NAMED_PARAM_RE = re.compile(r"(?<!:):(\w+)")
 
 
-def _new_connection() -> sqlite3.Connection:
-    """Open a raw database connection with FK enforcement."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.row_factory = sqlite3.Row
-    return conn
+class DuplicateError(Exception):
+    """Raised when an INSERT violates a UNIQUE constraint."""
+
+
+class _Connection:
+    """Thin psycopg2 wrapper that exposes a sqlite3-style execute().
+
+    Converts ``psycopg2.errors.UniqueViolation`` to ``DuplicateError``
+    so callers never need to import psycopg2 directly.
+    """
+
+    def __init__(self, conn: psycopg2.extensions.connection) -> None:
+        """Wrap a raw psycopg2 connection."""
+        self._conn = conn
+
+    def execute(
+        self,
+        sql: str,
+        params: tuple | dict | None = None,
+    ) -> psycopg2.extensions.cursor:
+        """Execute *sql* with *params* and return the cursor.
+
+        Accepts portable placeholder styles and converts them to the
+        psycopg2 format before execution:
+        - ``?``     (positional) → ``%s``
+        - ``:name`` (named)      → ``%(name)s``
+
+        Raises:
+            DuplicateError: if the statement violates a UNIQUE constraint.
+        """
+        if isinstance(params, dict):
+            sql = _NAMED_PARAM_RE.sub(r"%(\1)s", sql)
+        else:
+            sql = sql.replace("?", "%s")
+        cur = self._conn.cursor()
+        try:
+            cur.execute(sql, params)
+        except psycopg2.errors.UniqueViolation as exc:
+            raise DuplicateError(str(exc)) from exc
+        return cur
+
+    def commit(self) -> None:
+        """Commit the current transaction."""
+        self._conn.commit()
+
+    def rollback(self) -> None:
+        """Roll back the current transaction."""
+        self._conn.rollback()
+
+    def close(self) -> None:
+        """Close the underlying connection."""
+        self._conn.close()
+
+
+_ambient_conn: contextvars.ContextVar[
+    _Connection | None
+] = contextvars.ContextVar("ambient_conn", default=None)
+
+
+def _new_connection() -> _Connection:
+    """Open a new PostgreSQL connection."""
+    raw = psycopg2.connect(
+        host=os.environ.get("POSTGRES_HOST", "localhost"),
+        port=int(os.environ.get("POSTGRES_PORT", "5432")),
+        dbname=os.environ.get("POSTGRES_DB", "ocn"),
+        user=os.environ.get("POSTGRES_USER", "ocn"),
+        password=os.environ.get("POSTGRES_PASSWORD", ""),
+    )
+    raw.cursor_factory = psycopg2.extras.RealDictCursor
+    return _Connection(raw)
 
 
 @contextmanager
-def get_db() -> Generator[sqlite3.Connection, None, None]:
+def get_db() -> Generator[_Connection, None, None]:
     """Yield a database connection.
 
     If called inside a ``transaction()`` block the ambient connection
@@ -27,7 +94,7 @@ def get_db() -> Generator[sqlite3.Connection, None, None]:
     Otherwise a fresh connection is opened, committed on clean exit,
     and closed on return.
     """
-    ambient = getattr(_local, "conn", None)
+    ambient = _ambient_conn.get()
     if ambient is not None:
         yield ambient
         return
@@ -50,11 +117,11 @@ def transaction() -> Generator[None, None, None]:
     Nested ``transaction()`` calls join the outermost transaction.
     Commits on clean exit; rolls back the entire block on any error.
     """
-    if getattr(_local, "conn", None) is not None:
+    if _ambient_conn.get() is not None:
         yield  # already inside a transaction — join it
         return
     conn = _new_connection()
-    _local.conn = conn
+    token = _ambient_conn.set(conn)
     try:
         yield
         conn.commit()
@@ -63,45 +130,47 @@ def transaction() -> Generator[None, None, None]:
         raise
     finally:
         conn.close()
-        _local.conn = None
+        _ambient_conn.reset(token)
 
 
 def init_db() -> None:
     """Create all tables if they do not exist."""
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     with get_db() as conn:
-        conn.executescript("""
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS domains (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                id          SERIAL PRIMARY KEY,
                 name        TEXT NOT NULL UNIQUE,
                 slug        TEXT NOT NULL UNIQUE,
                 description TEXT,
-                created_at  TEXT NOT NULL DEFAULT (datetime('now'))
-            );
-
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS frequencies (
-                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                id            SERIAL PRIMARY KEY,
                 name          TEXT    NOT NULL UNIQUE,
                 min_days_back INTEGER NOT NULL,
-                created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
-            );
-
+                created_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS sources (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                id           SERIAL PRIMARY KEY,
                 url          TEXT    NOT NULL UNIQUE,
                 domain_id    INTEGER NOT NULL REFERENCES domains(id),
                 frequency_id INTEGER NOT NULL REFERENCES frequencies(id),
                 name         TEXT,
                 description  TEXT,
-                created_at   TEXT    NOT NULL DEFAULT (datetime('now'))
-            );
-
+                created_at   TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS taxonomies (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                id          SERIAL PRIMARY KEY,
                 domain_id   INTEGER NOT NULL REFERENCES domains(id),
                 category    TEXT    NOT NULL,
                 position    INTEGER NOT NULL,
-                created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(domain_id, category)
-            );
+            )
         """)

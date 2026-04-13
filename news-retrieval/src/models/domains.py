@@ -4,30 +4,39 @@ from typing import Optional
 from db import get_db
 
 
-def get_domain_configs() -> dict[str, dict]:
-    """Load all domain configs (name + taxonomy) from the database.
+def get_domain_config(slug: str) -> dict | None:
+    """Load config (name + taxonomy) for a single domain slug.
+
+    Uses a LEFT JOIN so a domain with no taxonomy categories is
+    returned as ``{"name": ..., "taxonomy": []}`` rather than
+    ``None``, preserving the distinction between an unknown slug
+    and a domain that simply has no categories yet.
 
     Returns:
-        Dict mapping domain slug to
-        ``{"name": str, "taxonomy": list[str]}``.
+        ``{"name": str, "taxonomy": list[str]}``, or ``None`` if
+        the slug does not exist.
     """
     with get_db() as conn:
         rows = conn.execute(
             """
-            SELECT d.slug, d.name, t.category
-            FROM   domains    d
-            JOIN   taxonomies t ON t.domain_id = d.id
-            ORDER  BY d.id, t.position
-            """
+            SELECT d.name, t.category
+            FROM   domains         d
+            LEFT JOIN taxonomies   t ON t.domain_id = d.id
+            WHERE  d.slug = ?
+            ORDER  BY t.position
+            """,
+            (slug,),
         ).fetchall()
-
-    configs: dict[str, dict] = {}
-    for row in rows:
-        slug = row["slug"]
-        if slug not in configs:
-            configs[slug] = {"name": row["name"], "taxonomy": []}
-        configs[slug]["taxonomy"].append(row["category"])
-    return configs
+    if not rows:
+        return None
+    return {
+        "name": rows[0]["name"],
+        "taxonomy": [
+            r["category"]
+            for r in rows
+            if r["category"] is not None
+        ],
+    }
 
 
 def list_domains() -> list[dict]:
@@ -50,15 +59,15 @@ def insert_domain(
     is used, so the insert participates in the outer transaction.
 
     Raises:
-        sqlite3.IntegrityError: if name or slug already exists.
+        DuplicateError: if name or slug already exists.
     """
     with get_db() as conn:
         cursor = conn.execute(
             "INSERT INTO domains (name, slug, description)"
-            " VALUES (?, ?, ?)",
+            " VALUES (?, ?, ?) RETURNING id",
             (name, slug, description),
         )
-        return cursor.lastrowid
+        return cursor.fetchone()["id"]
 
 
 def get_domain_by_id(domain_id: int) -> dict:

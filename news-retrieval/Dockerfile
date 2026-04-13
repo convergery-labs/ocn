@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 WORKDIR /app
 
@@ -11,7 +11,8 @@ RUN pip install --no-cache-dir \
     openai>=1.0.0 \
     click>=8.1.7 \
     feedparser>=6.0.11 \
-    httpx>=0.27.0
+    httpx>=0.27.0 \
+    psycopg2-binary>=2.9.0
 
 ENV PYTHONUNBUFFERED=1
 

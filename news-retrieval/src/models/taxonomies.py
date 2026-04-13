@@ -53,7 +53,7 @@ def create_taxonomy(body: TaxonomyIn) -> dict:
 
     Raises:
         ValueError: if domain_id not found.
-        sqlite3.IntegrityError: if category already exists for domain.
+        DuplicateError: if category already exists for domain.
     """
     with get_db() as conn:
         if not conn.execute(
@@ -72,19 +72,21 @@ def create_taxonomy(body: TaxonomyIn) -> dict:
             position = row["m"] + 1
         cursor = conn.execute(
             "INSERT INTO taxonomies (domain_id, category, position)"
-            " VALUES (:domain_id, :category, :position)",
+            " VALUES (:domain_id, :category, :position)"
+            " RETURNING id",
             {
                 "domain_id": body.domain_id,
                 "category": body.category,
                 "position": position,
             },
         )
+        new_id = cursor.fetchone()["id"]
         row = conn.execute(
             "SELECT t.*, d.slug AS domain_slug "
             "FROM taxonomies t "
             "JOIN domains d ON d.id = t.domain_id "
             "WHERE t.id = ?",
-            (cursor.lastrowid,),
+            (new_id,),
         ).fetchone()
     return dict(row)
 
@@ -100,15 +102,15 @@ def insert_taxonomy(
     is used, so the insert participates in the outer transaction.
 
     Raises:
-        sqlite3.IntegrityError: if category already exists for domain.
+        DuplicateError: if category already exists for domain.
     """
     with get_db() as conn:
         cursor = conn.execute(
             "INSERT INTO taxonomies (domain_id, category, position)"
-            " VALUES (?, ?, ?)",
+            " VALUES (?, ?, ?) RETURNING id",
             (domain_id, category, position),
         )
-        return cursor.lastrowid
+        return cursor.fetchone()["id"]
 
 
 def list_by_domain_id(domain_id: int) -> list[dict]:

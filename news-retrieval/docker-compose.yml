@@ -1,23 +1,52 @@
 services:
-  agent-template:
+  summ-articles:
     build: .
-    container_name: agent-template
+    container_name: summarize-articles
     env_file:
       - .env
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ocn
+      POSTGRES_USER: ocn
+      POSTGRES_PASSWORD: ocn
     stdin_open: true
     ports:
       - "8000:8000"
     volumes:
       - ./reports:/app/reports
-      - ./data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
     develop:
       watch:
         - action: sync+restart
           path: ./src
           target: /app
+        - action: rebuild
+          path: Dockerfile
     tty: true
     networks:
       - agents-net
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ocn
+      POSTGRES_USER: ocn
+      POSTGRES_PASSWORD: ocn
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ocn -d ocn"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - agents-net
+
+volumes:
+  pgdata:
 
 networks:
   agents-net:

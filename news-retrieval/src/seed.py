@@ -8,7 +8,6 @@ The script is idempotent — rows that already exist (matched by slug
 or URL) are silently skipped.
 """
 import logging
-import sqlite3
 from typing import Any
 
 from db import get_db, init_db, transaction
@@ -379,43 +378,34 @@ SOURCES: list[dict[str, Any]] = [
 
 
 def _insert_or_get_id(
-    table: str,
     unique_col: str,
     unique_val: str,
     insert_sql: str,
+    select_sql: str,
     params: dict[str, Any],
     label: str,
 ) -> int:
-    """Insert a row, or return its existing id if it already exists.
+    """Insert a row (if it does not exist) and return its id.
 
-    Uses the ambient transaction connection when called inside a
-    ``transaction()`` block, so all seed inserts share one commit.
+    Uses ON CONFLICT DO NOTHING so the ambient transaction remains
+    valid whether or not the row already exists, then SELECTs the id.
 
     Args:
-        table: Table name for the fallback SELECT.
-        unique_col: Column used to identify an existing row.
-        unique_val: Value of that column for the fallback SELECT.
-        insert_sql: Parameterised INSERT statement.
+        unique_col: Column name used only for log output.
+        unique_val: Value of that column, used for log output and SELECT.
+        insert_sql: INSERT … ON CONFLICT DO NOTHING statement.
+        select_sql: SELECT id … WHERE unique_col = %s statement.
         params: Bind parameters for the INSERT.
         label: Human-readable label used in log output.
 
     Returns:
-        The id of the inserted or existing row.
+        The id of the inserted or pre-existing row.
     """
     with get_db() as conn:
-        try:
-            cursor = conn.execute(insert_sql, params)
-            logger.info("Inserted %s: %s", label, unique_val)
-            return cursor.lastrowid
-        except sqlite3.IntegrityError:
-            row = conn.execute(
-                f"SELECT id FROM {table} WHERE {unique_col} = ?",
-                (unique_val,),
-            ).fetchone()
-            logger.info(
-                "%s already exists, skipping: %s", label, unique_val
-            )
-            return row["id"]
+        conn.execute(insert_sql, params)
+        row = conn.execute(select_sql, (unique_val,)).fetchone()
+        logger.info("Seeded %s: %s", label, unique_val)
+        return row["id"]
 
 
 def seed() -> None:
@@ -430,12 +420,15 @@ def seed() -> None:
         freq_id_map: dict[str, int] = {}
         for freq in FREQUENCIES:
             freq_id_map[freq["name"]] = _insert_or_get_id(
-                table="frequencies",
                 unique_col="name",
                 unique_val=freq["name"],
                 insert_sql=(
                     "INSERT INTO frequencies (name, min_days_back)"
                     " VALUES (:name, :min_days_back)"
+                    " ON CONFLICT (name) DO NOTHING"
+                ),
+                select_sql=(
+                    "SELECT id FROM frequencies WHERE name = ?"
                 ),
                 params=freq,
                 label="frequency",
@@ -445,12 +438,15 @@ def seed() -> None:
         domain_id_map: dict[str, int] = {}
         for domain in DOMAINS:
             domain_id_map[domain["slug"]] = _insert_or_get_id(
-                table="domains",
                 unique_col="slug",
                 unique_val=domain["slug"],
                 insert_sql=(
                     "INSERT INTO domains (name, slug, description)"
                     " VALUES (:name, :slug, :description)"
+                    " ON CONFLICT (slug) DO NOTHING"
+                ),
+                select_sql=(
+                    "SELECT id FROM domains WHERE slug = ?"
                 ),
                 params=domain,
                 label="domain",
@@ -461,25 +457,18 @@ def seed() -> None:
             domain_id = domain_id_map[domain_slug]
             for position, category in enumerate(categories, start=1):
                 with get_db() as conn:
-                    try:
-                        conn.execute(
-                            "INSERT INTO taxonomies"
-                            " (domain_id, category, position)"
-                            " VALUES (?, ?, ?)",
-                            (domain_id, category, position),
-                        )
-                        logger.info(
-                            "Inserted taxonomy: [%s] %s",
-                            domain_slug,
-                            category,
-                        )
-                    except sqlite3.IntegrityError:
-                        logger.info(
-                            "Taxonomy already exists, skipping:"
-                            " [%s] %s",
-                            domain_slug,
-                            category,
-                        )
+                    conn.execute(
+                        "INSERT INTO taxonomies"
+                        " (domain_id, category, position)"
+                        " VALUES (?, ?, ?)"
+                        " ON CONFLICT (domain_id, category) DO NOTHING",
+                        (domain_id, category, position),
+                    )
+                    logger.info(
+                        "Seeded taxonomy: [%s] %s",
+                        domain_slug,
+                        category,
+                    )
 
         # Sources
         inserted = skipped = 0
@@ -489,22 +478,23 @@ def seed() -> None:
                 source.get("frequency_name", "daily")
             ]
             with get_db() as conn:
-                try:
-                    conn.execute(
-                        "INSERT INTO sources"
-                        " (url, domain_id, frequency_id, name,"
-                        " description)"
-                        " VALUES (?, ?, ?, ?, ?)",
-                        (
-                            source["url"],
-                            domain_id,
-                            frequency_id,
-                            source["name"],
-                            source["description"],
-                        ),
-                    )
+                cursor = conn.execute(
+                    "INSERT INTO sources"
+                    " (url, domain_id, frequency_id, name,"
+                    " description)"
+                    " VALUES (?, ?, ?, ?, ?)"
+                    " ON CONFLICT (url) DO NOTHING",
+                    (
+                        source["url"],
+                        domain_id,
+                        frequency_id,
+                        source["name"],
+                        source["description"],
+                    ),
+                )
+                if cursor.rowcount:
                     inserted += 1
-                except sqlite3.IntegrityError:
+                else:
                     skipped += 1
 
         logger.info(
