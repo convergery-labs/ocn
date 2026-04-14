@@ -1,5 +1,6 @@
 """Source data models and database access functions."""
-from typing import Optional
+from datetime import datetime
+from typing import Optional, TypedDict
 
 from pydantic import BaseModel
 
@@ -16,7 +17,33 @@ class SourceIn(BaseModel):
     description: Optional[str] = None
 
 
-def load_sources(domain_slug: str, days_back: int) -> list[dict]:
+class SourceBase(TypedDict):
+    """A row from the sources table."""
+
+    id: int
+    url: str
+    domain_id: int
+    frequency_id: int
+    name: Optional[str]
+    description: Optional[str]
+    created_at: datetime
+
+
+class SourceRow(SourceBase, total=False):
+    """A source row joined with domain and frequency names."""
+
+    domain_slug: str
+    frequency_name: str
+
+
+class SourceRef(TypedDict):
+    """Minimal source projection used by the pipeline."""
+
+    url: str
+    min_days_back: int
+
+
+def load_sources(domain_slug: str, days_back: int) -> list[SourceRef]:
     """Return sources for a domain whose frequency qualifies.
 
     A source qualifies when ``frequency.min_days_back <= days_back``.
@@ -33,10 +60,10 @@ def load_sources(domain_slug: str, days_back: int) -> list[dict]:
             """,
             (domain_slug, days_back),
         ).fetchall()
-    return [dict(r) for r in rows]
+    return [dict(r) for r in rows]  # type: ignore[return-value]
 
 
-def list_sources(domain: Optional[str] = None) -> list[dict]:
+def list_sources(domain: Optional[str] = None) -> list[SourceRow]:
     """Return all sources, optionally filtered by domain slug."""
     with get_db() as conn:
         if domain:
@@ -63,10 +90,10 @@ def list_sources(domain: Optional[str] = None) -> list[dict]:
                 ORDER  BY s.id
                 """
             ).fetchall()
-    return [dict(r) for r in rows]
+    return [dict(r) for r in rows]  # type: ignore[return-value]
 
 
-def create_source(body: SourceIn) -> dict:
+def create_source(body: SourceIn) -> SourceBase:
     """Insert a new source and return the created row.
 
     Raises:
@@ -102,4 +129,4 @@ def create_source(body: SourceIn) -> dict:
             "SELECT * FROM sources WHERE id = ?",
             (new_id,),
         ).fetchone()
-    return dict(row)
+    return dict(row)  # type: ignore[return-value]

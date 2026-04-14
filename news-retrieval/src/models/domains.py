@@ -1,10 +1,28 @@
 """Domain data models and database access functions."""
-from typing import Optional
+from datetime import datetime
+from typing import Optional, TypedDict
 
 from db import get_db
 
 
-def get_domain_config(slug: str) -> dict | None:
+class DomainRow(TypedDict):
+    """A row from the domains table."""
+
+    id: int
+    name: str
+    slug: str
+    description: Optional[str]
+    created_at: datetime
+
+
+class DomainConfig(TypedDict):
+    """Domain name and ordered taxonomy for pipeline use."""
+
+    name: str
+    taxonomy: list[str]
+
+
+def get_domain_config(slug: str) -> Optional[DomainConfig]:
     """Load config (name + taxonomy) for a single domain slug.
 
     Uses a LEFT JOIN so a domain with no taxonomy categories is
@@ -13,8 +31,7 @@ def get_domain_config(slug: str) -> dict | None:
     and a domain that simply has no categories yet.
 
     Returns:
-        ``{"name": str, "taxonomy": list[str]}``, or ``None`` if
-        the slug does not exist.
+        ``DomainConfig``, or ``None`` if the slug does not exist.
     """
     with get_db() as conn:
         rows = conn.execute(
@@ -36,16 +53,16 @@ def get_domain_config(slug: str) -> dict | None:
             for r in rows
             if r["category"] is not None
         ],
-    }
+    }  # type: ignore[return-value]
 
 
-def list_domains() -> list[dict]:
+def list_domains() -> list[DomainRow]:
     """Return all domains ordered by id."""
     with get_db() as conn:
         rows = conn.execute(
             "SELECT * FROM domains ORDER BY id"
         ).fetchall()
-    return [dict(r) for r in rows]
+    return [dict(r) for r in rows]  # type: ignore[return-value]
 
 
 def insert_domain(
@@ -70,13 +87,13 @@ def insert_domain(
         return cursor.fetchone()["id"]
 
 
-def get_domain_by_id(domain_id: int) -> dict:
+def get_domain_by_id(domain_id: int) -> DomainRow:
     """Return a single domain row by id.
 
     Participates in an ambient ``transaction()`` if one is active.
     """
     with get_db() as conn:
-        return dict(
+        return dict(  # type: ignore[return-value]
             conn.execute(
                 "SELECT * FROM domains WHERE id = ?",
                 (domain_id,),

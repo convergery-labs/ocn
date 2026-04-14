@@ -174,3 +174,27 @@ def init_db() -> None:
                 UNIQUE(domain_id, category)
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS runs (
+                id            SERIAL PRIMARY KEY,
+                name          TEXT        NOT NULL,
+                domain        TEXT        NOT NULL,
+                started_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                completed_at  TIMESTAMPTZ,
+                status        TEXT        NOT NULL DEFAULT 'running',
+                days_back     INTEGER     NOT NULL,
+                max_articles  INTEGER,
+                summary_depth TEXT        NOT NULL,
+                focus         TEXT,
+                report_count  INTEGER,
+                summary       TEXT
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS reports (
+                id         SERIAL PRIMARY KEY,
+                run_id     INTEGER     NOT NULL REFERENCES runs(id),
+                filename   TEXT        NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """)

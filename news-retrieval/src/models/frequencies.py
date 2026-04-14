@@ -1,4 +1,7 @@
 """Frequency data models and database access functions."""
+from datetime import datetime
+from typing import TypedDict
+
 from pydantic import BaseModel, Field
 
 from db import get_db
@@ -11,16 +14,25 @@ class FrequencyIn(BaseModel):
     min_days_back: int = Field(ge=1)
 
 
-def list_frequencies() -> list[dict]:
+class FrequencyRow(TypedDict):
+    """A row from the frequencies table."""
+
+    id: int
+    name: str
+    min_days_back: int
+    created_at: datetime
+
+
+def list_frequencies() -> list[FrequencyRow]:
     """Return all frequencies ordered by min_days_back."""
     with get_db() as conn:
         rows = conn.execute(
             "SELECT * FROM frequencies ORDER BY min_days_back"
         ).fetchall()
-    return [dict(r) for r in rows]
+    return [dict(r) for r in rows]  # type: ignore[return-value]
 
 
-def create_frequency(body: FrequencyIn) -> dict:
+def create_frequency(body: FrequencyIn) -> FrequencyRow:
     """Insert a new frequency and return the created row.
 
     Raises:
@@ -40,4 +52,4 @@ def create_frequency(body: FrequencyIn) -> dict:
             "SELECT * FROM frequencies WHERE id = ?",
             (new_id,),
         ).fetchone()
-    return dict(row)
+    return dict(row)  # type: ignore[return-value]

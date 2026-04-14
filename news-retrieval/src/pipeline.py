@@ -347,16 +347,23 @@ def _pass2_write_reports(
     return reports
 
 
-def _save_reports(reports: dict[str, str]) -> None:
-    """Write each report to ``$REPORTS_DIR`` as a markdown file."""
+def _save_reports(reports: dict[str, str]) -> list[str]:
+    """Write each report to ``$REPORTS_DIR`` as a markdown file.
+
+    Returns:
+        List of filenames (basenames only) that were written.
+    """
     os.makedirs(_REPORTS_DIR, exist_ok=True)
     date_str = datetime.now().strftime("%Y-%m-%d")
+    filenames = []
     for category, content in reports.items():
         filename = f"{category.lower()}_{date_str}.md"
         filepath = os.path.join(_REPORTS_DIR, filename)
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(content)
         logger.info("[SAVE] %s", filepath)
+        filenames.append(filename)
+    return filenames
 
 
 # ---------------------------------------------------------------------------
@@ -410,7 +417,7 @@ def run(
     reports = _pass2_write_reports(
         qualifying, article_meta, domain_name, summary_depth, client_p2
     )
-    _save_reports(reports)
+    filenames = _save_reports(reports)
 
     logger.info(
         "[TIMER] domain=%s total=%.2fs reports=%d",
@@ -421,4 +428,5 @@ def run(
             f"Completed {domain_name} digest: {len(reports)} categories."
         ),
         "reports": reports,
+        "filenames": filenames,
     }

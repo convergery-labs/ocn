@@ -36,6 +36,23 @@ The application is a single FastAPI process with no background workers. Control 
 | **Database** | `src/db.py` | SQLite connection factory, `get_db()` context manager (commit/rollback), `init_db()` schema creation |
 | **Seed data** | `src/seed.py` | Idempotent seed for `frequencies`, `domains`, `taxonomies`, and `sources`; safe to re-run |
 
+### HTTP API
+
+| Endpoint | Description |
+|----------|-------------|
+| `POST /run` | Trigger a pipeline run for a domain |
+| `GET /runs` | List all runs, newest first |
+| `GET /runs/{id}` | Single run record |
+| `GET /runs/{id}/reports` | Report records for a run |
+| `GET /runs/{id}/reports/download` | All reports as a ZIP archive |
+| `GET /reports/{id}` | Report record + markdown content (JSON, pipeline use) |
+| `GET /reports/{id}/download` | Report as a `.md` file attachment |
+| `GET /health` | Service health check |
+| `GET/POST /domains` | Manage domains |
+| `GET/POST /sources` | Manage sources |
+| `GET/POST /frequencies` | Manage frequencies |
+| `GET/POST /taxonomies` | Manage taxonomy categories |
+
 ### Execution flow
 
 ```
@@ -102,3 +119,5 @@ Four normalized tables. All populated at startup via `seed.py`; new rows can be 
 | `domains` | `name`, `slug`, `description` | e.g. `ai_news`, `smart_money` |
 | `sources` | `url`, `domain_id`, `frequency_id`, `name`, `description` | FK to both `domains` and `frequencies` |
 | `taxonomies` | `domain_id`, `category`, `position` | UNIQUE(domain_id, category); position controls LLM prompt order |
+| `runs` | `name`, `domain`, `started_at`, `completed_at`, `status`, `report_count`, `summary` | One row per POST /run; starts empty; status: running → completed / failed |
+| `reports` | `run_id`, `filename` | One row per generated report file; FK to `runs`; starts empty |

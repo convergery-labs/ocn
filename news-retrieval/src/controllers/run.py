@@ -6,6 +6,8 @@ from pydantic import BaseModel, Field
 
 import pipeline as pl
 from models.domains import get_domain_config
+from models.reports import create_report
+from models.runs import complete_run, create_run, fail_run
 
 
 class RunRequest(BaseModel):
@@ -55,17 +57,36 @@ def execute(request: RunRequest) -> dict:
         )
 
     max_articles = request.max_articles or 0
-    result = pl.run(
-        domain_slug=request.domain,
-        domain_name=config["name"],
-        taxonomy=config["taxonomy"],
+    timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    run_id = create_run(
+        name=f"{request.domain}_{timestamp}",
+        domain=request.domain,
         days_back=request.days_back,
-        max_articles=max_articles,
+        max_articles=request.max_articles,
         summary_depth=request.summary_depth,
         focus=request.focus,
     )
+
+    try:
+        result = pl.run(
+            domain_slug=request.domain,
+            domain_name=config["name"],
+            taxonomy=config["taxonomy"],
+            days_back=request.days_back,
+            max_articles=max_articles,
+            summary_depth=request.summary_depth,
+            focus=request.focus,
+        )
+    except Exception as exc:
+        fail_run(run_id, str(exc))
+        raise
+
+    for filename in result["filenames"]:
+        create_report(run_id, filename)
+    complete_run(run_id, result["summary"], len(result["filenames"]))
     return {
         "status": "completed",
+        "run_id": run_id,
         "domain": request.domain,
         "summary": result["summary"],
         "reports": result["reports"],
@@ -75,5 +96,5 @@ def execute(request: RunRequest) -> dict:
             "summary_depth": request.summary_depth,
             "focus": request.focus,
         },
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": timestamp,
     }

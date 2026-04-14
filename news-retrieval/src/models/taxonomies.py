@@ -1,5 +1,6 @@
 """Taxonomy data models and database access functions."""
-from typing import Optional
+from datetime import datetime
+from typing import Optional, TypedDict
 
 from pydantic import BaseModel, Field
 
@@ -20,7 +21,18 @@ class TaxonomyIn(BaseModel):
     )
 
 
-def list_taxonomies(domain: Optional[str] = None) -> list[dict]:
+class TaxonomyRow(TypedDict):
+    """A taxonomy row joined with its domain slug."""
+
+    id: int
+    domain_id: int
+    category: str
+    position: int
+    created_at: datetime
+    domain_slug: str
+
+
+def list_taxonomies(domain: Optional[str] = None) -> list[TaxonomyRow]:
     """Return all taxonomy categories, optionally filtered by domain."""
     with get_db() as conn:
         if domain:
@@ -43,10 +55,10 @@ def list_taxonomies(domain: Optional[str] = None) -> list[dict]:
                 ORDER  BY d.id, t.position
                 """
             ).fetchall()
-    return [dict(r) for r in rows]
+    return [dict(r) for r in rows]  # type: ignore[return-value]
 
 
-def create_taxonomy(body: TaxonomyIn) -> dict:
+def create_taxonomy(body: TaxonomyIn) -> TaxonomyRow:
     """Insert a new taxonomy category and return the created row.
 
     Auto-assigns position as ``MAX(position) + 1`` when omitted.
@@ -88,7 +100,7 @@ def create_taxonomy(body: TaxonomyIn) -> dict:
             "WHERE t.id = ?",
             (new_id,),
         ).fetchone()
-    return dict(row)
+    return dict(row)  # type: ignore[return-value]
 
 
 def insert_taxonomy(
@@ -113,7 +125,7 @@ def insert_taxonomy(
         return cursor.fetchone()["id"]
 
 
-def list_by_domain_id(domain_id: int) -> list[dict]:
+def list_by_domain_id(domain_id: int) -> list[TaxonomyRow]:
     """Return taxonomy rows for a domain, ordered by position.
 
     Participates in an ambient ``transaction()`` if one is active.
@@ -129,4 +141,4 @@ def list_by_domain_id(domain_id: int) -> list[dict]:
             """,
             (domain_id,),
         ).fetchall()
-    return [dict(r) for r in rows]
+    return [dict(r) for r in rows]  # type: ignore[return-value]

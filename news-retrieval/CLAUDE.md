@@ -47,6 +47,8 @@ ocn/
     ├── models/           # DB query functions + Pydantic models (repository layer)
     │   ├── domains.py
     │   ├── frequencies.py
+    │   ├── reports.py
+    │   ├── runs.py
     │   ├── sources.py
     │   └── taxonomies.py
     ├── controllers/      # Business logic and multi-step orchestration
@@ -59,7 +61,9 @@ ocn/
         ├── domains.py
         ├── frequencies.py
         ├── health.py
+        ├── reports.py
         ├── run.py
+        ├── runs.py
         ├── sources.py
         └── taxonomies.py
 ```
