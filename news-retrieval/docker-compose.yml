@@ -7,14 +7,12 @@ services:
     environment:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
-      POSTGRES_DB: ocn
-      POSTGRES_USER: ocn
-      POSTGRES_PASSWORD: ocn
+      POSTGRES_DB: news-retrieval
+      POSTGRES_USER: news-retrieval
+      POSTGRES_PASSWORD: news-retrieval
     stdin_open: true
     ports:
       - "8000:8000"
-    volumes:
-      - ./reports:/app/reports
     depends_on:
       postgres:
         condition: service_healthy
@@ -34,13 +32,13 @@ services:
     ports:
       - "5432:5432"
     environment:
-      POSTGRES_DB: ocn
-      POSTGRES_USER: ocn
-      POSTGRES_PASSWORD: ocn
+      POSTGRES_DB: news-retrieval
+      POSTGRES_USER: news-retrieval
+      POSTGRES_PASSWORD: news-retrieval
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ocn -d ocn"]
+      test: ["CMD-SHELL", "pg_isready -U news-retrieval -d news-retrieval"]
       interval: 5s
       timeout: 5s
       retries: 5

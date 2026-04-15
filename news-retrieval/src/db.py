@@ -28,6 +28,32 @@ class _Connection:
         """Wrap a raw psycopg2 connection."""
         self._conn = conn
 
+    def execute_values(
+        self,
+        sql: str,
+        data: list,
+        template: str | None = None,
+    ) -> psycopg2.extensions.cursor:
+        """Execute a batch INSERT via psycopg2.extras.execute_values.
+
+        Args:
+            sql: INSERT statement with a ``%s`` placeholder for the
+                 values clause, e.g.
+                 ``INSERT INTO t (a, b) VALUES %s``.
+            data: Sequence of row tuples to insert.
+            template: Optional per-row template; passed through to
+                      ``execute_values``.
+
+        Returns:
+            The cursor after execution; call ``.fetchall()`` to
+            consume ``RETURNING`` results.
+        """
+        cur = self._conn.cursor()
+        psycopg2.extras.execute_values(
+            cur, sql, data, template=template
+        )
+        return cur
+
     def execute(
         self,
         sql: str,
@@ -176,25 +202,52 @@ def init_db() -> None:
         """)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS runs (
-                id            SERIAL PRIMARY KEY,
-                name          TEXT        NOT NULL,
-                domain        TEXT        NOT NULL,
-                started_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                completed_at  TIMESTAMPTZ,
-                status        TEXT        NOT NULL DEFAULT 'running',
-                days_back     INTEGER     NOT NULL,
-                max_articles  INTEGER,
-                summary_depth TEXT        NOT NULL,
-                focus         TEXT,
-                report_count  INTEGER,
-                summary       TEXT
+                id             SERIAL PRIMARY KEY,
+                name           TEXT        NOT NULL,
+                domain         TEXT        NOT NULL,
+                started_at     TIMESTAMPTZ NOT NULL
+                               DEFAULT CURRENT_TIMESTAMP,
+                completed_at   TIMESTAMPTZ,
+                status         TEXT        NOT NULL DEFAULT 'running',
+                days_back      INTEGER     NOT NULL,
+                max_articles   INTEGER,
+                focus          TEXT,
+                category_count INTEGER,
+                summary        TEXT
             )
         """)
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS reports (
+            CREATE TABLE IF NOT EXISTS categories (
                 id         SERIAL PRIMARY KEY,
                 run_id     INTEGER     NOT NULL REFERENCES runs(id),
-                filename   TEXT        NOT NULL,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                name       TEXT        NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(run_id, name)
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS articles (
+                id          SERIAL PRIMARY KEY,
+                run_id      INTEGER NOT NULL REFERENCES runs(id),
+                category_id INTEGER NOT NULL REFERENCES categories(id),
+                url         TEXT,
+                title       TEXT,
+                summary     TEXT,
+                source      TEXT,
+                published   TEXT,
+                created_at  TIMESTAMPTZ NOT NULL
+                            DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        # Migrations for existing deployments
+        conn.execute(
+            "ALTER TABLE runs"
+            " ADD COLUMN IF NOT EXISTS category_count INTEGER"
+        )
+        conn.execute(
+            "ALTER TABLE runs DROP COLUMN IF EXISTS report_count"
+        )
+        conn.execute(
+            "ALTER TABLE runs DROP COLUMN IF EXISTS summary_depth"
+        )
+        conn.execute("DROP TABLE IF EXISTS reports")

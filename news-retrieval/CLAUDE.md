@@ -1,4 +1,4 @@
-# ocn
+# news-retrieval
 
 ## How to use this file
 Do not load all documentation upfront. Read the index below,
@@ -23,31 +23,30 @@ Confluence space: `Projects` — Cloud: `opengrowthventures.atlassian.net`
 ## Jira Board
 | Board | URL | Project Key |
 |-------|-----|-------------|
-| ocn Board | https://opengrowthventures.atlassian.net/jira/software/projects/CON/boards/34 | CON |
+| news-retrieval Board | https://opengrowthventures.atlassian.net/jira/software/projects/CON/boards/34 | CON |
 
 ## Structure
 
 See [STRUCTURE.md](STRUCTURE.md) for descriptions.
 
 ```
-ocn/
+news-retrieval/
 ├── Dockerfile
 ├── docker-compose.yml
-├── AgentCard.json
 ├── README.md
 ├── CLAUDE.md
 ├── STRUCTURE.md
-├── reports/              # generated — one .md per category per run
 └── src/
     ├── __main__.py       # CLI entry point (uvicorn + click)
     ├── app.py            # FastAPI app factory and lifespan
-    ├── pipeline.py       # Two-pass aggregation pipeline (fetch → categorise → report)
+    ├── pipeline.py       # Single-pass pipeline (fetch → categorise → structured JSON)
     ├── db.py             # PostgreSQL connection, _Connection wrapper, DuplicateError, schema init
     ├── seed.py           # Idempotent seed for frequencies, domains, taxonomies, sources
     ├── models/           # DB query functions + Pydantic models (repository layer)
+    │   ├── articles.py
+    │   ├── categories.py
     │   ├── domains.py
     │   ├── frequencies.py
-    │   ├── reports.py
     │   ├── runs.py
     │   ├── sources.py
     │   └── taxonomies.py
@@ -58,10 +57,10 @@ ocn/
     │   ├── sources.py
     │   └── taxonomies.py
     └── routes/           # Thin HTTP adapters (FastAPI APIRouters)
+        ├── articles.py
         ├── domains.py
         ├── frequencies.py
         ├── health.py
-        ├── reports.py
         ├── run.py
         ├── runs.py
         ├── sources.py

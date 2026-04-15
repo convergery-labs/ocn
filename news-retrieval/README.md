@@ -5,7 +5,7 @@ Fetches RSS feeds, categorises articles by domain and taxonomy using LLMs, and g
 ## Stack
 
 - **Server**: FastAPI + uvicorn
-- **Database**: SQLite (persisted via Docker volume)
+- **Database**: PostgreSQL (persisted via Docker volume)
 - **LLMs**: `openai/gpt-4o-mini` (categorisation) and `anthropic/claude-haiku-4-5` (report generation) via OpenRouter
 
 ## Quick start
@@ -25,19 +25,31 @@ The API is available at `http://localhost:8000`. Interactive docs at `/docs`.
 |----------|----------|-------------|
 | `OPENROUTER_API_KEY` | Yes | API key for OpenRouter |
 | `REPORTS_DIR` | No | Output directory for reports (default: `/app/reports`) |
-| `DB_PATH` | No | SQLite database path (default: `/app/data/sources.db`) |
+| `POSTGRES_HOST` | No | PostgreSQL host (default: `localhost`) |
+| `POSTGRES_PORT` | No | PostgreSQL port (default: `5432`) |
+| `POSTGRES_DB` | No | Database name (default: `news-retrieval`) |
+| `POSTGRES_USER` | No | Database user (default: `news-retrieval`) |
+| `POSTGRES_PASSWORD` | Yes | Database password |
 
 ## API
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/run` | Fetch, categorise, and generate reports |
+| `POST` | `/run` | Fetch, categorise, and generate reports for a domain |
+| `GET` | `/runs` | List all pipeline runs, newest first |
+| `GET` | `/runs/{run_id}` | Get a single pipeline run by ID |
+| `GET` | `/runs/{run_id}/reports` | List all reports for a run |
+| `GET` | `/runs/{run_id}/reports/download` | Download all reports for a run as a ZIP |
+| `GET` | `/reports/{report_id}` | Get a report record with its markdown content |
+| `GET` | `/reports/{report_id}/download` | Download a report as a markdown file |
 | `GET` | `/domains` | List all domains |
 | `POST` | `/domains` | Create a domain with inline taxonomy |
-| `GET` | `/sources` | List all sources |
-| `POST` | `/sources` | Add a source |
-| `GET` | `/frequencies` | List frequencies |
-| `GET` | `/taxonomies` | List taxonomy categories |
+| `GET` | `/sources` | List all sources (optional `?domain=` filter) |
+| `POST` | `/sources` | Add a new RSS feed source |
+| `GET` | `/frequencies` | List all polling frequencies |
+| `POST` | `/frequencies` | Add a new polling frequency |
+| `GET` | `/taxonomies` | List all taxonomy categories (optional `?domain=` filter) |
+| `POST` | `/taxonomies` | Add a category to a domain's taxonomy |
 | `GET` | `/health` | Health check |
 
 ### Run the pipeline

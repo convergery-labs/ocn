@@ -1,12 +1,11 @@
-"""Linear two-pass news aggregation pipeline.
+"""Single-pass news aggregation pipeline.
 
-Pass 1 — parallel LLM batch categorisation (gpt-4o-mini, structured output).
-Pass 2 — parallel LLM report generation (claude-haiku-4-5).
+Pass 1 — parallel LLM batch categorisation (gpt-4o-mini, structured
+output). Returns structured categories with article lists.
 """
 import html
 import json
 import logging
-import os
 import re
 import threading
 import time
@@ -25,7 +24,6 @@ logger = logging.getLogger(__name__)
 
 _PASS1_BATCH_SIZE = 5
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
-_REPORTS_DIR = os.environ.get("REPORTS_DIR", "/app/reports")
 
 
 # ---------------------------------------------------------------------------
@@ -71,13 +69,8 @@ class _BatchCategories(BaseModel):
     assignments: list[_ArticleAssignment]
 
 
-def _make_client(model_group: str) -> OpenAI:
-    """Return an OpenAI-compatible client pointed at OpenRouter.
-
-    Args:
-        model_group: ``"pass1"`` or ``"pass2"``, used only for logging.
-    """
-    logger.debug("Creating OpenAI client for %s", model_group)
+def _make_client() -> OpenAI:
+    """Return an OpenAI-compatible client pointed at OpenRouter."""
     return OpenAI(
         api_key=os.environ.get("OPENROUTER_API_KEY"),
         base_url="https://openrouter.ai/api/v1",
@@ -260,115 +253,11 @@ def _pass1_categorize(
 
 
 # ---------------------------------------------------------------------------
-# Step 3 — write reports (pass 2)
-# ---------------------------------------------------------------------------
-
-def _pass2_write_reports(
-    qualifying: dict[str, list[str]],
-    article_meta: dict[str, dict],
-    domain_name: str,
-    summary_depth: str,
-    client: OpenAI,
-) -> dict[str, str]:
-    """Generate one markdown report per qualifying category in parallel.
-
-    Returns:
-        Dict mapping category name to markdown string.
-    """
-    today = datetime.now().strftime("%Y-%m-%d")
-    rate_limiter = _RateLimiter(rate=15.0)
-
-    def _write_one(category: str, urls: list[str]) -> tuple[str, str]:
-        rate_limiter.acquire()
-        articles = [
-            article_meta[url] for url in urls if url in article_meta
-        ]
-        articles_text = "\n---\n".join(
-            f"Title: {a['title']}\nURL: {a['url']}\n"
-            f"Summary: {a.get('summary', '')}"
-            for a in articles
-        )
-        depth_note = (
-            "1–2 sentences" if summary_depth == "brief"
-            else "2–4 sentences"
-        )
-        system_msg = (
-            f"You are a {domain_name} news analyst."
-            f" Write a complete markdown report for the category"
-            f" \"{category}\" using the article summaries provided.\n\n"
-            f"Report format:\n# {category} — {today}\n\n"
-            "## {{Article Title}}\n{{url}}\n"
-            f"{{summary paragraph ({depth_note} per article)}}\n\n"
-            "[one section per article]\n\n"
-            "## Category Summary\n"
-            "[Several paragraphs synthesising major trends, implications,"
-            " and dynamics. Go beyond listing — provide insight and"
-            " analysis. Reserve 'inflection point' language only where"
-            " evidence shows a change in kind rather than degree.]\n\n"
-            "Use article titles and URLs exactly as given."
-        )
-        response = client.chat.completions.create(
-            model="anthropic/claude-haiku-4-5",
-            temperature=0,
-            messages=[
-                {"role": "system", "content": system_msg},
-                {
-                    "role": "user",
-                    "content": (
-                        f"Category: {category}\n\nArticles:\n{articles_text}"
-                    ),
-                },
-            ],
-        )
-        return category, response.choices[0].message.content
-
-    reports: dict[str, str] = {}
-    t0 = time.perf_counter()
-
-    with ThreadPoolExecutor(max_workers=15) as executor:
-        futures = {
-            executor.submit(_write_one, cat, urls): cat
-            for cat, urls in qualifying.items()
-        }
-        done, not_done = futures_wait(futures, timeout=120)
-        if not_done:
-            logger.warning("[PASS2] %d reports timed out", len(not_done))
-        for future in done:
-            try:
-                category, markdown = future.result()
-                reports[category] = markdown
-            except Exception as exc:
-                logger.warning("[PASS2] report failed: %s", exc)
-
-    logger.info(
-        "[PASS2] categories=%d reports=%d elapsed=%.2fs",
-        len(qualifying), len(reports), time.perf_counter() - t0,
-    )
-    return reports
-
-
-def _save_reports(reports: dict[str, str]) -> list[str]:
-    """Write each report to ``$REPORTS_DIR`` as a markdown file.
-
-    Returns:
-        List of filenames (basenames only) that were written.
-    """
-    os.makedirs(_REPORTS_DIR, exist_ok=True)
-    date_str = datetime.now().strftime("%Y-%m-%d")
-    filenames = []
-    for category, content in reports.items():
-        filename = f"{category.lower()}_{date_str}.md"
-        filepath = os.path.join(_REPORTS_DIR, filename)
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write(content)
-        logger.info("[SAVE] %s", filepath)
-        filenames.append(filename)
-    return filenames
-
-
-# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
+
+_ARTICLE_KEYS = ("url", "title", "summary", "source", "published")
+
 
 def run(
     domain_slug: str,
@@ -376,57 +265,61 @@ def run(
     taxonomy: list[str],
     days_back: int = 7,
     max_articles: int = 0,
-    summary_depth: str = "detailed",
     focus: str | None = None,
 ) -> dict[str, Any]:
-    """Run the two-pass pipeline for the given domain.
+    """Run the single-pass pipeline for the given domain.
 
     Args:
-        domain_slug: Domain identifier used to query sources from the DB.
+        domain_slug: Domain identifier used to query sources from DB.
         domain_name: Human-readable name used in LLM prompts.
-        taxonomy: Ordered list of category names the LLM must use verbatim.
+        taxonomy: Ordered list of category names the LLM must use.
         days_back: Exclude articles older than this many days.
         max_articles: Cap on total articles fetched; 0 means no limit.
-        summary_depth: ``"brief"`` or ``"detailed"``.
-        focus: Optional free-text instruction to narrow topics covered.
+        focus: Optional free-text instruction to narrow topics.
 
     Returns:
-        Dict with ``"summary"`` (str) and ``"reports"``
-        (category → markdown).
+        Dict with ``"summary"`` (str) and ``"categories"``
+        (category → list of article dicts).
     """
     t0 = time.perf_counter()
-    client_p1 = _make_client("pass1")
-    client_p2 = _make_client("pass2")
+    client = _make_client()
 
     sources = load_sources(domain_slug, days_back)
     if not sources:
-        return {"summary": "No sources configured.", "reports": {}}
+        return {"summary": "No sources configured.", "categories": {}}
 
     articles = _fetch_articles(sources, days_back, max_articles)
     if not articles:
-        return {"summary": "No articles found.", "reports": {}}
+        return {"summary": "No articles found.", "categories": {}}
 
     article_meta = {a["url"]: a for a in articles}
 
     qualifying = _pass1_categorize(
-        articles, taxonomy, domain_name, focus, client_p1
+        articles, taxonomy, domain_name, focus, client
     )
     if not qualifying:
-        return {"summary": "No qualifying categories.", "reports": {}}
+        return {
+            "summary": "No qualifying categories.",
+            "categories": {},
+        }
 
-    reports = _pass2_write_reports(
-        qualifying, article_meta, domain_name, summary_depth, client_p2
-    )
-    filenames = _save_reports(reports)
+    categories = {
+        cat: [
+            {k: article_meta[url][k] for k in _ARTICLE_KEYS}
+            for url in urls
+            if url in article_meta
+        ]
+        for cat, urls in qualifying.items()
+    }
 
     logger.info(
-        "[TIMER] domain=%s total=%.2fs reports=%d",
-        domain_slug, time.perf_counter() - t0, len(reports),
+        "[TIMER] domain=%s total=%.2fs categories=%d",
+        domain_slug, time.perf_counter() - t0, len(categories),
     )
     return {
         "summary": (
-            f"Completed {domain_name} digest: {len(reports)} categories."
+            f"Completed {domain_name} digest:"
+            f" {len(categories)} categories."
         ),
-        "reports": reports,
-        "filenames": filenames,
+        "categories": categories,
     }

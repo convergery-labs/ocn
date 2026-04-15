@@ -5,17 +5,13 @@
 | Path | Description |
 |------|-------------|
 | `Dockerfile` | Builds a `python:3.11-slim` image; copies `src/` to `/app` and installs pip dependencies |
-| `docker-compose.yml` | Runs the service on port 8000; mounts `./reports` and `./data` as volumes; enables hot-reload via `docker compose watch` |
-| `AgentCard.json` | Agent discovery card — declares the service name, capabilities, and endpoint URL |
+| `docker-compose.yml` | Runs the service on port 8000; enables hot-reload via `docker compose watch` |
 | `README.md` | Project overview and quick-start instructions |
 | `CLAUDE.md` | AI assistant instructions: documentation index, Jira board, structural guide, maintenance rules |
 | `STRUCTURE.md` | This file |
-| `docs/architecture.md` | Internal architecture notes and design decisions |
-| `data/` | Unused — legacy SQLite directory. PostgreSQL data is persisted in the `pgdata` Docker named volume |
-| `reports/` | Generated output — one `.md` file per category per run (e.g. `ai_models_&_research_2026-04-09.md`). Not committed in normal operation |
 | `src/__main__.py` | CLI entry point — `click` + `uvicorn.run` |
 | `src/app.py` | FastAPI app factory and lifespan hook |
-| `src/pipeline.py` | Two-pass aggregation pipeline (fetch → categorise → report) |
+| `src/pipeline.py` | Single-pass aggregation pipeline (fetch → categorise); returns articles grouped by category |
 | `src/db.py` | PostgreSQL connection (`psycopg2`), `_Connection` wrapper with portable placeholder normalisation, `DuplicateError`, ambient transaction via `ContextVar`, schema init |
 | `src/seed.py` | Idempotent seed for all four tables |
 | `src/models/` | Pydantic request models + SQL query functions per entity |
@@ -32,8 +28,8 @@ The application is a single FastAPI process with no background workers. Control 
 | **Routes** | `src/routes/` | Thin HTTP adapters: one `APIRouter` per resource, maps domain exceptions to status codes |
 | **Controllers** | `src/controllers/` | Business logic and multi-step orchestration; owns transaction boundaries for composite operations |
 | **Repository** | `src/models/` | SQL query functions + Pydantic input models; no HTTP concepts; exposes both standalone and connection-accepting variants for use in transactions |
-| **Pipeline** | `src/pipeline.py` | Stateless two-pass pipeline: parallel RSS fetch, parallel LLM categorisation (`gpt-4o-mini`), parallel report generation (`claude-haiku-4-5`), markdown save |
-| **Database** | `src/db.py` | SQLite connection factory, `get_db()` context manager (commit/rollback), `init_db()` schema creation |
+| **Pipeline** | `src/pipeline.py` | Stateless single-pass pipeline: parallel RSS fetch, parallel LLM categorisation (`gpt-4o-mini`); returns articles grouped by category |
+| **Database** | `src/db.py` | PostgreSQL connection (`psycopg2`), `_Connection` wrapper, `DuplicateError`, ambient transaction via `ContextVar`, schema init + migrations |
 | **Seed data** | `src/seed.py` | Idempotent seed for `frequencies`, `domains`, `taxonomies`, and `sources`; safe to re-run |
 
 ### HTTP API
@@ -42,11 +38,7 @@ The application is a single FastAPI process with no background workers. Control 
 |----------|-------------|
 | `POST /run` | Trigger a pipeline run for a domain |
 | `GET /runs` | List all runs, newest first |
-| `GET /runs/{id}` | Single run record |
-| `GET /runs/{id}/reports` | Report records for a run |
-| `GET /runs/{id}/reports/download` | All reports as a ZIP archive |
-| `GET /reports/{id}` | Report record + markdown content (JSON, pipeline use) |
-| `GET /reports/{id}/download` | Report as a `.md` file attachment |
+| `GET /runs/{id}` | Single run record (includes `result` JSONB with categorised articles) |
 | `GET /health` | Service health check |
 | `GET/POST /domains` | Manage domains |
 | `GET/POST /sources` | Manage sources |
@@ -57,20 +49,19 @@ The application is a single FastAPI process with no background workers. Control 
 
 ```
 POST /run
-  └─ _load_domain_configs()        # JOIN domains + taxonomies from SQLite
+  └─ get_domain_config()     # JOIN domains + taxonomies from DB
   └─ pl.run()
-       ├─ _load_sources()          # query sources WHERE min_days_back <= days_back
-       ├─ _fetch_articles()        # parallel feedparser (10 workers)
-       ├─ _pass1_categorize()      # LLM: batch-categorise articles (gpt-4o-mini, 15 workers)
-       ├─ _pass2_write_reports()   # LLM: one report per qualifying category (haiku, 15 workers)
-       └─ _save_reports()          # write markdown files to REPORTS_DIR
+       ├─ load_sources()     # query sources WHERE min_days_back <= days_back
+       ├─ _fetch_articles()  # parallel feedparser (10 workers)
+       └─ _pass1_categorize() # LLM: batch-categorise articles (gpt-4o-mini, 15 workers)
+                               # returns {category: [article, ...]}
 ```
 
 ### Key behavioural rules
 
-- A category is only reported if it has **≥ 2 articles**.
+- A category is only included if it has **≥ 2 articles**.
 - Sources with `frequency.min_days_back > days_back` are skipped.
-- Both LLM passes use a token-bucket `_RateLimiter` (15 calls/sec) shared across workers.
+- Pass 1 uses a token-bucket `_RateLimiter` (15 calls/sec) shared across workers.
 - Domain config is loaded fresh from the DB on every `POST /run` — adding a new domain via the API takes effect immediately without restarting.
 - The LLM never decides what tools to call — all orchestration is in Python.
 
@@ -97,8 +88,8 @@ POST /run
 | `REPORTS_DIR` | `/app/reports` | Directory where markdown reports are written |
 | `POSTGRES_HOST` | `localhost` | PostgreSQL server hostname |
 | `POSTGRES_PORT` | `5432` | PostgreSQL server port |
-| `POSTGRES_DB` | `ocn` | Database name |
-| `POSTGRES_USER` | `ocn` | Database user |
+| `POSTGRES_DB` | `news-retrieval` | Database name |
+| `POSTGRES_USER` | `news-retrieval` | Database user |
 | `POSTGRES_PASSWORD` | — | Database password |
 | Docker network `agents-net` | external | Shared bridge network for inter-agent communication |
 

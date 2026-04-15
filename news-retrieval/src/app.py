@@ -2,7 +2,14 @@
 from fastapi import FastAPI
 
 from routes import (
-    domains, frequencies, health, reports, run, runs, sources, taxonomies,
+    articles,
+    domains,
+    frequencies,
+    health,
+    run,
+    runs,
+    sources,
+    taxonomies,
 )
 
 
@@ -11,7 +18,7 @@ def create_app() -> FastAPI:
     application = FastAPI(title="News Aggregator")
     application.include_router(run.router)
     application.include_router(runs.router)
-    application.include_router(reports.router)
+    application.include_router(articles.router)
     application.include_router(health.router)
     application.include_router(frequencies.router)
     application.include_router(domains.router)

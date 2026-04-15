@@ -377,37 +377,6 @@ SOURCES: list[dict[str, Any]] = [
 # ---------------------------------------------------------------------------
 
 
-def _insert_or_get_id(
-    unique_col: str,
-    unique_val: str,
-    insert_sql: str,
-    select_sql: str,
-    params: dict[str, Any],
-    label: str,
-) -> int:
-    """Insert a row (if it does not exist) and return its id.
-
-    Uses ON CONFLICT DO NOTHING so the ambient transaction remains
-    valid whether or not the row already exists, then SELECTs the id.
-
-    Args:
-        unique_col: Column name used only for log output.
-        unique_val: Value of that column, used for log output and SELECT.
-        insert_sql: INSERT … ON CONFLICT DO NOTHING statement.
-        select_sql: SELECT id … WHERE unique_col = %s statement.
-        params: Bind parameters for the INSERT.
-        label: Human-readable label used in log output.
-
-    Returns:
-        The id of the inserted or pre-existing row.
-    """
-    with get_db() as conn:
-        conn.execute(insert_sql, params)
-        row = conn.execute(select_sql, (unique_val,)).fetchone()
-        logger.info("Seeded %s: %s", label, unique_val)
-        return row["id"]
-
-
 def seed() -> None:
     """Insert frequencies, domains, taxonomies, and sources.
 
@@ -417,86 +386,74 @@ def seed() -> None:
     """
     with transaction():
         # Frequencies
-        freq_id_map: dict[str, int] = {}
-        for freq in FREQUENCIES:
-            freq_id_map[freq["name"]] = _insert_or_get_id(
-                unique_col="name",
-                unique_val=freq["name"],
-                insert_sql=(
-                    "INSERT INTO frequencies (name, min_days_back)"
-                    " VALUES (:name, :min_days_back)"
-                    " ON CONFLICT (name) DO NOTHING"
-                ),
-                select_sql=(
-                    "SELECT id FROM frequencies WHERE name = ?"
-                ),
-                params=freq,
-                label="frequency",
+        with get_db() as conn:
+            conn.execute_values(
+                "INSERT INTO frequencies (name, min_days_back)"
+                " VALUES %s ON CONFLICT (name) DO NOTHING",
+                [(f["name"], f["min_days_back"]) for f in FREQUENCIES],
             )
+            rows = conn.execute(
+                "SELECT id, name FROM frequencies"
+                " WHERE name = ANY(?)",
+                ([f["name"] for f in FREQUENCIES],),
+            ).fetchall()
+        freq_id_map = {row["name"]: row["id"] for row in rows}
+        logger.info("Seeded %d frequencies.", len(freq_id_map))
 
         # Domains
-        domain_id_map: dict[str, int] = {}
-        for domain in DOMAINS:
-            domain_id_map[domain["slug"]] = _insert_or_get_id(
-                unique_col="slug",
-                unique_val=domain["slug"],
-                insert_sql=(
-                    "INSERT INTO domains (name, slug, description)"
-                    " VALUES (:name, :slug, :description)"
-                    " ON CONFLICT (slug) DO NOTHING"
-                ),
-                select_sql=(
-                    "SELECT id FROM domains WHERE slug = ?"
-                ),
-                params=domain,
-                label="domain",
+        with get_db() as conn:
+            conn.execute_values(
+                "INSERT INTO domains (name, slug, description)"
+                " VALUES %s ON CONFLICT (slug) DO NOTHING",
+                [
+                    (d["name"], d["slug"], d["description"])
+                    for d in DOMAINS
+                ],
             )
+            rows = conn.execute(
+                "SELECT id, slug FROM domains WHERE slug = ANY(?)",
+                ([d["slug"] for d in DOMAINS],),
+            ).fetchall()
+        domain_id_map = {row["slug"]: row["id"] for row in rows}
+        logger.info("Seeded %d domains.", len(domain_id_map))
 
-        # Taxonomies — position derived from list index
-        for domain_slug, categories in TAXONOMIES.items():
-            domain_id = domain_id_map[domain_slug]
-            for position, category in enumerate(categories, start=1):
-                with get_db() as conn:
-                    conn.execute(
-                        "INSERT INTO taxonomies"
-                        " (domain_id, category, position)"
-                        " VALUES (?, ?, ?)"
-                        " ON CONFLICT (domain_id, category) DO NOTHING",
-                        (domain_id, category, position),
-                    )
-                    logger.info(
-                        "Seeded taxonomy: [%s] %s",
-                        domain_slug,
-                        category,
-                    )
+        # Taxonomies
+        taxonomy_rows = [
+            (domain_id_map[slug], cat, pos)
+            for slug, cats in TAXONOMIES.items()
+            for pos, cat in enumerate(cats, start=1)
+        ]
+        with get_db() as conn:
+            conn.execute_values(
+                "INSERT INTO taxonomies (domain_id, category, position)"
+                " VALUES %s"
+                " ON CONFLICT (domain_id, category) DO NOTHING",
+                taxonomy_rows,
+            )
+        logger.info(
+            "Seeded %d taxonomy entries.", len(taxonomy_rows)
+        )
 
         # Sources
-        inserted = skipped = 0
-        for source in SOURCES:
-            domain_id = domain_id_map[source["domain_slug"]]
-            frequency_id = freq_id_map[
-                source.get("frequency_name", "daily")
-            ]
-            with get_db() as conn:
-                cursor = conn.execute(
-                    "INSERT INTO sources"
-                    " (url, domain_id, frequency_id, name,"
-                    " description)"
-                    " VALUES (?, ?, ?, ?, ?)"
-                    " ON CONFLICT (url) DO NOTHING",
-                    (
-                        source["url"],
-                        domain_id,
-                        frequency_id,
-                        source["name"],
-                        source["description"],
-                    ),
-                )
-                if cursor.rowcount:
-                    inserted += 1
-                else:
-                    skipped += 1
-
+        source_rows = [
+            (
+                s["url"],
+                domain_id_map[s["domain_slug"]],
+                freq_id_map[s.get("frequency_name", "daily")],
+                s["name"],
+                s["description"],
+            )
+            for s in SOURCES
+        ]
+        with get_db() as conn:
+            cur = conn.execute_values(
+                "INSERT INTO sources"
+                " (url, domain_id, frequency_id, name, description)"
+                " VALUES %s ON CONFLICT (url) DO NOTHING RETURNING id",
+                source_rows,
+            )
+            inserted = len(cur.fetchall())
+        skipped = len(source_rows) - inserted
         logger.info(
             "Seed complete: %d sources inserted,"
             " %d already existed.",

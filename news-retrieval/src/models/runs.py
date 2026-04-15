@@ -16,9 +16,8 @@ class RunRow(TypedDict):
     status: str
     days_back: int
     max_articles: Optional[int]
-    summary_depth: str
     focus: Optional[str]
-    report_count: Optional[int]
+    category_count: Optional[int]
     summary: Optional[str]
 
 
@@ -27,7 +26,6 @@ def create_run(
     domain: str,
     days_back: int,
     max_articles: Optional[int],
-    summary_depth: str,
     focus: Optional[str],
 ) -> int:
     """Insert a new run record and return its id."""
@@ -35,11 +33,10 @@ def create_run(
         cur = conn.execute(
             """
             INSERT INTO runs
-                (name, domain, days_back, max_articles,
-                 summary_depth, focus, status)
+                (name, domain, days_back, max_articles, focus, status)
             VALUES
                 (:name, :domain, :days_back, :max_articles,
-                 :summary_depth, :focus, 'running')
+                 :focus, 'running')
             RETURNING id
             """,
             {
@@ -47,7 +44,6 @@ def create_run(
                 "domain": domain,
                 "days_back": days_back,
                 "max_articles": max_articles,
-                "summary_depth": summary_depth,
                 "focus": focus,
             },
         )
@@ -57,23 +53,23 @@ def create_run(
 def complete_run(
     run_id: int,
     summary: str,
-    report_count: int,
+    category_count: int,
 ) -> None:
     """Mark a run as completed with its result summary."""
     with get_db() as conn:
         conn.execute(
             """
             UPDATE runs
-            SET status       = 'completed',
-                completed_at = CURRENT_TIMESTAMP,
-                summary      = :summary,
-                report_count = :report_count
+            SET status         = 'completed',
+                completed_at   = CURRENT_TIMESTAMP,
+                summary        = :summary,
+                category_count = :category_count
             WHERE id = :id
             """,
             {
                 "id": run_id,
                 "summary": summary,
-                "report_count": report_count,
+                "category_count": category_count,
             },
         )
 

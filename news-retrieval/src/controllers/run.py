@@ -1,12 +1,13 @@
 """Pipeline execution controller."""
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Optional
 
 from pydantic import BaseModel, Field
 
 import pipeline as pl
+from models.articles import create_articles
+from models.categories import create_categories
 from models.domains import get_domain_config
-from models.reports import create_report
 from models.runs import complete_run, create_run, fail_run
 
 
@@ -28,10 +29,6 @@ class RunRequest(BaseModel):
             "Cap on total articles fetched; omit for no limit."
         ),
     )
-    summary_depth: Literal["brief", "detailed"] = Field(
-        default="detailed",
-        description="Depth of per-article summaries.",
-    )
     focus: Optional[str] = Field(
         default=None,
         description="Optional instruction to narrow topics covered.",
@@ -39,7 +36,7 @@ class RunRequest(BaseModel):
 
 
 def execute(request: RunRequest) -> dict:
-    """Run the two-pass pipeline and return the full response payload.
+    """Run the pipeline and return the full response payload.
 
     Raises:
         KeyError: if the domain slug is not found in the database.
@@ -63,7 +60,6 @@ def execute(request: RunRequest) -> dict:
         domain=request.domain,
         days_back=request.days_back,
         max_articles=request.max_articles,
-        summary_depth=request.summary_depth,
         focus=request.focus,
     )
 
@@ -74,26 +70,32 @@ def execute(request: RunRequest) -> dict:
             taxonomy=config["taxonomy"],
             days_back=request.days_back,
             max_articles=max_articles,
-            summary_depth=request.summary_depth,
             focus=request.focus,
         )
     except Exception as exc:
         fail_run(run_id, str(exc))
         raise
 
-    for filename in result["filenames"]:
-        create_report(run_id, filename)
-    complete_run(run_id, result["summary"], len(result["filenames"]))
+    categories = result["categories"]
+    cat_id_map = create_categories(run_id, list(categories.keys()))
+    all_articles = [
+        {**art, "run_id": run_id, "category_id": cat_id_map[cat]}
+        for cat, arts in categories.items()
+        for art in arts
+    ]
+    if all_articles:
+        create_articles(all_articles)
+    complete_run(run_id, result["summary"], len(categories))
+
     return {
         "status": "completed",
         "run_id": run_id,
         "domain": request.domain,
         "summary": result["summary"],
-        "reports": result["reports"],
+        "categories": categories,
         "parameters_used": {
             "days_back": request.days_back,
             "max_articles": max_articles or "unlimited",
-            "summary_depth": request.summary_depth,
             "focus": request.focus,
         },
         "timestamp": timestamp,
