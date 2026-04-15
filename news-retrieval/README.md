@@ -1,12 +1,12 @@
-# OCN News Aggregator
+# news-retrieval
 
-Fetches RSS feeds, categorises articles by domain and taxonomy using LLMs, and generates themed markdown reports.
+Fetches RSS feeds and categorises articles by domain and taxonomy using LLMs. Returns structured JSON with articles grouped by category.
 
 ## Stack
 
 - **Server**: FastAPI + uvicorn
 - **Database**: PostgreSQL (persisted via Docker volume)
-- **LLMs**: `openai/gpt-4o-mini` (categorisation) and `anthropic/claude-haiku-4-5` (report generation) via OpenRouter
+- **LLM**: `openrouter/elephant-alpha` (categorisation) via OpenRouter
 
 ## Quick start
 
@@ -24,7 +24,6 @@ The API is available at `http://localhost:8000`. Interactive docs at `/docs`.
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `OPENROUTER_API_KEY` | Yes | API key for OpenRouter |
-| `REPORTS_DIR` | No | Output directory for reports (default: `/app/reports`) |
 | `POSTGRES_HOST` | No | PostgreSQL host (default: `localhost`) |
 | `POSTGRES_PORT` | No | PostgreSQL port (default: `5432`) |
 | `POSTGRES_DB` | No | Database name (default: `news-retrieval`) |
@@ -35,13 +34,12 @@ The API is available at `http://localhost:8000`. Interactive docs at `/docs`.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/run` | Fetch, categorise, and generate reports for a domain |
+| `POST` | `/run` | Fetch and categorise articles for a domain |
 | `GET` | `/runs` | List all pipeline runs, newest first |
 | `GET` | `/runs/{run_id}` | Get a single pipeline run by ID |
-| `GET` | `/runs/{run_id}/reports` | List all reports for a run |
-| `GET` | `/runs/{run_id}/reports/download` | Download all reports for a run as a ZIP |
-| `GET` | `/reports/{report_id}` | Get a report record with its markdown content |
-| `GET` | `/reports/{report_id}/download` | Download a report as a markdown file |
+| `GET` | `/runs/{run_id}/categories` | List categories produced by a run |
+| `GET` | `/runs/{run_id}/articles` | List all articles for a run (optional `?category_id=` filter) |
+| `GET` | `/articles/{article_id}` | Get a single article by ID |
 | `GET` | `/domains` | List all domains |
 | `POST` | `/domains` | Create a domain with inline taxonomy |
 | `GET` | `/sources` | List all sources (optional `?domain=` filter) |
@@ -60,7 +58,7 @@ curl -X POST http://localhost:8000/run \
   -d '{"domain": "ai_news", "days_back": 7}'
 ```
 
-Reports are written to `./reports/` as markdown files, one per qualifying category.
+Response includes `categories` — a dict mapping each category name to its list of articles.
 
 ### Add a domain with taxonomy
 
