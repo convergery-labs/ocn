@@ -6,6 +6,7 @@ output). Returns structured categories with article lists.
 import html
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -207,7 +208,7 @@ def _pass1_categorize(
             for i, a in enumerate(batch)
         )
         response = client.chat.completions.create(
-            model="openai/gpt-4o-mini",
+            model="openrouter/elephant-alpha",
             response_format={"type": "json_object"},
             temperature=0,
             messages=[
