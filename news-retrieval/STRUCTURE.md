@@ -5,10 +5,13 @@
 | Path | Description |
 |------|-------------|
 | `Dockerfile` | Builds a `python:3.11-slim` image; copies `src/` to `/app` and installs pip dependencies |
-| `docker-compose.yml` | Runs the service on port 8000; enables hot-reload via `docker compose watch` |
+| `docker-compose.yml` | Runs the service on port 8000; enables hot-reload via `docker compose watch`; includes a `postgres-test` service on port 5433 for the test suite |
+| `pyproject.toml` | pytest configuration: `asyncio_mode = "auto"`, `testpaths = ["tests"]` |
+| `requirements-test.txt` | Test-only pip dependencies (`pytest`, `pytest-asyncio`) |
 | `README.md` | Project overview and quick-start instructions |
 | `CLAUDE.md` | AI assistant instructions: documentation index, Jira board, structural guide, maintenance rules |
 | `STRUCTURE.md` | This file |
+| `tests/` | Automated test suite — see Testing section below |
 | `src/__main__.py` | CLI entry point — `click` + `uvicorn.run` |
 | `src/app.py` | FastAPI app factory and lifespan hook |
 | `src/pipeline.py` | Fetch and relevance-filter pipeline (fetch → Pass 1 LLM relevance filter); returns list of relevant articles |
@@ -75,6 +78,37 @@ GET /runs/{id}  →  live status poll
 - Pass 1 (relevance filter) fails open: if a batch errors, those articles are kept.
 - Domain config is loaded fresh from the DB on every `POST /run` — adding a new domain via the API takes effect immediately without restarting.
 - The LLM never decides what tools to call — all orchestration is in Python.
+
+## Testing
+
+Tests live in `tests/` at the project root and run against a dedicated `news-retrieval-test` PostgreSQL database. The pipeline's LLM calls are mocked at the `pipeline.run` boundary; all other app code runs in-process via `httpx.AsyncClient` + `ASGITransport`.
+
+### Running the tests
+
+```bash
+# Start postgres (if not already running)
+docker compose up postgres -d
+
+# Install test dependencies (app deps must already be installed)
+pip install -r requirements-test.txt
+
+# Run suite
+pytest
+```
+
+`conftest.py` creates and wipes the test database on each `pytest` session, so no manual DB setup is needed beyond having postgres available.
+
+### Test modules
+
+| Module | Coverage |
+|--------|----------|
+| `test_auth.py` | Missing/invalid auth header → 422/401; non-admin on admin endpoint → 403 |
+| `test_runs.py` | `POST /run`: 202 + DB record created; unknown domain → 404; non-owner → 403 |
+| `test_guard_chain.py` | CON-111 concurrent guard → 409 with `run_id`; `force=true` bypasses guard |
+| `test_pagination.py` | Cursor advances on `GET /runs` and `GET /runs/{id}/articles`; last page has `next_cursor: null` |
+| `test_webhook.py` | `callback_url` POSTed with `status=completed` on success and `status=failed` on pipeline error |
+| `test_ownership.py` | `POST /sources` and `PATCH /domains/{id}` reject non-owners → 403; null-owner domains visible to all users |
+| `test_pipeline.py` | LLM batch error keeps all articles (fail-open) |
 
 ## Dependencies
 

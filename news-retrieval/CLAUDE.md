@@ -33,9 +33,20 @@ See [STRUCTURE.md](STRUCTURE.md) for descriptions.
 news-retrieval/
 ├── Dockerfile
 ├── docker-compose.yml
+├── pyproject.toml        # pytest config (asyncio_mode=auto)
+├── requirements-test.txt # test-only pip deps
 ├── README.md
 ├── CLAUDE.md
 ├── STRUCTURE.md
+├── tests/                # automated test suite (pytest)
+│   ├── conftest.py       # session/function fixtures (DB, keys, client)
+│   ├── test_auth.py
+│   ├── test_runs.py
+│   ├── test_guard_chain.py
+│   ├── test_pagination.py
+│   ├── test_webhook.py
+│   ├── test_ownership.py
+│   └── test_pipeline.py
 └── src/
     ├── __main__.py       # CLI entry point (uvicorn + click)
     ├── app.py            # FastAPI app factory
