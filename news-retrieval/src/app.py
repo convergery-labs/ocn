@@ -9,7 +9,6 @@ from routes import (
     run,
     runs,
     sources,
-    taxonomies,
 )
 
 
@@ -23,7 +22,7 @@ def create_app() -> FastAPI:
     application.include_router(frequencies.router)
     application.include_router(domains.router)
     application.include_router(sources.router)
-    application.include_router(taxonomies.router)
+
     return application
 
 

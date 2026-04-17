@@ -12,7 +12,8 @@ RUN pip install --no-cache-dir \
     click>=8.1.7 \
     feedparser>=6.0.11 \
     httpx>=0.27.0 \
-    psycopg2-binary>=2.9.0
+    psycopg2-binary>=2.9.0 \
+    numpy>=1.26.0
 
 ENV PYTHONUNBUFFERED=1
 

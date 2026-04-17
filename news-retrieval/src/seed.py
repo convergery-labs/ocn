@@ -45,32 +45,6 @@ DOMAINS: list[dict[str, Any]] = [
     },
 ]
 
-# Keys are domain slugs; list order determines position (1-based).
-TAXONOMIES: dict[str, list[str]] = {
-    "ai_news": [
-        "AI Agents & Automation",
-        "AI Models & Research",
-        "AI Hardware & Semiconductors",
-        "Data Center Infrastructure",
-        "Energy & Sustainability",
-        "Robotics & Physical AI",
-        "Edge & Local AI",
-        "Enterprise AI & Productivity",
-        "AI Security & Privacy",
-        "AI Policy & Governance",
-        "AI Funding & Startups",
-        "AI in Science & Society",
-    ],
-    "smart_money": [
-        "Agentic Payments & AI Wallets",
-        "Machine Economy & AI-to-AI Transactions",
-        "Stablecoins & On-Chain Settlement",
-        "Cross-Border Payments & Real-Time Settlement",
-        "Embedded Finance & API Banking",
-        "AI Fraud Detection & Compliance",
-        "Treasury Automation & Enterprise Finance",
-    ],
-}
 
 SOURCES: list[dict[str, Any]] = [
     # ------------------------------------------------------------------
@@ -416,23 +390,6 @@ def seed() -> None:
             ).fetchall()
         domain_id_map = {row["slug"]: row["id"] for row in rows}
         logger.info("Seeded %d domains.", len(domain_id_map))
-
-        # Taxonomies
-        taxonomy_rows = [
-            (domain_id_map[slug], cat, pos)
-            for slug, cats in TAXONOMIES.items()
-            for pos, cat in enumerate(cats, start=1)
-        ]
-        with get_db() as conn:
-            conn.execute_values(
-                "INSERT INTO taxonomies (domain_id, category, position)"
-                " VALUES %s"
-                " ON CONFLICT (domain_id, category) DO NOTHING",
-                taxonomy_rows,
-            )
-        logger.info(
-            "Seeded %d taxonomy entries.", len(taxonomy_rows)
-        )
 
         # Sources
         source_rows = [

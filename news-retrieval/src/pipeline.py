@@ -1,7 +1,6 @@
-"""Single-pass news aggregation pipeline.
+"""News aggregation pipeline: fetch and relevance-filter articles.
 
-Pass 1 — parallel LLM batch categorisation (gpt-4o-mini, structured
-output). Returns structured categories with article lists.
+Pass 1 — title-only relevance filter (LLM via OpenRouter).
 """
 import html
 import json
@@ -12,6 +11,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, wait as futures_wait
 from datetime import datetime, timedelta, timezone
+from functools import partial
 from typing import Any
 
 import feedparser
@@ -23,8 +23,27 @@ from models.sources import load_sources
 
 logger = logging.getLogger(__name__)
 
-_PASS1_BATCH_SIZE = 5
+_PASS1_BATCH_SIZE = 20
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+_OPENROUTER_MODEL = "openrouter/elephant-alpha"
+
+
+# ---------------------------------------------------------------------------
+# Pydantic models
+# ---------------------------------------------------------------------------
+
+class _ArticleRelevance(BaseModel):
+    """Relevance verdict for a single article."""
+
+    url: str
+    relevant: bool
+
+
+class _BatchRelevance(BaseModel):
+    """Structured output envelope for Pass 1 relevance filter."""
+
+    articles: list[_ArticleRelevance]
 
 
 # ---------------------------------------------------------------------------
@@ -57,19 +76,6 @@ class _RateLimiter:
             time.sleep(0.05)
 
 
-class _ArticleAssignment(BaseModel):
-    """A single article-to-category assignment from the LLM."""
-
-    url: str
-    category: str
-
-
-class _BatchCategories(BaseModel):
-    """Structured output envelope for a categorisation batch."""
-
-    assignments: list[_ArticleAssignment]
-
-
 def _make_client() -> OpenAI:
     """Return an OpenAI-compatible client pointed at OpenRouter."""
     return OpenAI(
@@ -90,6 +96,45 @@ def _clean_summary(raw: str) -> str:
 # Step 1 — fetch
 # ---------------------------------------------------------------------------
 
+def _parse_feed(url: str, cutoff: datetime) -> list[dict]:
+    """Parse a single RSS feed and return articles published after cutoff.
+
+    Args:
+        url: RSS feed URL.
+        cutoff: Exclude entries published before this datetime.
+
+    Returns:
+        List of article dicts with a ``_pub_date`` key for sorting.
+    """
+    t0 = time.perf_counter()
+    feed = feedparser.parse(url)
+    results = []
+    for entry in feed.entries:
+        pub_date = None
+        if (
+            hasattr(entry, "published_parsed")
+            and entry.published_parsed
+        ):
+            pub_date = datetime(
+                *entry.published_parsed[:6], tzinfo=timezone.utc
+            )
+            if pub_date < cutoff:
+                continue
+        results.append({
+            "title": entry.get("title", ""),
+            "url": entry.get("link", ""),
+            "published": entry.get("published", ""),
+            "source": feed.feed.get("title", url),
+            "summary": _clean_summary(entry.get("summary", "")),
+            "_pub_date": pub_date,
+        })
+    logger.info(
+        "[TIMER] feed=%s articles=%d elapsed=%.2fs",
+        url, len(results), time.perf_counter() - t0,
+    )
+    return results
+
+
 def _fetch_articles(
     sources: list[dict],
     days_back: int,
@@ -108,39 +153,11 @@ def _fetch_articles(
     cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
     articles: list[dict] = []
 
-    def _parse_feed(url: str) -> list[dict]:
-        t0 = time.perf_counter()
-        feed = feedparser.parse(url)
-        results = []
-        for entry in feed.entries:
-            pub_date = None
-            if (
-                hasattr(entry, "published_parsed")
-                and entry.published_parsed
-            ):
-                pub_date = datetime(
-                    *entry.published_parsed[:6], tzinfo=timezone.utc
-                )
-                if pub_date < cutoff:
-                    continue
-            results.append({
-                "title": entry.get("title", ""),
-                "url": entry.get("link", ""),
-                "published": entry.get("published", ""),
-                "source": feed.feed.get("title", url),
-                "summary": _clean_summary(entry.get("summary", "")),
-                "_pub_date": pub_date,
-            })
-        logger.info(
-            "[TIMER] feed=%s articles=%d elapsed=%.2fs",
-            url, len(results), time.perf_counter() - t0,
-        )
-        return results
-
     t0 = time.perf_counter()
     with ThreadPoolExecutor(max_workers=10) as executor:
         for feed_articles in executor.map(
-            _parse_feed, [s["url"] for s in sources]
+            partial(_parse_feed, cutoff=cutoff),
+            [s["url"] for s in sources],
         ):
             articles.extend(feed_articles)
 
@@ -163,94 +180,119 @@ def _fetch_articles(
 
 
 # ---------------------------------------------------------------------------
-# Step 2 — categorise (pass 1)
+# Step 2 — relevance filter (Pass 1)
 # ---------------------------------------------------------------------------
 
-def _pass1_categorize(
-    articles: list[dict],
-    taxonomy: list[str],
-    domain_name: str,
-    focus: str | None,
+def _filter_batch(
+    batch: list[dict],
+    rate_limiter: _RateLimiter,
+    system_msg: str,
     client: OpenAI,
-) -> dict[str, list[str]]:
-    """Categorise articles in parallel batches using structured output.
-
-    Returns:
-        Dict mapping category name to list of qualifying article URLs.
-        Only categories with at least 2 articles are included.
-    """
-    taxonomy_set = set(taxonomy)
-    taxonomy_str = "\n".join(f"  - {cat}" for cat in taxonomy)
-    focus_line = f"\nAdditional focus: {focus}" if focus else ""
-    system_msg = (
-        f"You are a {domain_name} news categorisation assistant.\n"
-        "Assign each article to the single most relevant category"
-        " from the taxonomy below.\n"
-        "Use the category name exactly as given."
-        " If no category fits, use \"none\".\n"
-        "Return JSON in this exact format:\n"
-        "{\"assignments\": [{\"url\": \"...\", \"category\": \"...\"}]}\n\n"
-        f"Only assign a category if the article is directly and primarily"
-        f" about {domain_name}-related topics.\n\n"
-        f"Taxonomy:\n{taxonomy_str}{focus_line}"
+) -> list[str]:
+    """Return URLs of relevant articles in batch; on error return all URLs."""
+    titles_text = "\n".join(
+        f"{i + 1}. URL: {a['url']}\n   Title: {a['title']}"
+        for i, a in enumerate(batch)
     )
-    rate_limiter = _RateLimiter(rate=15.0)
-
-    def _categorize_batch(
-        batch: list[dict],
-    ) -> list[tuple[str, str]]:
-        rate_limiter.acquire()
-        articles_text = "\n\n".join(
-            f"Article {i + 1}:\nURL: {a['url']}\n"
-            f"Title: \"{a['title']}\"\n"
-            f"Source: {a['source']}\n"
-            f"Summary: {a.get('summary', '')}"
-            for i, a in enumerate(batch)
-        )
+    rate_limiter.acquire()
+    try:
         response = client.chat.completions.create(
-            model="openrouter/elephant-alpha",
+            model=_OPENROUTER_MODEL,
             response_format={"type": "json_object"},
             temperature=0,
             messages=[
                 {"role": "system", "content": system_msg},
-                {"role": "user", "content": articles_text},
+                {"role": "user", "content": titles_text},
             ],
         )
-        data = json.loads(response.choices[0].message.content)
-        result = _BatchCategories(**data)
-        return [(a.url, a.category) for a in result.assignments]
+        raw = response.choices[0].message.content or ""
+        start = raw.find("{")
+        end = raw.rfind("}") + 1
+        if start == -1 or end == 0:
+            raise ValueError(
+                f"No JSON object in response (len={len(raw)})"
+            )
+        data = json.loads(raw[start:end])
+        result = _BatchRelevance(**data)
+        return [a.url for a in result.articles if a.relevant]
+    except Exception as exc:
+        logger.warning(
+            "[PASS1] batch failed (fail-open): %s", exc
+        )
+        return [a["url"] for a in batch]
+
+
+def _filter_articles(
+    articles: list[dict],
+    domain_name: str,
+    domain_description: str | None,
+    focus: str | None,
+    client: OpenAI,
+) -> list[dict]:
+    """Filter articles by domain relevance using titles only (Pass 1).
+
+    Sends only ``url`` and ``title`` — no summary — keeping token cost low.
+    Batches that fail are kept in full (fail-open) to avoid silent data loss.
+
+    Args:
+        articles: Full article dicts; only title and url are sent to the LLM.
+        domain_name: Human-readable domain used in the prompt.
+        domain_description: Optional description providing scope context.
+        focus: Optional narrowing instruction appended to the prompt.
+        client: OpenAI-compatible client.
+
+    Returns:
+        Subset of ``articles`` judged relevant to the domain.
+    """
+    desc_line = (
+        f"\nDomain scope: {domain_description}" if domain_description else ""
+    )
+    focus_line = f"\nAdditional focus: {focus}" if focus else ""
+    system_msg = (
+        f"You are a relevance filter for a {domain_name} news digest."
+        f"{desc_line}"
+        f"\nFor each article title decide whether the article is"
+        f" directly and primarily about {domain_name}-related"
+        f" topics.{focus_line}"
+        "\nReturn JSON in exactly this format:"
+        '\n{"articles": [{"url": "...", "relevant": true}]}'
+    )
 
     batches = [
         articles[i:i + _PASS1_BATCH_SIZE]
         for i in range(0, len(articles), _PASS1_BATCH_SIZE)
     ]
-    category_map: dict[str, list[str]] = {}
+    rate_limiter = _RateLimiter(rate=15.0)
+    relevant_urls: set[str] = set()
     t0 = time.perf_counter()
 
     with ThreadPoolExecutor(max_workers=15) as executor:
-        futures = {executor.submit(_categorize_batch, b): b for b in batches}
-        done, not_done = futures_wait(futures, timeout=90)
+        futures = {
+            executor.submit(
+                _filter_batch, b, rate_limiter, system_msg, client
+            ): b
+            for b in batches
+        }
+        done, not_done = futures_wait(futures, timeout=300)
         if not_done:
-            logger.warning("[PASS1] %d batches timed out", len(not_done))
+            logger.warning(
+                "[PASS1] %d batches timed out (fail-open)", len(not_done)
+            )
+            for f in not_done:
+                relevant_urls.update(a["url"] for a in futures[f])
         for future in done:
             try:
-                for url, category in future.result():
-                    if category != "none" and category in taxonomy_set:
-                        category_map.setdefault(category, []).append(url)
+                relevant_urls.update(future.result())
             except Exception as exc:
-                logger.warning("[PASS1] batch failed: %s", exc)
+                logger.warning("[PASS1] future error: %s", exc)
 
-    qualifying = {
-        cat: urls
-        for cat, urls in category_map.items()
-        if len(urls) >= 2
-    }
+    filtered = [a for a in articles if a["url"] in relevant_urls]
     logger.info(
-        "[PASS1] articles=%d batches=%d qualifying=%d elapsed=%.2fs",
-        len(articles), len(batches), len(qualifying),
+        "[PASS1] total=%d relevant=%d batches=%d elapsed=%.2fs",
+        len(articles), len(filtered), len(batches),
         time.perf_counter() - t0,
     )
-    return qualifying
+    return filtered
 
 
 # ---------------------------------------------------------------------------
@@ -263,64 +305,46 @@ _ARTICLE_KEYS = ("url", "title", "summary", "source", "published")
 def run(
     domain_slug: str,
     domain_name: str,
-    taxonomy: list[str],
+    domain_description: str | None = None,
     days_back: int = 7,
     max_articles: int = 0,
     focus: str | None = None,
 ) -> dict[str, Any]:
-    """Run the single-pass pipeline for the given domain.
+    """Fetch and relevance-filter articles for the given domain.
 
     Args:
         domain_slug: Domain identifier used to query sources from DB.
         domain_name: Human-readable name used in LLM prompts.
-        taxonomy: Ordered list of category names the LLM must use.
+        domain_description: Optional description used to give the LLM
+            additional context about the domain's scope.
         days_back: Exclude articles older than this many days.
         max_articles: Cap on total articles fetched; 0 means no limit.
         focus: Optional free-text instruction to narrow topics.
 
     Returns:
-        Dict with ``"summary"`` (str) and ``"categories"``
-        (category → list of article dicts).
+        Dict with ``"articles"`` (list of article dicts).
     """
     t0 = time.perf_counter()
     client = _make_client()
 
     sources = load_sources(domain_slug, days_back)
     if not sources:
-        return {"summary": "No sources configured.", "categories": {}}
+        return {"articles": []}
 
     articles = _fetch_articles(sources, days_back, max_articles)
     if not articles:
-        return {"summary": "No articles found.", "categories": {}}
+        return {"articles": []}
 
-    article_meta = {a["url"]: a for a in articles}
-
-    qualifying = _pass1_categorize(
-        articles, taxonomy, domain_name, focus, client
+    relevant = _filter_articles(
+        articles, domain_name, domain_description, focus, client
     )
-    if not qualifying:
-        return {
-            "summary": "No qualifying categories.",
-            "categories": {},
-        }
-
-    categories = {
-        cat: [
-            {k: article_meta[url][k] for k in _ARTICLE_KEYS}
-            for url in urls
-            if url in article_meta
-        ]
-        for cat, urls in qualifying.items()
-    }
 
     logger.info(
-        "[TIMER] domain=%s total=%.2fs categories=%d",
-        domain_slug, time.perf_counter() - t0, len(categories),
+        "[TIMER] domain=%s total=%.2fs articles=%d",
+        domain_slug, time.perf_counter() - t0, len(relevant),
     )
     return {
-        "summary": (
-            f"Completed {domain_name} digest:"
-            f" {len(categories)} categories."
-        ),
-        "categories": categories,
+        "articles": [
+            {k: a[k] for k in _ARTICLE_KEYS} for a in relevant
+        ],
     }

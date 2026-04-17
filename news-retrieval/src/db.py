@@ -190,46 +190,27 @@ def init_db() -> None:
                 created_at   TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS taxonomies (
-                id          SERIAL PRIMARY KEY,
-                domain_id   INTEGER NOT NULL REFERENCES domains(id),
-                category    TEXT    NOT NULL,
-                position    INTEGER NOT NULL,
-                created_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(domain_id, category)
-            )
-        """)
+        conn.execute("DROP TABLE IF EXISTS taxonomies")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS runs (
-                id             SERIAL PRIMARY KEY,
-                name           TEXT        NOT NULL,
-                domain         TEXT        NOT NULL,
-                started_at     TIMESTAMPTZ NOT NULL
-                               DEFAULT CURRENT_TIMESTAMP,
-                completed_at   TIMESTAMPTZ,
-                status         TEXT        NOT NULL DEFAULT 'running',
-                days_back      INTEGER     NOT NULL,
-                max_articles   INTEGER,
-                focus          TEXT,
-                category_count INTEGER,
-                summary        TEXT
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS categories (
-                id         SERIAL PRIMARY KEY,
-                run_id     INTEGER     NOT NULL REFERENCES runs(id),
-                name       TEXT        NOT NULL,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(run_id, name)
+                id            SERIAL PRIMARY KEY,
+                name          TEXT        NOT NULL,
+                domain        TEXT        NOT NULL,
+                started_at    TIMESTAMPTZ NOT NULL
+                              DEFAULT CURRENT_TIMESTAMP,
+                completed_at  TIMESTAMPTZ,
+                status        TEXT        NOT NULL DEFAULT 'running',
+                days_back     INTEGER     NOT NULL,
+                max_articles  INTEGER,
+                focus         TEXT,
+                article_count INTEGER,
+                summary       TEXT
             )
         """)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS articles (
                 id          SERIAL PRIMARY KEY,
                 run_id      INTEGER NOT NULL REFERENCES runs(id),
-                category_id INTEGER NOT NULL REFERENCES categories(id),
                 url         TEXT,
                 title       TEXT,
                 summary     TEXT,
@@ -242,7 +223,13 @@ def init_db() -> None:
         # Migrations for existing deployments
         conn.execute(
             "ALTER TABLE runs"
-            " ADD COLUMN IF NOT EXISTS category_count INTEGER"
+            " ADD COLUMN IF NOT EXISTS article_count INTEGER"
+        )
+        conn.execute(
+            "ALTER TABLE runs ADD COLUMN IF NOT EXISTS summary TEXT"
+        )
+        conn.execute(
+            "ALTER TABLE runs DROP COLUMN IF EXISTS category_count"
         )
         conn.execute(
             "ALTER TABLE runs DROP COLUMN IF EXISTS report_count"
@@ -251,3 +238,8 @@ def init_db() -> None:
             "ALTER TABLE runs DROP COLUMN IF EXISTS summary_depth"
         )
         conn.execute("DROP TABLE IF EXISTS reports")
+        conn.execute(
+            "ALTER TABLE articles"
+            " DROP COLUMN IF EXISTS category_id"
+        )
+        conn.execute("DROP TABLE IF EXISTS categories")

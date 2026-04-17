@@ -16,43 +16,28 @@ class DomainRow(TypedDict):
 
 
 class DomainConfig(TypedDict):
-    """Domain name and ordered taxonomy for pipeline use."""
+    """Domain name and description for pipeline use."""
 
     name: str
-    taxonomy: list[str]
+    description: Optional[str]
 
 
 def get_domain_config(slug: str) -> Optional[DomainConfig]:
-    """Load config (name + taxonomy) for a single domain slug.
-
-    Uses a LEFT JOIN so a domain with no taxonomy categories is
-    returned as ``{"name": ..., "taxonomy": []}`` rather than
-    ``None``, preserving the distinction between an unknown slug
-    and a domain that simply has no categories yet.
+    """Load config (name + description) for a domain slug.
 
     Returns:
         ``DomainConfig``, or ``None`` if the slug does not exist.
     """
     with get_db() as conn:
-        rows = conn.execute(
-            """
-            SELECT d.name, t.category
-            FROM   domains         d
-            LEFT JOIN taxonomies   t ON t.domain_id = d.id
-            WHERE  d.slug = ?
-            ORDER  BY t.position
-            """,
+        row = conn.execute(
+            "SELECT name, description FROM domains WHERE slug = ?",
             (slug,),
-        ).fetchall()
-    if not rows:
+        ).fetchone()
+    if not row:
         return None
     return {
-        "name": rows[0]["name"],
-        "taxonomy": [
-            r["category"]
-            for r in rows
-            if r["category"] is not None
-        ],
+        "name": row["name"],
+        "description": row["description"],
     }  # type: ignore[return-value]
 
 
@@ -72,9 +57,6 @@ def insert_domain(
 ) -> int:
     """Insert a domain and return its id.
 
-    When called inside a ``transaction()`` block the ambient connection
-    is used, so the insert participates in the outer transaction.
-
     Raises:
         DuplicateError: if name or slug already exists.
     """
@@ -88,10 +70,7 @@ def insert_domain(
 
 
 def get_domain_by_id(domain_id: int) -> DomainRow:
-    """Return a single domain row by id.
-
-    Participates in an ambient ``transaction()`` if one is active.
-    """
+    """Return a single domain row by id."""
     with get_db() as conn:
         return dict(  # type: ignore[return-value]
             conn.execute(

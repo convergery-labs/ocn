@@ -17,8 +17,7 @@ class RunRow(TypedDict):
     days_back: int
     max_articles: Optional[int]
     focus: Optional[str]
-    category_count: Optional[int]
-    summary: Optional[str]
+    article_count: Optional[int]
 
 
 def create_run(
@@ -50,27 +49,18 @@ def create_run(
         return cur.fetchone()["id"]
 
 
-def complete_run(
-    run_id: int,
-    summary: str,
-    category_count: int,
-) -> None:
-    """Mark a run as completed with its result summary."""
+def complete_run(run_id: int, article_count: int) -> None:
+    """Mark a run as completed with its article count."""
     with get_db() as conn:
         conn.execute(
             """
             UPDATE runs
-            SET status         = 'completed',
-                completed_at   = CURRENT_TIMESTAMP,
-                summary        = :summary,
-                category_count = :category_count
+            SET status        = 'completed',
+                completed_at  = CURRENT_TIMESTAMP,
+                article_count = :article_count
             WHERE id = :id
             """,
-            {
-                "id": run_id,
-                "summary": summary,
-                "category_count": category_count,
-            },
+            {"id": run_id, "article_count": article_count},
         )
 
 
