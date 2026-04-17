@@ -38,7 +38,7 @@ The application is a single FastAPI process. `POST /run` uses FastAPI `Backgroun
 
 | Endpoint | Description |
 |----------|-------------|
-| `POST /run` | Submit a pipeline run; returns `202` with `run_id` immediately; optional `callback_url` receives a webhook on completion or failure |
+| `POST /run` | Submit a pipeline run; returns `202` with `run_id` immediately; optional `model` + `openrouter_api_key` override the server defaults; optional `callback_url` receives a webhook on completion or failure |
 | `GET /runs` | List runs, newest-first; filter by `domain`, `status`, `from_date`, `to_date`; cursor-paginated (`limit`, `cursor`); returns `{"runs": [...], "next_cursor": str\|null}` |
 | `GET /runs/{id}` | Single run record |
 | `GET /runs/{id}/articles` | Articles for a run; cursor-paginated (`limit`, `cursor`); returns `{"articles": [...], "next_cursor": str\|null}` |
@@ -96,7 +96,9 @@ GET /runs/{id}  →  live status poll
 
 | Variable / resource | Default | Description |
 |--------------------|---------|-------------|
-| `OPENROUTER_API_KEY` | — | Required. API key for OpenRouter (LLM + embedding calls) |
+| `OPENROUTER_API_KEY` | — | Required. Server-level API key for OpenRouter |
+| `OPENROUTER_MODEL` | — | Required. Default model string for relevance filtering, e.g. `openrouter/elephant-alpha` |
+| `ADMIN_API_KEY` | — | Required. Plaintext admin API key seeded into the DB on first startup |
 | `POSTGRES_HOST` | `localhost` | PostgreSQL server hostname |
 | `POSTGRES_PORT` | `5432` | PostgreSQL server port |
 | `POSTGRES_DB` | `news-retrieval` | Database name |
@@ -123,5 +125,5 @@ Eight normalized tables. `run_statuses`, `frequencies`, `domains`, `sources`, `r
 | `frequencies` | `name`, `min_days_back` | e.g. daily=1, weekly=7, monthly=30 |
 | `domains` | `name`, `slug`, `description`, `created_by` | FK to `api_keys`; owner identity — null = legacy / globally accessible |
 | `sources` | `url`, `domain_id`, `frequency_id`, `name`, `description` | FK to `domains` and `frequencies` |
-| `runs` | `name`, `domain`, `started_at`, `completed_at`, `status`, `article_count`, `summary`, `callback_url` | One row per `POST /run`; `status` FK to `run_statuses` |
+| `runs` | `name`, `domain`, `started_at`, `completed_at`, `status`, `article_count`, `summary`, `callback_url`, `model` | One row per `POST /run`; `status` FK to `run_statuses`; `model` records the LLM used |
 | `articles` | `run_id`, `url`, `title`, `summary`, `source`, `published` | FK to `runs` |
