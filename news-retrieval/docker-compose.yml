@@ -45,6 +45,17 @@ services:
     networks:
       - agents-net
 
+  postgres-test:
+    image: postgres:16-alpine
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_DB: news-retrieval-test
+      POSTGRES_USER: news-retrieval
+      POSTGRES_PASSWORD: news-retrieval
+    networks:
+      - agents-net
+
 volumes:
   pgdata:
 
