@@ -18,6 +18,7 @@ class RunRow(TypedDict):
     max_articles: Optional[int]
     focus: Optional[str]
     article_count: Optional[int]
+    summary: Optional[str]
 
 
 def create_run(

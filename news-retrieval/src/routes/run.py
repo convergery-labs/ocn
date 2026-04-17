@@ -1,19 +1,22 @@
 """Route for POST /run."""
 import asyncio
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 
-from controllers.run import RunRequest, execute
+from controllers.run import RunRequest, create_run_record, run_pipeline
 
 router = APIRouter()
 
 
-@router.post("/run")
-async def run(request: RunRequest) -> dict:
-    """Run the two-pass aggregation pipeline for the given domain."""
+@router.post("/run", status_code=202)
+async def run(
+    request: RunRequest,
+    background_tasks: BackgroundTasks,
+) -> dict:
+    """Accept a pipeline run request and start it in the background."""
     try:
-        return await asyncio.to_thread(execute, request)
+        run_id = await asyncio.to_thread(create_run_record, request)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+    background_tasks.add_task(run_pipeline, run_id, request)
+    return {"run_id": run_id, "status": "running"}

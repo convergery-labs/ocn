@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 # Seed data
 # ---------------------------------------------------------------------------
 
+RUN_STATUSES: list[str] = ["running", "completed", "failed"]
+
 FREQUENCIES: list[dict[str, Any]] = [
     {"name": "daily",   "min_days_back": 1},
     {"name": "weekly",  "min_days_back": 7},
@@ -359,6 +361,15 @@ def seed() -> None:
     the entire seed run.
     """
     with transaction():
+        # Run statuses (must be seeded before runs table is used)
+        with get_db() as conn:
+            conn.execute_values(
+                "INSERT INTO run_statuses (name)"
+                " VALUES %s ON CONFLICT (name) DO NOTHING",
+                [(s,) for s in RUN_STATUSES],
+            )
+        logger.info("Seeded %d run statuses.", len(RUN_STATUSES))
+
         # Frequencies
         with get_db() as conn:
             conn.execute_values(

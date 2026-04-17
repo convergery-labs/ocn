@@ -34,8 +34,8 @@ class RunRequest(BaseModel):
     )
 
 
-def execute(request: RunRequest) -> dict:
-    """Run the pipeline and return the full response payload.
+def create_run_record(request: RunRequest) -> int:
+    """Validate domain and create a run record; return the run_id.
 
     Raises:
         KeyError: if the domain slug is not found in the database.
@@ -45,10 +45,8 @@ def execute(request: RunRequest) -> dict:
         raise KeyError(
             f"Unknown domain slug: '{request.domain}'."
         )
-
-    max_articles = request.max_articles or 0
     timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
-    run_id = create_run(
+    return create_run(
         name=f"{request.domain}_{timestamp}",
         domain=request.domain,
         days_back=request.days_back,
@@ -56,6 +54,11 @@ def execute(request: RunRequest) -> dict:
         focus=request.focus,
     )
 
+
+def run_pipeline(run_id: int, request: RunRequest) -> None:
+    """Execute the pipeline in the background and update the run record."""
+    config = get_domain_config(request.domain)
+    max_articles = request.max_articles or 0
     try:
         result = pl.run(
             domain_slug=request.domain,
@@ -67,7 +70,7 @@ def execute(request: RunRequest) -> dict:
         )
     except Exception as exc:
         fail_run(run_id, str(exc))
-        raise
+        return
 
     articles = result["articles"]
     all_articles = [
@@ -76,17 +79,3 @@ def execute(request: RunRequest) -> dict:
     if all_articles:
         create_articles(all_articles)
     complete_run(run_id, len(articles))
-
-    return {
-        "status": "completed",
-        "run_id": run_id,
-        "domain": request.domain,
-        "article_count": len(articles),
-        "articles": articles,
-        "parameters_used": {
-            "days_back": request.days_back,
-            "max_articles": max_articles or "unlimited",
-            "focus": request.focus,
-        },
-        "timestamp": timestamp,
-    }

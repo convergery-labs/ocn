@@ -192,6 +192,16 @@ def init_db() -> None:
         """)
         conn.execute("DROP TABLE IF EXISTS taxonomies")
         conn.execute("""
+            CREATE TABLE IF NOT EXISTS run_statuses (
+                name TEXT PRIMARY KEY
+            )
+        """)
+        conn.execute("""
+            INSERT INTO run_statuses (name)
+            VALUES ('running'), ('completed'), ('failed')
+            ON CONFLICT (name) DO NOTHING
+        """)
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS runs (
                 id            SERIAL PRIMARY KEY,
                 name          TEXT        NOT NULL,
@@ -199,7 +209,8 @@ def init_db() -> None:
                 started_at    TIMESTAMPTZ NOT NULL
                               DEFAULT CURRENT_TIMESTAMP,
                 completed_at  TIMESTAMPTZ,
-                status        TEXT        NOT NULL DEFAULT 'running',
+                status        TEXT        NOT NULL DEFAULT 'running'
+                              REFERENCES run_statuses(name),
                 days_back     INTEGER     NOT NULL,
                 max_articles  INTEGER,
                 focus         TEXT,
@@ -243,3 +254,11 @@ def init_db() -> None:
             " DROP COLUMN IF EXISTS category_id"
         )
         conn.execute("DROP TABLE IF EXISTS categories")
+        # Add FK from runs.status to run_statuses on existing deployments
+        conn.execute("""
+            DO $$ BEGIN
+              ALTER TABLE runs ADD CONSTRAINT runs_status_fkey
+                FOREIGN KEY (status) REFERENCES run_statuses(name);
+            EXCEPTION WHEN duplicate_object THEN NULL;
+            END $$
+        """)
