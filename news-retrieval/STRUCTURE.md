@@ -38,7 +38,7 @@ The application is a single FastAPI process. `POST /run` uses FastAPI `Backgroun
 
 | Endpoint | Description |
 |----------|-------------|
-| `POST /run` | Submit a pipeline run; returns `202` with `run_id` immediately |
+| `POST /run` | Submit a pipeline run; returns `202` with `run_id` immediately; optional `callback_url` receives a webhook on completion or failure |
 | `GET /runs` | List runs, newest-first; filter by `domain`, `status`, `from_date`, `to_date`; cursor-paginated (`limit`, `cursor`); returns `{"runs": [...], "next_cursor": str\|null}` |
 | `GET /runs/{id}` | Single run record |
 | `GET /runs/{id}/articles` | Articles for a run; cursor-paginated (`limit`, `cursor`); returns `{"articles": [...], "next_cursor": str\|null}` |
@@ -63,7 +63,8 @@ run_pipeline()  (background, after response is sent)
        ├─ _fetch_articles()     # parallel feedparser (10 workers)
        └─ _filter_articles()    # Pass 1 — LLM: title-only relevance filter
   └─ create_articles()          # batch INSERT relevant articles
-  └─ complete_run() / fail_run()# UPDATE runs SET status='completed'|'failed'
+  └─ complete_run() / fail_run() # UPDATE runs SET status='completed'|'failed'
+  └─ _fire_webhook()             # POST to callback_url if set (best-effort, 10s timeout)
 
 GET /runs/{id}  →  live status poll
 ```
@@ -122,5 +123,5 @@ Eight normalized tables. `run_statuses`, `frequencies`, `domains`, `sources`, `r
 | `frequencies` | `name`, `min_days_back` | e.g. daily=1, weekly=7, monthly=30 |
 | `domains` | `name`, `slug`, `description`, `created_by` | FK to `api_keys`; tracks ownership for RBAC |
 | `sources` | `url`, `domain_id`, `frequency_id`, `name`, `description` | FK to `domains` and `frequencies` |
-| `runs` | `name`, `domain`, `started_at`, `completed_at`, `status`, `article_count`, `summary` | One row per `POST /run`; `status` FK to `run_statuses` |
+| `runs` | `name`, `domain`, `started_at`, `completed_at`, `status`, `article_count`, `summary`, `callback_url` | One row per `POST /run`; `status` FK to `run_statuses` |
 | `articles` | `run_id`, `url`, `title`, `summary`, `source`, `published` | FK to `runs` |

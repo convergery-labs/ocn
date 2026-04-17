@@ -103,8 +103,8 @@ def _new_connection() -> _Connection:
     raw = psycopg2.connect(
         host=os.environ.get("POSTGRES_HOST", "localhost"),
         port=int(os.environ.get("POSTGRES_PORT", "5432")),
-        dbname=os.environ.get("POSTGRES_DB", "ocn"),
-        user=os.environ.get("POSTGRES_USER", "ocn"),
+        dbname=os.environ.get("POSTGRES_DB", "news-retrieval"),
+        user=os.environ.get("POSTGRES_USER", "news-retrieval"),
         password=os.environ.get("POSTGRES_PASSWORD", ""),
     )
     raw.cursor_factory = psycopg2.extras.RealDictCursor
@@ -236,7 +236,8 @@ def init_db() -> None:
                 max_articles  INTEGER,
                 focus         TEXT,
                 article_count INTEGER,
-                summary       TEXT
+                summary       TEXT,
+                callback_url  TEXT
             )
         """)
         conn.execute("""
@@ -287,4 +288,8 @@ def init_db() -> None:
             "ALTER TABLE domains"
             " ADD COLUMN IF NOT EXISTS created_by"
             " INTEGER REFERENCES api_keys(id)"
+        )
+        conn.execute(
+            "ALTER TABLE runs"
+            " ADD COLUMN IF NOT EXISTS callback_url TEXT"
         )
