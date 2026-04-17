@@ -4,7 +4,12 @@ import asyncio
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
 from auth import require_auth
-from controllers.run import RunRequest, create_run_record, run_pipeline
+from controllers.run import (
+    RunConflictError,
+    RunRequest,
+    create_run_record,
+    run_pipeline,
+)
 from models.api_keys import ApiKeyRow
 
 router = APIRouter()
@@ -25,5 +30,13 @@ async def run(
         raise HTTPException(status_code=404, detail=str(exc))
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
+    except RunConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "Run already in progress",
+                "run_id": exc.run_id,
+            },
+        )
     background_tasks.add_task(run_pipeline, run_id, request)
     return {"run_id": run_id, "status": "running"}

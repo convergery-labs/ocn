@@ -9,10 +9,29 @@ from pydantic import BaseModel, Field
 import pipeline as pl
 from models.api_keys import ApiKeyRow
 from models.articles import create_articles
-from models.domains import get_domain_by_slug, get_domain_config
-from models.runs import complete_run, create_run, fail_run
+from models.atomic import atomic
+from models.domains import (
+    get_domain_by_slug,
+    get_domain_config,
+    lock_domain_row,
+)
+from models.runs import (
+    complete_run,
+    create_run,
+    fail_run,
+    get_running_run_for_domain,
+)
 
 logger = logging.getLogger(__name__)
+
+
+class RunConflictError(Exception):
+    """Raised when a run is already in progress for the requested domain."""
+
+    def __init__(self, run_id: int) -> None:
+        """Store the conflicting run id."""
+        super().__init__(f"Run {run_id} already in progress.")
+        self.run_id = run_id
 
 
 class RunRequest(BaseModel):
@@ -44,6 +63,13 @@ class RunRequest(BaseModel):
             " or failure."
         ),
     )
+    force: bool = Field(
+        default=False,
+        description=(
+            "Bypass the duplicate-run guard and start a new run"
+            " regardless of any in-progress run for the domain."
+        ),
+    )
 
 
 def create_run_record(request: RunRequest, caller: ApiKeyRow) -> int:
@@ -52,27 +78,34 @@ def create_run_record(request: RunRequest, caller: ApiKeyRow) -> int:
     Raises:
         KeyError: if the domain slug is not found in the database.
         PermissionError: if the caller does not own the domain.
+        RunConflictError: if a run is already in progress and force is False.
     """
-    domain = get_domain_by_slug(request.domain)
-    if domain is None:
-        raise KeyError(
-            f"Unknown domain slug: '{request.domain}'."
-        )
-    if caller["role"] != "admin":
-        owner = domain.get("created_by")
-        if owner is not None and owner != caller["id"]:
-            raise PermissionError(
-                "You do not own this domain."
+    with atomic():
+        lock_domain_row(request.domain)
+        domain = get_domain_by_slug(request.domain)
+        if domain is None:
+            raise KeyError(
+                f"Unknown domain slug: '{request.domain}'."
             )
-    timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
-    return create_run(
-        name=f"{request.domain}_{timestamp}",
-        domain=request.domain,
-        days_back=request.days_back,
-        max_articles=request.max_articles,
-        focus=request.focus,
-        callback_url=request.callback_url,
-    )
+        if caller["role"] != "admin":
+            owner = domain.get("created_by")
+            if owner is not None and owner != caller["id"]:
+                raise PermissionError(
+                    "You do not own this domain."
+                )
+        if not request.force:
+            existing_id = get_running_run_for_domain(request.domain)
+            if existing_id is not None:
+                raise RunConflictError(existing_id)
+        timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        return create_run(
+            name=f"{request.domain}_{timestamp}",
+            domain=request.domain,
+            days_back=request.days_back,
+            max_articles=request.max_articles,
+            focus=request.focus,
+            callback_url=request.callback_url,
+        )
 
 
 def _fire_webhook(url: str, payload: dict) -> None:

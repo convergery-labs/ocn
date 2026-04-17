@@ -168,6 +168,18 @@ def list_runs(
     return rows, next_cursor  # type: ignore[return-value]
 
 
+def get_running_run_for_domain(domain: str) -> Optional[int]:
+    """Return the id of any currently running run for domain, or None."""
+    with get_db() as conn:
+        cur = conn.execute(
+            "SELECT id FROM runs"
+            " WHERE domain = :domain AND status = 'running' LIMIT 1",
+            {"domain": domain},
+        )
+        row = cur.fetchone()
+        return row["id"] if row else None
+
+
 def get_run(run_id: int) -> Optional[RunRow]:
     """Return a single run by id, or None if not found."""
     with get_db() as conn:

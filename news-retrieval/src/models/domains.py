@@ -136,6 +136,15 @@ def update_domain(
     return dict(row)  # type: ignore[return-value]
 
 
+def lock_domain_row(slug: str) -> None:
+    """Acquire a row-level lock on the domain; must be called inside a transaction."""
+    with get_db() as conn:
+        conn.execute(
+            "SELECT id FROM domains WHERE slug = :slug FOR UPDATE",
+            {"slug": slug},
+        )
+
+
 def get_domain_by_id(domain_id: int) -> DomainRow:
     """Return a single domain row by id."""
     with get_db() as conn:
