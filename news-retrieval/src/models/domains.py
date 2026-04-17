@@ -42,13 +42,39 @@ def get_domain_config(slug: str) -> Optional[DomainConfig]:
     }  # type: ignore[return-value]
 
 
-def list_domains() -> list[DomainRow]:
-    """Return all domains ordered by id."""
+def list_domains(
+    caller_id: Optional[int] = None,
+) -> list[DomainRow]:
+    """Return domains ordered by id.
+
+    If *caller_id* is provided, only domains owned by that caller
+    or with no owner are returned.  Pass ``None`` to return all.
+    """
     with get_db() as conn:
-        rows = conn.execute(
-            "SELECT * FROM domains ORDER BY id"
-        ).fetchall()
+        if caller_id is None:
+            rows = conn.execute(
+                "SELECT * FROM domains ORDER BY id"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM domains"
+                " WHERE created_by = ? OR created_by IS NULL"
+                " ORDER BY id",
+                (caller_id,),
+            ).fetchall()
     return [dict(r) for r in rows]  # type: ignore[return-value]
+
+
+def get_domain_by_slug(slug: str) -> Optional[DomainRow]:
+    """Return a single domain row by slug, or None if not found."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM domains WHERE slug = ?",
+            (slug,),
+        ).fetchone()
+    if row is None:
+        return None
+    return dict(row)  # type: ignore[return-value]
 
 
 def insert_domain(

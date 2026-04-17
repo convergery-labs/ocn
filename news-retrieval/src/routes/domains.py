@@ -10,9 +10,11 @@ router = APIRouter()
 
 
 @router.get("/domains")
-async def get_domains() -> list[dict]:
-    """Return all domains."""
-    return get_all()
+async def get_domains(
+    caller: ApiKeyRow = Depends(require_auth),
+) -> list[dict]:
+    """Return domains visible to the caller."""
+    return get_all(caller)
 
 
 @router.post("/domains", status_code=201)

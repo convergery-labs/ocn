@@ -7,8 +7,9 @@ import httpx
 from pydantic import BaseModel, Field
 
 import pipeline as pl
+from models.api_keys import ApiKeyRow
 from models.articles import create_articles
-from models.domains import get_domain_config
+from models.domains import get_domain_by_slug, get_domain_config
 from models.runs import complete_run, create_run, fail_run
 
 logger = logging.getLogger(__name__)
@@ -45,17 +46,24 @@ class RunRequest(BaseModel):
     )
 
 
-def create_run_record(request: RunRequest) -> int:
-    """Validate domain and create a run record; return the run_id.
+def create_run_record(request: RunRequest, caller: ApiKeyRow) -> int:
+    """Validate domain ownership and create a run record; return the run_id.
 
     Raises:
         KeyError: if the domain slug is not found in the database.
+        PermissionError: if the caller does not own the domain.
     """
-    config = get_domain_config(request.domain)
-    if config is None:
+    domain = get_domain_by_slug(request.domain)
+    if domain is None:
         raise KeyError(
             f"Unknown domain slug: '{request.domain}'."
         )
+    if caller["role"] != "admin":
+        owner = domain.get("created_by")
+        if owner is not None and owner != caller["id"]:
+            raise PermissionError(
+                "You do not own this domain."
+            )
     timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
     return create_run(
         name=f"{request.domain}_{timestamp}",

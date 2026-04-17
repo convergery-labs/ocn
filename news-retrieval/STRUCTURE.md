@@ -44,7 +44,7 @@ The application is a single FastAPI process. `POST /run` uses FastAPI `Backgroun
 | `GET /runs/{id}/articles` | Articles for a run; cursor-paginated (`limit`, `cursor`); returns `{"articles": [...], "next_cursor": str\|null}` |
 | `GET /articles/{id}` | Single article record |
 | `GET /health` | Service health check |
-| `GET/POST /domains` | Manage domains (`POST` requires auth; `PATCH /{id}` requires ownership or admin) |
+| `GET/POST /domains` | Manage domains (all require auth; `GET` scoped to caller's owned + null-owner domains; `POST` records caller as owner; `PATCH /{id}` requires ownership or admin) |
 | `GET/POST /sources` | Manage sources (`POST` requires auth; users restricted to domains they own) |
 | `GET/POST /frequencies` | Manage frequencies (`POST` admin only) |
 | `GET/POST /api-keys` | Manage API keys (admin only; `POST` returns plaintext key once) |
@@ -53,7 +53,7 @@ The application is a single FastAPI process. `POST /run` uses FastAPI `Backgroun
 
 ```
 POST /run  (returns 202 immediately)
-  └─ create_run_record()        # validate domain, INSERT run row → run_id
+  └─ create_run_record()        # validate domain + ownership, INSERT run row → run_id
   └─ BackgroundTasks.add_task(run_pipeline)
 
 run_pipeline()  (background, after response is sent)
@@ -121,7 +121,7 @@ Eight normalized tables. `run_statuses`, `frequencies`, `domains`, `sources`, `r
 | `api_keys` | `key_hash`, `label`, `role`, `created_by`, `last_used_at` | Hashed Bearer tokens; seed admin key created at first startup |
 | `run_statuses` | `name` (PK) | Lookup table: `running`, `completed`, `failed` |
 | `frequencies` | `name`, `min_days_back` | e.g. daily=1, weekly=7, monthly=30 |
-| `domains` | `name`, `slug`, `description`, `created_by` | FK to `api_keys`; tracks ownership for RBAC |
+| `domains` | `name`, `slug`, `description`, `created_by` | FK to `api_keys`; owner identity — null = legacy / globally accessible |
 | `sources` | `url`, `domain_id`, `frequency_id`, `name`, `description` | FK to `domains` and `frequencies` |
 | `runs` | `name`, `domain`, `started_at`, `completed_at`, `status`, `article_count`, `summary`, `callback_url` | One row per `POST /run`; `status` FK to `run_statuses` |
 | `articles` | `run_id`, `url`, `title`, `summary`, `source`, `published` | FK to `runs` |

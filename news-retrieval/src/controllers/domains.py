@@ -23,9 +23,15 @@ class DomainPatch(BaseModel):
     description: Optional[str] = None
 
 
-def get_all() -> list[dict]:
-    """Return all domains."""
-    return domain_model.list_domains()
+def get_all(caller: ApiKeyRow) -> list[dict]:
+    """Return domains visible to *caller*.
+
+    Admins see all domains; regular callers see only their own and
+    null-owner (legacy) domains.
+    """
+    if caller["role"] == "admin":
+        return domain_model.list_domains()
+    return domain_model.list_domains(caller_id=caller["id"])
 
 
 def create(body: DomainIn, caller: ApiKeyRow) -> dict:

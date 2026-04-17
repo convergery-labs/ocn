@@ -18,8 +18,12 @@ async def run(
 ) -> dict:
     """Accept a pipeline run request and start it in the background."""
     try:
-        run_id = await asyncio.to_thread(create_run_record, request)
+        run_id = await asyncio.to_thread(
+            create_run_record, request, caller
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
     background_tasks.add_task(run_pipeline, run_id, request)
     return {"run_id": run_id, "status": "running"}
