@@ -39,9 +39,9 @@ The application is a single FastAPI process. `POST /run` uses FastAPI `Backgroun
 | Endpoint | Description |
 |----------|-------------|
 | `POST /run` | Submit a pipeline run; returns `202` with `run_id` immediately |
-| `GET /runs` | List all runs, newest first |
+| `GET /runs` | List runs, newest-first; filter by `domain`, `status`, `from_date`, `to_date`; cursor-paginated (`limit`, `cursor`); returns `{"runs": [...], "next_cursor": str\|null}` |
 | `GET /runs/{id}` | Single run record |
-| `GET /runs/{id}/articles` | All articles for a run |
+| `GET /runs/{id}/articles` | Articles for a run; cursor-paginated (`limit`, `cursor`); returns `{"articles": [...], "next_cursor": str\|null}` |
 | `GET /articles/{id}` | Single article record |
 | `GET /health` | Service health check |
 | `GET/POST /domains` | Manage domains (`POST` requires auth; `PATCH /{id}` requires ownership or admin) |

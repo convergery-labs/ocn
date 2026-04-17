@@ -1,7 +1,24 @@
 """DB query functions for article records."""
+import base64
+import json
 from typing import Optional
 
 from db import get_db
+
+
+def _encode_article_cursor(article_id: int) -> str:
+    """Encode an article keyset position as an opaque cursor string."""
+    payload = json.dumps({"id": article_id})
+    return base64.b64encode(payload.encode()).decode()
+
+
+def _decode_article_cursor(cursor: str) -> int:
+    """Decode an article cursor; raises ValueError if malformed."""
+    try:
+        payload = json.loads(base64.b64decode(cursor).decode())
+        return int(payload["id"])
+    except Exception as exc:
+        raise ValueError("Invalid cursor") from exc
 
 
 def create_articles(articles: list[dict]) -> None:
@@ -33,14 +50,42 @@ def create_articles(articles: list[dict]) -> None:
         )
 
 
-def list_articles_for_run(run_id: int) -> list[dict]:
-    """Return all articles for a run, ordered by id."""
+def list_articles_for_run(
+    run_id: int,
+    limit: int = 20,
+    cursor: Optional[str] = None,
+) -> tuple[list[dict], Optional[str]]:
+    """Return paginated articles for a run, ordered by id asc.
+
+    Returns a (rows, next_cursor) tuple. next_cursor is None when
+    there are no further pages.
+    """
+    params: dict = {"run_id": run_id, "limit": limit + 1}
+    after_clause = ""
+
+    if cursor is not None:
+        after_id = _decode_article_cursor(cursor)
+        after_clause = "AND id > :after_id"
+        params["after_id"] = after_id
+
     with get_db() as conn:
         cur = conn.execute(
-            "SELECT * FROM articles WHERE run_id = ? ORDER BY id",
-            (run_id,),
+            f"""
+            SELECT * FROM articles
+            WHERE run_id = :run_id {after_clause}
+            ORDER BY id ASC
+            LIMIT :limit
+            """,
+            params,
         )
-        return [dict(row) for row in cur.fetchall()]
+        rows = [dict(row) for row in cur.fetchall()]
+
+    next_cursor: Optional[str] = None
+    if len(rows) > limit:
+        rows = rows[:limit]
+        next_cursor = _encode_article_cursor(rows[-1]["id"])
+
+    return rows, next_cursor
 
 
 def get_article(article_id: int) -> Optional[dict]:
