@@ -11,6 +11,11 @@ import logging
 from typing import Any
 
 from db import get_db, init_db, transaction
+from models.api_keys import (
+    create_api_key,
+    generate_key,
+    has_any_admin_key,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -430,7 +435,26 @@ def seed() -> None:
         )
 
 
+def seed_admin_key() -> None:
+    """Create the initial admin API key if none exists.
+
+    Prints the plaintext key to stdout exactly once.
+    """
+    if has_any_admin_key():
+        logger.info("Admin key already exists — skipping seed.")
+        return
+    key = generate_key()
+    create_api_key(key, label="seed-admin", role="admin", created_by=None)
+    border = "=" * 60
+    print(border)
+    print("ADMIN API KEY (shown once — store it now):")
+    print(key)
+    print(border)
+    logger.info("Seed admin key created.")
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     init_db()
     seed()
+    seed_admin_key()

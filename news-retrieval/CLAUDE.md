@@ -38,33 +38,31 @@ news-retrieval/
 ├── STRUCTURE.md
 └── src/
     ├── __main__.py       # CLI entry point (uvicorn + click)
-    ├── app.py            # FastAPI app factory and lifespan
-    ├── pipeline.py       # Single-pass pipeline (fetch → categorise → structured JSON)
+    ├── app.py            # FastAPI app factory
+    ├── auth.py           # require_auth / require_admin FastAPI dependencies
+    ├── pipeline.py       # Fetch + relevance filter pipeline (fetch → LLM title filter)
     ├── db.py             # PostgreSQL connection, _Connection wrapper, DuplicateError, schema init
-    ├── seed.py           # Idempotent seed for frequencies, domains, taxonomies, sources
-    ├── models/           # DB query functions + Pydantic models (repository layer)
+    ├── seed.py           # Idempotent seed for run_statuses, frequencies, domains, sources, admin key
+    ├── models/           # DB query functions (repository layer)
+    │   ├── api_keys.py
     │   ├── articles.py
-    │   ├── categories.py
+    │   ├── atomic.py
     │   ├── domains.py
     │   ├── frequencies.py
     │   ├── runs.py
-    │   ├── sources.py
-    │   └── taxonomies.py
+    │   └── sources.py
     ├── controllers/      # Business logic and multi-step orchestration
     │   ├── domains.py
-    │   ├── frequencies.py
-    │   ├── run.py
-    │   ├── sources.py
-    │   └── taxonomies.py
+    │   └── run.py
     └── routes/           # Thin HTTP adapters (FastAPI APIRouters)
+        ├── api_keys.py
         ├── articles.py
         ├── domains.py
         ├── frequencies.py
         ├── health.py
         ├── run.py
         ├── runs.py
-        ├── sources.py
-        └── taxonomies.py
+        └── sources.py
 ```
 
 ## Guidance

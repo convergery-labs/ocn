@@ -1,7 +1,9 @@
 """Routes for /frequencies."""
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from auth import require_admin
 from db import DuplicateError
+from models.api_keys import ApiKeyRow
 from models.frequencies import FrequencyIn, create_frequency, list_frequencies
 
 router = APIRouter()
@@ -14,8 +16,11 @@ async def get_frequencies() -> list[dict]:
 
 
 @router.post("/frequencies", status_code=201)
-async def post_frequency(body: FrequencyIn) -> dict:
-    """Add a new polling frequency."""
+async def post_frequency(
+    body: FrequencyIn,
+    caller: ApiKeyRow = Depends(require_admin),
+) -> dict:
+    """Add a new polling frequency (admin only)."""
     try:
         return create_frequency(body)
     except DuplicateError:

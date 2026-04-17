@@ -163,11 +163,32 @@ def init_db() -> None:
     """Create all tables if they do not exist."""
     with get_db() as conn:
         conn.execute("""
+            CREATE TABLE IF NOT EXISTS roles (
+                name TEXT PRIMARY KEY
+            )
+        """)
+        conn.execute("""
+            INSERT INTO roles (name) VALUES ('admin'), ('user')
+            ON CONFLICT (name) DO NOTHING
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS api_keys (
+                id           SERIAL PRIMARY KEY,
+                key_hash     TEXT        NOT NULL UNIQUE,
+                label        TEXT,
+                role         TEXT        NOT NULL REFERENCES roles(name),
+                created_by   INTEGER     REFERENCES api_keys(id),
+                created_at   TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                last_used_at TIMESTAMPTZ
+            )
+        """)
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS domains (
                 id          SERIAL PRIMARY KEY,
                 name        TEXT NOT NULL UNIQUE,
                 slug        TEXT NOT NULL UNIQUE,
                 description TEXT,
+                created_by  INTEGER REFERENCES api_keys(id),
                 created_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -262,3 +283,8 @@ def init_db() -> None:
             EXCEPTION WHEN duplicate_object THEN NULL;
             END $$
         """)
+        conn.execute(
+            "ALTER TABLE domains"
+            " ADD COLUMN IF NOT EXISTS created_by"
+            " INTEGER REFERENCES api_keys(id)"
+        )

@@ -12,6 +12,7 @@ class DomainRow(TypedDict):
     name: str
     slug: str
     description: Optional[str]
+    created_by: Optional[int]
     created_at: datetime
 
 
@@ -54,6 +55,7 @@ def insert_domain(
     name: str,
     slug: str,
     description: Optional[str],
+    created_by: Optional[int] = None,
 ) -> int:
     """Insert a domain and return its id.
 
@@ -62,11 +64,50 @@ def insert_domain(
     """
     with get_db() as conn:
         cursor = conn.execute(
-            "INSERT INTO domains (name, slug, description)"
-            " VALUES (?, ?, ?) RETURNING id",
-            (name, slug, description),
+            "INSERT INTO domains (name, slug, description, created_by)"
+            " VALUES (?, ?, ?, ?) RETURNING id",
+            (name, slug, description, created_by),
         )
         return cursor.fetchone()["id"]
+
+
+def update_domain(
+    domain_id: int,
+    name: Optional[str],
+    slug: Optional[str],
+    description: Optional[str],
+) -> DomainRow:
+    """Update mutable fields of a domain and return the updated row.
+
+    Only non-``None`` arguments are applied.
+
+    Raises:
+        DuplicateError: if the new name or slug conflicts.
+        ValueError: if the domain does not exist.
+    """
+    fields = []
+    params: list = []
+    if name is not None:
+        fields.append("name = ?")
+        params.append(name)
+    if slug is not None:
+        fields.append("slug = ?")
+        params.append(slug)
+    if description is not None:
+        fields.append("description = ?")
+        params.append(description)
+    if not fields:
+        return get_domain_by_id(domain_id)
+    params.append(domain_id)
+    with get_db() as conn:
+        row = conn.execute(
+            f"UPDATE domains SET {', '.join(fields)}"
+            " WHERE id = ? RETURNING *",
+            tuple(params),
+        ).fetchone()
+    if row is None:
+        raise ValueError(f"Domain {domain_id} not found.")
+    return dict(row)  # type: ignore[return-value]
 
 
 def get_domain_by_id(domain_id: int) -> DomainRow:

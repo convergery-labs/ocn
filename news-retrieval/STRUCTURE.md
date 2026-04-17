@@ -13,13 +13,14 @@
 | `src/app.py` | FastAPI app factory and lifespan hook |
 | `src/pipeline.py` | Fetch and relevance-filter pipeline (fetch → Pass 1 LLM relevance filter); returns list of relevant articles |
 | `src/db.py` | PostgreSQL connection (`psycopg2`), `_Connection` wrapper with portable placeholder normalisation and `execute_values` for batch inserts, `DuplicateError`, ambient transaction via `ContextVar`, schema init + migrations |
-| `src/seed.py` | Idempotent batch seed for `frequencies`, `domains`, and `sources` |
+| `src/auth.py` | FastAPI dependency functions: `require_auth` (validate Bearer token), `require_admin` (role gate) |
+| `src/seed.py` | Idempotent batch seed for `run_statuses`, `frequencies`, `domains`, `sources`, and admin API key |
 | `src/models/` | Pydantic request models + SQL query functions per entity |
 | `src/routes/` | FastAPI `APIRouter` definitions, one file per resource |
 
 ## App layers
 
-The application is a single FastAPI process with no background workers. Control flow is entirely Python-driven (not LLM-driven). All domain configuration (sources, taxonomy) lives in PostgreSQL and is loaded at request time — no code changes are needed to add new domains.
+The application is a single FastAPI process. `POST /run` uses FastAPI `BackgroundTasks` to execute the pipeline after the HTTP response is sent. Control flow is entirely Python-driven (not LLM-driven). All domain configuration (sources, polling frequencies) lives in PostgreSQL and is loaded at request time — no code changes are needed to add new domains.
 
 | Layer | File(s) | Responsibility |
 |-------|---------|----------------|
@@ -30,33 +31,41 @@ The application is a single FastAPI process with no background workers. Control 
 | **Repository** | `src/models/` | SQL query functions + Pydantic input models; no HTTP concepts |
 | **Pipeline** | `src/pipeline.py` | Stateless pipeline: parallel RSS fetch, title-based relevance filter (Pass 1 LLM); returns list of relevant article dicts |
 | **Database** | `src/db.py` | PostgreSQL connection (`psycopg2`), `_Connection` wrapper, `DuplicateError`, ambient transaction via `ContextVar`, schema init + migrations |
-| **Seed data** | `src/seed.py` | Idempotent batch seed for `frequencies`, `domains`, `taxonomies`, and `sources`; safe to re-run |
+| **Auth** | `src/auth.py` | `require_auth` / `require_admin` FastAPI dependencies; validates Bearer token against DB hash |
+| **Seed data** | `src/seed.py` | Idempotent batch seed for `run_statuses`, `frequencies`, `domains`, `sources`, and admin API key |
 
 ### HTTP API
 
 | Endpoint | Description |
 |----------|-------------|
-| `POST /run` | Trigger a pipeline run for a domain |
+| `POST /run` | Submit a pipeline run; returns `202` with `run_id` immediately |
 | `GET /runs` | List all runs, newest first |
 | `GET /runs/{id}` | Single run record |
 | `GET /runs/{id}/articles` | All articles for a run |
 | `GET /articles/{id}` | Single article record |
 | `GET /health` | Service health check |
-| `GET/POST /domains` | Manage domains |
-| `GET/POST /sources` | Manage sources |
-| `GET/POST /frequencies` | Manage frequencies |
+| `GET/POST /domains` | Manage domains (`POST` requires auth; `PATCH /{id}` requires ownership or admin) |
+| `GET/POST /sources` | Manage sources (`POST` requires auth; users restricted to domains they own) |
+| `GET/POST /frequencies` | Manage frequencies (`POST` admin only) |
+| `GET/POST /api-keys` | Manage API keys (admin only; `POST` returns plaintext key once) |
 
 ### Execution flow
 
 ```
-POST /run
+POST /run  (returns 202 immediately)
+  └─ create_run_record()        # validate domain, INSERT run row → run_id
+  └─ BackgroundTasks.add_task(run_pipeline)
+
+run_pipeline()  (background, after response is sent)
   └─ get_domain_config()        # load domain name + description from DB
   └─ pl.run()
        ├─ load_sources()        # query sources WHERE min_days_back <= days_back
        ├─ _fetch_articles()     # parallel feedparser (10 workers)
        └─ _filter_articles()    # Pass 1 — LLM: title-only relevance filter
   └─ create_articles()          # batch INSERT relevant articles
-  └─ complete_run()             # UPDATE runs SET status='completed'
+  └─ complete_run() / fail_run()# UPDATE runs SET status='completed'|'failed'
+
+GET /runs/{id}  →  live status poll
 ```
 
 ### Key behavioural rules
@@ -103,12 +112,15 @@ POST /run
 
 ### Database schema
 
-Six normalized tables. `frequencies`, `domains`, `sources`, and `taxonomies` are populated at startup via `seed.py`; new rows can be added through the API at runtime. `runs`, `categories`, and `articles` are populated by pipeline runs.
+Eight normalized tables. `run_statuses`, `frequencies`, `domains`, `sources`, `roles`, and the seed admin `api_key` are populated at startup; new rows can be added through the API at runtime. `runs` and `articles` are populated by pipeline runs.
 
 | Table | Key columns | Notes |
 |-------|-------------|-------|
+| `roles` | `name` (PK) | Lookup table: `admin`, `user` |
+| `api_keys` | `key_hash`, `label`, `role`, `created_by`, `last_used_at` | Hashed Bearer tokens; seed admin key created at first startup |
+| `run_statuses` | `name` (PK) | Lookup table: `running`, `completed`, `failed` |
 | `frequencies` | `name`, `min_days_back` | e.g. daily=1, weekly=7, monthly=30 |
-| `domains` | `name`, `slug`, `description` | e.g. `ai_news`, `smart_money` |
+| `domains` | `name`, `slug`, `description`, `created_by` | FK to `api_keys`; tracks ownership for RBAC |
 | `sources` | `url`, `domain_id`, `frequency_id`, `name`, `description` | FK to `domains` and `frequencies` |
-| `runs` | `name`, `domain`, `started_at`, `completed_at`, `status`, `article_count` | One row per `POST /run`; status: running → completed / failed |
+| `runs` | `name`, `domain`, `started_at`, `completed_at`, `status`, `article_count`, `summary` | One row per `POST /run`; `status` FK to `run_statuses` |
 | `articles` | `run_id`, `url`, `title`, `summary`, `source`, `published` | FK to `runs` |

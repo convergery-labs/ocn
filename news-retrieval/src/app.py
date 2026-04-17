@@ -2,6 +2,7 @@
 from fastapi import FastAPI
 
 from routes import (
+    api_keys,
     articles,
     domains,
     frequencies,
@@ -22,6 +23,7 @@ def create_app() -> FastAPI:
     application.include_router(frequencies.router)
     application.include_router(domains.router)
     application.include_router(sources.router)
+    application.include_router(api_keys.router)
 
     return application
 
