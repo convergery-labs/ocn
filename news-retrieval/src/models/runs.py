@@ -22,6 +22,7 @@ class RunRow(TypedDict):
     article_count: Optional[int]
     summary: Optional[str]
     callback_url: Optional[str]
+    model: str
 
 
 def _encode_run_cursor(started_at: datetime, run_id: int) -> str:
@@ -47,6 +48,7 @@ def create_run(
     days_back: int,
     max_articles: Optional[int],
     focus: Optional[str],
+    model: str,
     callback_url: Optional[str] = None,
 ) -> int:
     """Insert a new run record and return its id."""
@@ -55,10 +57,10 @@ def create_run(
             """
             INSERT INTO runs
                 (name, domain, days_back, max_articles, focus,
-                 status, callback_url)
+                 status, callback_url, model)
             VALUES
                 (:name, :domain, :days_back, :max_articles,
-                 :focus, 'running', :callback_url)
+                 :focus, 'running', :callback_url, :model)
             RETURNING id
             """,
             {
@@ -68,6 +70,7 @@ def create_run(
                 "max_articles": max_articles,
                 "focus": focus,
                 "callback_url": callback_url,
+                "model": model,
             },
         )
         return cur.fetchone()["id"]

@@ -1,10 +1,11 @@
 """Pipeline execution controller."""
 import logging
+import os
 from datetime import datetime
 from typing import Optional
 
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 import pipeline as pl
 from models.api_keys import ApiKeyRow
@@ -70,6 +71,29 @@ class RunRequest(BaseModel):
             " regardless of any in-progress run for the domain."
         ),
     )
+    model: Optional[str] = Field(
+        default=None,
+        description=(
+            "OpenRouter model string to use for relevance filtering."
+            " Defaults to the server's OPENROUTER_MODEL env var."
+        ),
+    )
+    openrouter_api_key: Optional[str] = Field(
+        default=None,
+        description=(
+            "Caller-supplied OpenRouter API key. Required when"
+            " 'model' is provided. Defaults to server's key."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _require_key_with_model(self) -> "RunRequest":
+        """Raise if model is set without an openrouter_api_key."""
+        if self.model is not None and self.openrouter_api_key is None:
+            raise ValueError(
+                "openrouter_api_key is required when model is provided"
+            )
+        return self
 
 
 def create_run_record(request: RunRequest, caller: ApiKeyRow) -> int:
@@ -97,6 +121,7 @@ def create_run_record(request: RunRequest, caller: ApiKeyRow) -> int:
             existing_id = get_running_run_for_domain(request.domain)
             if existing_id is not None:
                 raise RunConflictError(existing_id)
+        resolved_model = request.model or os.environ["OPENROUTER_MODEL"]
         timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
         return create_run(
             name=f"{request.domain}_{timestamp}",
@@ -104,6 +129,7 @@ def create_run_record(request: RunRequest, caller: ApiKeyRow) -> int:
             days_back=request.days_back,
             max_articles=request.max_articles,
             focus=request.focus,
+            model=resolved_model,
             callback_url=request.callback_url,
         )
 
@@ -120,6 +146,7 @@ def run_pipeline(run_id: int, request: RunRequest) -> None:
     """Execute the pipeline in the background and update the run record."""
     config = get_domain_config(request.domain)
     max_articles = request.max_articles or 0
+    resolved_model = request.model or os.environ["OPENROUTER_MODEL"]
     try:
         result = pl.run(
             domain_slug=request.domain,
@@ -128,6 +155,8 @@ def run_pipeline(run_id: int, request: RunRequest) -> None:
             days_back=request.days_back,
             max_articles=max_articles,
             focus=request.focus,
+            model=resolved_model,
+            openrouter_api_key=request.openrouter_api_key,
         )
     except Exception as exc:
         fail_run(run_id, str(exc))

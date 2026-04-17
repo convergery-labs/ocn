@@ -16,6 +16,7 @@ from typing import Any
 
 import feedparser
 import httpx
+import openai
 from openai import OpenAI
 from pydantic import BaseModel
 
@@ -25,8 +26,6 @@ logger = logging.getLogger(__name__)
 
 _PASS1_BATCH_SIZE = 20
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
-
-_OPENROUTER_MODEL = "openrouter/elephant-alpha"
 
 
 # ---------------------------------------------------------------------------
@@ -76,10 +75,10 @@ class _RateLimiter:
             time.sleep(0.05)
 
 
-def _make_client() -> OpenAI:
+def _make_client(api_key: str | None = None) -> OpenAI:
     """Return an OpenAI-compatible client pointed at OpenRouter."""
     return OpenAI(
-        api_key=os.environ.get("OPENROUTER_API_KEY"),
+        api_key=api_key or os.environ.get("OPENROUTER_API_KEY"),
         base_url="https://openrouter.ai/api/v1",
         http_client=httpx.Client(http2=False, timeout=60.0),
     )
@@ -188,6 +187,7 @@ def _filter_batch(
     rate_limiter: _RateLimiter,
     system_msg: str,
     client: OpenAI,
+    model: str,
 ) -> list[str]:
     """Return URLs of relevant articles in batch; on error return all URLs."""
     titles_text = "\n".join(
@@ -197,7 +197,7 @@ def _filter_batch(
     rate_limiter.acquire()
     try:
         response = client.chat.completions.create(
-            model=_OPENROUTER_MODEL,
+            model=model,
             response_format={"type": "json_object"},
             temperature=0,
             messages=[
@@ -215,6 +215,10 @@ def _filter_batch(
         data = json.loads(raw[start:end])
         result = _BatchRelevance(**data)
         return [a.url for a in result.articles if a.relevant]
+    except openai.AuthenticationError:
+        raise RuntimeError(
+            "OpenRouter authentication failed — check your API key"
+        )
     except Exception as exc:
         logger.warning(
             "[PASS1] batch failed (fail-open): %s", exc
@@ -228,6 +232,7 @@ def _filter_articles(
     domain_description: str | None,
     focus: str | None,
     client: OpenAI,
+    model: str,
 ) -> list[dict]:
     """Filter articles by domain relevance using titles only (Pass 1).
 
@@ -240,6 +245,7 @@ def _filter_articles(
         domain_description: Optional description providing scope context.
         focus: Optional narrowing instruction appended to the prompt.
         client: OpenAI-compatible client.
+        model: Model identifier string passed to the OpenRouter API.
 
     Returns:
         Subset of ``articles`` judged relevant to the domain.
@@ -269,7 +275,7 @@ def _filter_articles(
     with ThreadPoolExecutor(max_workers=15) as executor:
         futures = {
             executor.submit(
-                _filter_batch, b, rate_limiter, system_msg, client
+                _filter_batch, b, rate_limiter, system_msg, client, model
             ): b
             for b in batches
         }
@@ -283,6 +289,8 @@ def _filter_articles(
         for future in done:
             try:
                 relevant_urls.update(future.result())
+            except RuntimeError:
+                raise
             except Exception as exc:
                 logger.warning("[PASS1] future error: %s", exc)
 
@@ -309,6 +317,9 @@ def run(
     days_back: int = 7,
     max_articles: int = 0,
     focus: str | None = None,
+    *,
+    model: str,
+    openrouter_api_key: str | None = None,
 ) -> dict[str, Any]:
     """Fetch and relevance-filter articles for the given domain.
 
@@ -320,12 +331,15 @@ def run(
         days_back: Exclude articles older than this many days.
         max_articles: Cap on total articles fetched; 0 means no limit.
         focus: Optional free-text instruction to narrow topics.
+        model: Model identifier string passed to the OpenRouter API.
+        openrouter_api_key: Caller-supplied API key; falls back to
+            the server's ``OPENROUTER_API_KEY`` env var when None.
 
     Returns:
         Dict with ``"articles"`` (list of article dicts).
     """
     t0 = time.perf_counter()
-    client = _make_client()
+    client = _make_client(openrouter_api_key)
 
     sources = load_sources(domain_slug, days_back)
     if not sources:
@@ -336,7 +350,7 @@ def run(
         return {"articles": []}
 
     relevant = _filter_articles(
-        articles, domain_name, domain_description, focus, client
+        articles, domain_name, domain_description, focus, client, model
     )
 
     logger.info(

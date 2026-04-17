@@ -8,13 +8,14 @@ The script is idempotent — rows that already exist (matched by slug
 or URL) are silently skipped.
 """
 import logging
+import os
 from typing import Any
 
 from db import get_db, init_db, transaction
 from models.api_keys import (
     create_api_key,
-    generate_key,
-    has_any_admin_key,
+    get_by_hash,
+    hash_key,
 )
 
 logger = logging.getLogger(__name__)
@@ -436,20 +437,15 @@ def seed() -> None:
 
 
 def seed_admin_key() -> None:
-    """Create the initial admin API key if none exists.
+    """Create the admin API key from ADMIN_API_KEY env var if not present.
 
-    Prints the plaintext key to stdout exactly once.
+    Idempotent: skips insertion if the key already exists in the DB.
     """
-    if has_any_admin_key():
+    key = os.environ["ADMIN_API_KEY"]
+    if get_by_hash(hash_key(key)) is not None:
         logger.info("Admin key already exists — skipping seed.")
         return
-    key = generate_key()
     create_api_key(key, label="seed-admin", role="admin", created_by=None)
-    border = "=" * 60
-    print(border)
-    print("ADMIN API KEY (shown once — store it now):")
-    print(key)
-    print(border)
     logger.info("Seed admin key created.")
 
 

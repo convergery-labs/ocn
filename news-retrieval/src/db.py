@@ -237,7 +237,9 @@ def init_db() -> None:
                 focus         TEXT,
                 article_count INTEGER,
                 summary       TEXT,
-                callback_url  TEXT
+                callback_url  TEXT,
+                model         TEXT        NOT NULL
+                              DEFAULT 'openrouter/elephant-alpha'
             )
         """)
         conn.execute("""
@@ -292,4 +294,9 @@ def init_db() -> None:
         conn.execute(
             "ALTER TABLE runs"
             " ADD COLUMN IF NOT EXISTS callback_url TEXT"
+        )
+        conn.execute(
+            "ALTER TABLE runs"
+            " ADD COLUMN IF NOT EXISTS model TEXT NOT NULL"
+            " DEFAULT 'openrouter/elephant-alpha'"
         )

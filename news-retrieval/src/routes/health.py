@@ -14,6 +14,7 @@ async def health() -> JSONResponse:
     checks["api_key_configured"] = bool(
         os.environ.get("OPENROUTER_API_KEY")
     )
+    checks["model_configured"] = bool(os.environ.get("OPENROUTER_MODEL"))
     healthy = all(checks.values())
     return JSONResponse(
         status_code=200 if healthy else 503,
