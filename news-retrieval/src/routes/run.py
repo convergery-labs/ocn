@@ -1,7 +1,7 @@
 """Route for POST /run."""
 import asyncio
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response
 
 from auth import require_auth
 from controllers.run import (
@@ -19,11 +19,12 @@ router = APIRouter()
 async def run(
     request: RunRequest,
     background_tasks: BackgroundTasks,
+    response: Response,
     caller: ApiKeyRow = Depends(require_auth),
 ) -> dict:
     """Accept a pipeline run request and start it in the background."""
     try:
-        run_id = await asyncio.to_thread(
+        result = await asyncio.to_thread(
             create_run_record, request, caller
         )
     except KeyError as exc:
@@ -38,5 +39,10 @@ async def run(
                 "run_id": exc.run_id,
             },
         )
-    background_tasks.add_task(run_pipeline, run_id, request)
-    return {"run_id": run_id, "status": "running"}
+    if result["cache_hit"]:
+        response.status_code = 200
+        return {**result["cached_run"], "cache_hit": True}
+    background_tasks.add_task(
+        run_pipeline, result["run_id"], request
+    )
+    return {"run_id": result["run_id"], "status": "running"}

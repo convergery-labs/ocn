@@ -183,6 +183,37 @@ def get_running_run_for_domain(domain: str) -> Optional[int]:
         return row["id"] if row else None
 
 
+def get_cached_run_today(
+    domain: str,
+    days_back: int,
+    focus: Optional[str],
+    model: str,
+) -> Optional[RunRow]:
+    """Return a completed run matching params for today UTC, or None."""
+    with get_db() as conn:
+        cur = conn.execute(
+            """
+            SELECT * FROM runs
+            WHERE domain = :domain
+              AND days_back = :days_back
+              AND focus IS NOT DISTINCT FROM :focus
+              AND model = :model
+              AND status = 'completed'
+              AND DATE(started_at AT TIME ZONE 'UTC') =
+                  DATE(NOW() AT TIME ZONE 'UTC')
+            LIMIT 1
+            """,
+            {
+                "domain": domain,
+                "days_back": days_back,
+                "focus": focus,
+                "model": model,
+            },
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None  # type: ignore[return-value]
+
+
 def get_run(run_id: int) -> Optional[RunRow]:
     """Return a single run by id, or None if not found."""
     with get_db() as conn:

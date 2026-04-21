@@ -2,7 +2,7 @@
 import logging
 import os
 from datetime import datetime
-from typing import Optional
+from typing import Optional, TypedDict
 
 import httpx
 from pydantic import BaseModel, Field, model_validator
@@ -17,13 +17,23 @@ from models.domains import (
     lock_domain_row,
 )
 from models.runs import (
+    RunRow,
     complete_run,
     create_run,
     fail_run,
+    get_cached_run_today,
     get_running_run_for_domain,
 )
 
 logger = logging.getLogger(__name__)
+
+
+class RunCreateResult(TypedDict):
+    """Result of create_run_record — new run or cache hit."""
+
+    run_id: int
+    cache_hit: bool
+    cached_run: Optional[RunRow]
 
 
 class RunConflictError(Exception):
@@ -96,8 +106,13 @@ class RunRequest(BaseModel):
         return self
 
 
-def create_run_record(request: RunRequest, caller: ApiKeyRow) -> int:
-    """Validate domain ownership and create a run record; return the run_id.
+def create_run_record(
+    request: RunRequest, caller: ApiKeyRow
+) -> RunCreateResult:
+    """Validate domain ownership and create a run record.
+
+    Returns a RunCreateResult. On a cache hit, cache_hit=True and
+    cached_run contains the existing run; no new run is created.
 
     Raises:
         KeyError: if the domain slug is not found in the database.
@@ -117,13 +132,25 @@ def create_run_record(request: RunRequest, caller: ApiKeyRow) -> int:
                 raise PermissionError(
                     "You do not own this domain."
                 )
+        resolved_model = request.model or os.environ["OPENROUTER_MODEL"]
         if not request.force:
+            cached = get_cached_run_today(
+                request.domain,
+                request.days_back,
+                request.focus,
+                resolved_model,
+            )
+            if cached is not None:
+                return RunCreateResult(
+                    run_id=cached["id"],
+                    cache_hit=True,
+                    cached_run=cached,
+                )
             existing_id = get_running_run_for_domain(request.domain)
             if existing_id is not None:
                 raise RunConflictError(existing_id)
-        resolved_model = request.model or os.environ["OPENROUTER_MODEL"]
         timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
-        return create_run(
+        run_id = create_run(
             name=f"{request.domain}_{timestamp}",
             domain=request.domain,
             days_back=request.days_back,
@@ -131,6 +158,9 @@ def create_run_record(request: RunRequest, caller: ApiKeyRow) -> int:
             focus=request.focus,
             model=resolved_model,
             callback_url=request.callback_url,
+        )
+        return RunCreateResult(
+            run_id=run_id, cache_hit=False, cached_run=None
         )
 
 
