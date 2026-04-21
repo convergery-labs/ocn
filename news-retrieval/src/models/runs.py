@@ -214,6 +214,43 @@ def get_cached_run_today(
         return dict(row) if row else None  # type: ignore[return-value]
 
 
+def get_covering_run_today(
+    domain: str,
+    days_back: int,
+    focus: Optional[str],
+    model: str,
+) -> Optional[RunRow]:
+    """Return a completed run whose window strictly covers days_back today UTC.
+
+    A covering run must have the same domain, focus, and model, with
+    days_back strictly greater than the requested value. Equal days_back
+    is already handled by get_cached_run_today (CON-120).
+    """
+    with get_db() as conn:
+        cur = conn.execute(
+            """
+            SELECT * FROM runs
+            WHERE domain = :domain
+              AND days_back > :days_back
+              AND focus IS NOT DISTINCT FROM :focus
+              AND model = :model
+              AND status = 'completed'
+              AND DATE(started_at AT TIME ZONE 'UTC') =
+                  DATE(NOW() AT TIME ZONE 'UTC')
+            ORDER BY days_back DESC
+            LIMIT 1
+            """,
+            {
+                "domain": domain,
+                "days_back": days_back,
+                "focus": focus,
+                "model": model,
+            },
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None  # type: ignore[return-value]
+
+
 def get_run(run_id: int) -> Optional[RunRow]:
     """Return a single run by id, or None if not found."""
     with get_db() as conn:

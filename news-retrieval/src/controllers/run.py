@@ -1,7 +1,8 @@
 """Pipeline execution controller."""
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime as _parse_rfc2822
 from typing import Optional, TypedDict
 
 import httpx
@@ -9,7 +10,7 @@ from pydantic import BaseModel, Field, model_validator
 
 import pipeline as pl
 from models.api_keys import ApiKeyRow
-from models.articles import create_articles
+from models.articles import create_articles, fetch_all_articles_for_run
 from models.atomic import atomic
 from models.domains import (
     get_domain_by_slug,
@@ -22,10 +23,26 @@ from models.runs import (
     create_run,
     fail_run,
     get_cached_run_today,
+    get_covering_run_today,
+    get_run,
     get_running_run_for_domain,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_published_date(published: str) -> Optional[datetime]:
+    """Try RFC 2822 then ISO 8601; return None if unparseable."""
+    if not published:
+        return None
+    try:
+        return _parse_rfc2822(published)
+    except Exception:
+        pass
+    try:
+        return datetime.fromisoformat(published)
+    except Exception:
+        return None
 
 
 class RunCreateResult(TypedDict):
@@ -145,6 +162,47 @@ def create_run_record(
                     run_id=cached["id"],
                     cache_hit=True,
                     cached_run=cached,
+                )
+            covering = get_covering_run_today(
+                request.domain,
+                request.days_back,
+                request.focus,
+                resolved_model,
+            )
+            if covering is not None:
+                cutoff = datetime.now(timezone.utc) - timedelta(
+                    days=request.days_back
+                )
+                source = fetch_all_articles_for_run(covering["id"])
+                filtered = [
+                    a for a in source
+                    if (
+                        pub := _parse_published_date(
+                            a.get("published", "")
+                        )
+                    ) is None or pub >= cutoff
+                ]
+                if request.max_articles:
+                    filtered = filtered[: request.max_articles]
+                ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+                subset_id = create_run(
+                    name=f"{request.domain}_{ts}",
+                    domain=request.domain,
+                    days_back=request.days_back,
+                    max_articles=request.max_articles,
+                    focus=request.focus,
+                    model=resolved_model,
+                    callback_url=request.callback_url,
+                )
+                if filtered:
+                    create_articles(
+                        [{**a, "run_id": subset_id} for a in filtered]
+                    )
+                complete_run(subset_id, len(filtered))
+                return RunCreateResult(
+                    run_id=subset_id,
+                    cache_hit=True,
+                    cached_run=get_run(subset_id),
                 )
             existing_id = get_running_run_for_domain(request.domain)
             if existing_id is not None:

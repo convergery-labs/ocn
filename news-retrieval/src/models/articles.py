@@ -88,6 +88,17 @@ def list_articles_for_run(
     return rows, next_cursor
 
 
+def fetch_all_articles_for_run(run_id: int) -> list[dict]:
+    """Return all article rows for a run as dicts (no pagination)."""
+    with get_db() as conn:
+        cur = conn.execute(
+            "SELECT * FROM articles"
+            " WHERE run_id = :run_id ORDER BY id ASC",
+            {"run_id": run_id},
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
 def get_article(article_id: int) -> Optional[dict]:
     """Return a single article by id, or None if not found."""
     with get_db() as conn:
