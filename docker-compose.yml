@@ -17,13 +17,13 @@ services:
   postgres-auth:
     image: postgres:16
     environment:
-      POSTGRES_DB: auth-service
-      POSTGRES_USER: auth-service
+      POSTGRES_DB: ${AUTH_POSTGRES_DB}
+      POSTGRES_USER: ${AUTH_POSTGRES_USER}
       POSTGRES_PASSWORD: ${AUTH_POSTGRES_PASSWORD}
     volumes:
       - postgres-auth-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U auth-service"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -39,10 +39,10 @@ services:
       - "8000:8000"
     env_file: .env
     environment:
-      POSTGRES_HOST: postgres-news
-      POSTGRES_PORT: 5432
-      POSTGRES_DB: news-retrieval
-      POSTGRES_USER: news-retrieval
+      POSTGRES_HOST: ${NEWS_POSTGRES_HOST}
+      POSTGRES_PORT: ${NEWS_POSTGRES_PORT}
+      POSTGRES_DB: ${NEWS_POSTGRES_DB}
+      POSTGRES_USER: ${NEWS_POSTGRES_USER}
       POSTGRES_PASSWORD: ${NEWS_POSTGRES_PASSWORD}
     depends_on:
       postgres-news:
@@ -53,13 +53,13 @@ services:
   postgres-news:
     image: postgres:16
     environment:
-      POSTGRES_DB: news-retrieval
-      POSTGRES_USER: news-retrieval
+      POSTGRES_DB: ${NEWS_POSTGRES_DB}
+      POSTGRES_USER: ${NEWS_POSTGRES_USER}
       POSTGRES_PASSWORD: ${NEWS_POSTGRES_PASSWORD}
     volumes:
       - postgres-news-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U news-retrieval"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -71,8 +71,8 @@ services:
     ports:
       - "5433:5432"
     environment:
-      POSTGRES_DB: news-retrieval-test
-      POSTGRES_USER: news-retrieval
+      POSTGRES_DB: ${NEWS_POSTGRES_TEST_DB}
+      POSTGRES_USER: ${NEWS_POSTGRES_USER}
       POSTGRES_PASSWORD: ${NEWS_POSTGRES_PASSWORD}
     networks:
       - ocn-internal
@@ -96,13 +96,13 @@ services:
   postgres-signal:
     image: postgres:16
     environment:
-      POSTGRES_DB: signal-detection
-      POSTGRES_USER: signal-detection
+      POSTGRES_DB: ${SIGNAL_POSTGRES_DB}
+      POSTGRES_USER: ${SIGNAL_POSTGRES_USER}
       POSTGRES_PASSWORD: ${SIGNAL_POSTGRES_PASSWORD}
     volumes:
       - postgres-signal-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U signal-detection"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER"]
       interval: 5s
       timeout: 5s
       retries: 5
