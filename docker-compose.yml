@@ -38,6 +38,12 @@ services:
     ports:
       - "8000:8000"
     env_file: .env
+    environment:
+      POSTGRES_HOST: postgres-news
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: news-retrieval
+      POSTGRES_USER: news-retrieval
+      POSTGRES_PASSWORD: ${NEWS_POSTGRES_PASSWORD}
     depends_on:
       postgres-news:
         condition: service_healthy
