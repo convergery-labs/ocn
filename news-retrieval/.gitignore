@@ -1,5 +1,6 @@
 reports/*
 *__pycache__
 .env
+.venv
 data/*
 .DS_Store

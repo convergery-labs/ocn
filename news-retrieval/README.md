@@ -1,17 +1,17 @@
 # news-retrieval
 
-Fetches RSS feeds and categorises articles by domain and taxonomy using LLMs. Returns structured JSON with articles grouped by category.
+Fetches RSS feeds and filters articles by relevance to a domain using LLMs. Returns structured JSON with articles grouped by run.
 
 ## Stack
 
 - **Server**: FastAPI + uvicorn
 - **Database**: PostgreSQL (persisted via Docker volume)
-- **LLM**: `openrouter/elephant-alpha` (categorisation) via OpenRouter
+- **LLM**: Configurable via `OPENROUTER_MODEL` (e.g. `openrouter/elephant-alpha`) via OpenRouter
 
 ## Quick start
 
 ```bash
-# Copy .env.example and add your key
+# Copy .env.example and fill in required values
 cp .env.example .env
 
 docker compose up
@@ -23,7 +23,9 @@ The API is available at `http://localhost:8000`. Interactive docs at `/docs`.
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `OPENROUTER_API_KEY` | Yes | API key for OpenRouter |
+| `OPENROUTER_API_KEY` | Yes | Server-level API key for OpenRouter |
+| `OPENROUTER_MODEL` | Yes | Default model for relevance filtering, e.g. `openrouter/elephant-alpha` |
+| `ADMIN_API_KEY` | Yes | Plaintext admin API key seeded into the DB on first startup |
 | `POSTGRES_HOST` | No | PostgreSQL host (default: `localhost`) |
 | `POSTGRES_PORT` | No | PostgreSQL port (default: `5432`) |
 | `POSTGRES_DB` | No | Database name (default: `news-retrieval`) |
@@ -32,45 +34,59 @@ The API is available at `http://localhost:8000`. Interactive docs at `/docs`.
 
 ## API
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/run` | Fetch and categorise articles for a domain |
-| `GET` | `/runs` | List all pipeline runs, newest first |
-| `GET` | `/runs/{run_id}` | Get a single pipeline run by ID |
-| `GET` | `/runs/{run_id}/categories` | List categories produced by a run |
-| `GET` | `/runs/{run_id}/articles` | List all articles for a run (optional `?category_id=` filter) |
-| `GET` | `/articles/{article_id}` | Get a single article by ID |
-| `GET` | `/domains` | List all domains |
-| `POST` | `/domains` | Create a domain with inline taxonomy |
-| `GET` | `/sources` | List all sources (optional `?domain=` filter) |
-| `POST` | `/sources` | Add a new RSS feed source |
-| `GET` | `/frequencies` | List all polling frequencies |
-| `POST` | `/frequencies` | Add a new polling frequency |
-| `GET` | `/taxonomies` | List all taxonomy categories (optional `?domain=` filter) |
-| `POST` | `/taxonomies` | Add a category to a domain's taxonomy |
-| `GET` | `/health` | Health check |
+All write endpoints require a `Bearer <token>` header. Admin-only endpoints require a key with the `admin` role.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/run` | Required | Submit a pipeline run; returns `202` with `run_id` immediately |
+| `GET` | `/runs` | — | List runs newest-first; filter by `domain`, `status`, `from_date`, `to_date`; cursor-paginated |
+| `GET` | `/runs/{id}` | — | Single run record |
+| `GET` | `/runs/{id}/articles` | — | Articles for a run; cursor-paginated |
+| `GET` | `/articles/{id}` | — | Single article record |
+| `GET` | `/domains` | — | List domains (caller's owned + null-owner domains) |
+| `POST` | `/domains` | Required | Create a domain |
+| `PATCH` | `/domains/{id}` | Required | Update a domain (owner or admin only) |
+| `GET` | `/sources` | — | List sources (optional `?domain=` filter) |
+| `POST` | `/sources` | Required | Add an RSS feed source |
+| `GET` | `/frequencies` | — | List polling frequencies |
+| `POST` | `/frequencies` | Admin | Add a polling frequency |
+| `GET` | `/api-keys` | Admin | List API keys |
+| `POST` | `/api-keys` | Admin | Create an API key (returns plaintext key once) |
+| `GET` | `/health` | — | Health check |
 
 ### Run the pipeline
 
 ```bash
 curl -X POST http://localhost:8000/run \
+  -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{"domain": "ai_news", "days_back": 7}'
 ```
 
-Response includes `categories` — a dict mapping each category name to its list of articles.
+Optional fields: `model`, `openrouter_api_key` (override server defaults), `callback_url` (webhook on completion or failure).
 
-### Add a domain with taxonomy
+Response: `{"run_id": "<uuid>"}` — poll `GET /runs/{run_id}` for status.
+
+### Add a domain
 
 ```bash
 curl -X POST http://localhost:8000/domains \
+  -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
-  -d '{
-    "name": "My Domain",
-    "slug": "my_domain",
-    "taxonomy": [
-      {"category": "Category A"},
-      {"category": "Category B"}
-    ]
-  }'
+  -d '{"name": "My Domain", "slug": "my_domain", "description": "..."}'
 ```
+
+## Testing
+
+```bash
+# Start postgres (if not already running)
+docker compose up postgres -d
+
+# Install test dependencies
+pip install -r requirements-test.txt
+
+# Run suite
+pytest
+```
+
+Tests run against a dedicated `news-retrieval-test` database. The test DB is created and wiped automatically each `pytest` session.
