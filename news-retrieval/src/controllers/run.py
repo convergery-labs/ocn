@@ -123,6 +123,61 @@ class RunRequest(BaseModel):
         return self
 
 
+def _filter_articles_for_window(
+    articles: list[dict],
+    days_back: int,
+    max_articles: Optional[int],
+) -> list[dict]:
+    """Return articles within days_back of now, capped by max_articles.
+
+    Articles with unparseable or missing published dates are included
+    (fail-open).
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
+    filtered = [
+        a for a in articles
+        if (pub := _parse_published_date(a.get("published", "")))
+        is None or pub >= cutoff
+    ]
+    if max_articles:
+        filtered = filtered[:max_articles]
+    return filtered
+
+
+def _create_subset_run(
+    request: RunRequest,
+    resolved_model: str,
+    covering: RunRow,
+) -> RunCreateResult:
+    """Create a completed run populated from a covering run's articles.
+
+    Fetches articles from covering, filters to the requested window,
+    inserts them under a new run record, and returns a cache-hit result.
+    """
+    source = fetch_all_articles_for_run(covering["id"])
+    filtered = _filter_articles_for_window(
+        source, request.days_back, request.max_articles
+    )
+    ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    subset_id = create_run(
+        name=f"{request.domain}_{ts}",
+        domain=request.domain,
+        days_back=request.days_back,
+        max_articles=request.max_articles,
+        focus=request.focus,
+        model=resolved_model,
+        callback_url=request.callback_url,
+    )
+    if filtered:
+        create_articles([{**a, "run_id": subset_id} for a in filtered])
+    complete_run(subset_id, len(filtered))
+    return RunCreateResult(
+        run_id=subset_id,
+        cache_hit=True,
+        cached_run=get_run(subset_id),
+    )
+
+
 def create_run_record(
     request: RunRequest, caller: ApiKeyRow
 ) -> RunCreateResult:
@@ -170,39 +225,8 @@ def create_run_record(
                 resolved_model,
             )
             if covering is not None:
-                cutoff = datetime.now(timezone.utc) - timedelta(
-                    days=request.days_back
-                )
-                source = fetch_all_articles_for_run(covering["id"])
-                filtered = [
-                    a for a in source
-                    if (
-                        pub := _parse_published_date(
-                            a.get("published", "")
-                        )
-                    ) is None or pub >= cutoff
-                ]
-                if request.max_articles:
-                    filtered = filtered[: request.max_articles]
-                ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
-                subset_id = create_run(
-                    name=f"{request.domain}_{ts}",
-                    domain=request.domain,
-                    days_back=request.days_back,
-                    max_articles=request.max_articles,
-                    focus=request.focus,
-                    model=resolved_model,
-                    callback_url=request.callback_url,
-                )
-                if filtered:
-                    create_articles(
-                        [{**a, "run_id": subset_id} for a in filtered]
-                    )
-                complete_run(subset_id, len(filtered))
-                return RunCreateResult(
-                    run_id=subset_id,
-                    cache_hit=True,
-                    cached_run=get_run(subset_id),
+                return _create_subset_run(
+                    request, resolved_model, covering
                 )
             existing_id = get_running_run_for_domain(request.domain)
             if existing_id is not None:
