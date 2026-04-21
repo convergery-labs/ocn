@@ -38,7 +38,7 @@ All write endpoints require an `Authorization: Bearer <token>` header. Admin-onl
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `POST` | `/run` | Required | Submit a pipeline run; returns `202` with `run_id` immediately |
+| `POST` | `/run` | Required | Submit a pipeline run; returns `202` with `run_id`, or `200` with `cache_hit: true` if an identical run completed today |
 | `GET` | `/runs` | — | List runs newest-first; filter by `domain`, `status`, `from_date`, `to_date`; cursor-paginated |
 | `GET` | `/runs/{id}` | — | Single run record |
 | `GET` | `/runs/{id}/articles` | — | Articles for a run; cursor-paginated |
@@ -58,6 +58,8 @@ All write endpoints require an `Authorization: Bearer <token>` header. Admin-onl
 
 Submits a pipeline run. Returns `202` immediately with a `run_id`; the pipeline runs in the background.
 
+If a completed run with identical parameters (`domain`, `days_back`, `focus`, `model`) already exists for the current UTC day, returns `200` with the existing run's fields and `cache_hit: true` — no pipeline is dispatched. Use `force: true` to bypass this and always start a fresh run.
+
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `domain` | string | Yes | Slug of the domain to run against (e.g. `ai_news`) |
@@ -65,7 +67,7 @@ Submits a pipeline run. Returns `202` immediately with a `run_id`; the pipeline 
 | `max_articles` | integer | No | Cap on articles stored; omit for no limit |
 | `focus` | string | No | Instruction to narrow the topics the relevance filter accepts |
 | `callback_url` | string | No | URL to POST a status payload to on completion or failure |
-| `force` | boolean | No (default: `false`) | Bypass the concurrent-run guard for this domain |
+| `force` | boolean | No (default: `false`) | Bypass the concurrent-run guard and same-day cache guard for this domain |
 | `model` | string | No | OpenRouter model string; overrides `OPENROUTER_MODEL` for this run |
 | `openrouter_api_key` | string | Required if `model` is set | OpenRouter API key to use with the model override |
 
