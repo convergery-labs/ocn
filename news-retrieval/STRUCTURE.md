@@ -5,7 +5,7 @@
 | Path | Description |
 |------|-------------|
 | `Dockerfile` | Builds a `python:3.11-slim` image; copies `src/` to `/app` and installs pip dependencies |
-| `docker-compose.yml` | Runs the service on port 8000; enables hot-reload via `docker compose watch`; includes a `postgres-test` service on port 5433 for the test suite |
+| `docker-compose.yml` | See root `docker-compose.yml`; `postgres-news-test` service on port 5433 is used by the test suite |
 | `pyproject.toml` | pytest configuration: `asyncio_mode = "auto"`, `testpaths = ["tests"]` |
 | `requirements-test.txt` | Test-only pip dependencies (`pytest`, `pytest-asyncio`) |
 | `README.md` | Project overview and quick-start instructions |
@@ -90,14 +90,14 @@ Tests live in `tests/` at the project root and run against a dedicated `news-ret
 ### Running the tests
 
 ```bash
-# Start postgres (if not already running)
-docker compose up postgres -d
+# From the repo root — start the test DB
+docker compose up postgres-news-test -d
 
-# Install test dependencies (app deps must already be installed)
-pip install -r requirements-test.txt
+# Install test dependencies
+pip install -r news-retrieval/requirements-test.txt
 
 # Run suite
-pytest
+pytest news-retrieval/tests/
 ```
 
 `conftest.py` creates and wipes the test database on each `pytest` session, so no manual DB setup is needed beyond having postgres available.
@@ -110,6 +110,7 @@ pytest
 | `test_runs.py` | `POST /run`: 202 + DB record created; unknown domain → 404; non-owner → 403 |
 | `test_guard_chain.py` | CON-111 concurrent guard → 409 with `run_id`; `force=true` bypasses guard |
 | `test_cache_guard.py` | CON-120 same-day cache guard → 200 with `cache_hit: true`; different params miss cache; `force=true` bypasses; yesterday's run is not a hit |
+| `test_subset_guard.py` | Time-window subset guard; reuses articles from wider same-day run |
 | `test_pagination.py` | Cursor advances on `GET /runs` and `GET /runs/{id}/articles`; last page has `next_cursor: null` |
 | `test_webhook.py` | `callback_url` POSTed with `status=completed` on success and `status=failed` on pipeline error |
 | `test_ownership.py` | `POST /sources` and `PATCH /domains/{id}` reject non-owners → 403; null-owner domains visible to all users |

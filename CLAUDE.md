@@ -1,11 +1,10 @@
-# news-retrieval
-
-Part of the [ocn monorepo](../CLAUDE.md).
+# ocn
 
 ## How to use this file
 Do not load all documentation upfront. Read the index below,
 identify which docs are relevant to your current task, and
 fetch only those. Use the 'Read when' column as your guide.
+For service-specific context, read the relevant service's CLAUDE.md.
 
 ## Documentation Index
 | Doc | Read when | Page ID |
@@ -22,6 +21,14 @@ fetch only those. Use the 'Read when' column as your guide.
 
 Confluence space: `Projects` — Cloud: `opengrowthventures.atlassian.net`
 
+## Services
+
+| Service | Path | CLAUDE.md | Description |
+|---------|------|-----------|-------------|
+| `auth-service` | [auth-service/](auth-service/) | [auth-service/CLAUDE.md](auth-service/CLAUDE.md) | Authentication and API key management |
+| `news-retrieval` | [news-retrieval/](news-retrieval/) | [news-retrieval/CLAUDE.md](news-retrieval/CLAUDE.md) | RSS feed fetching and LLM-based relevance filtering |
+| `signal-detection` | [signal-detection/](signal-detection/) | [signal-detection/CLAUDE.md](signal-detection/CLAUDE.md) | Signal detection and vector-similarity pipelines |
+
 ## Jira Board
 | Board | URL | Project Key |
 |-------|-----|-------------|
@@ -29,63 +36,49 @@ Confluence space: `Projects` — Cloud: `opengrowthventures.atlassian.net`
 
 ## Structure
 
-See [STRUCTURE.md](STRUCTURE.md) for descriptions.
+See each service's STRUCTURE.md for detailed layer descriptions.
 
 ```
-news-retrieval/
-├── Dockerfile
-├── docker-compose.yml
-├── pyproject.toml        # pytest config (asyncio_mode=auto)
-├── requirements-test.txt # test-only pip deps
-├── README.md
+ocn/
 ├── CLAUDE.md
-├── STRUCTURE.md
-├── tests/                # automated test suite (pytest)
-│   ├── conftest.py       # session/function fixtures (DB, keys, client)
-│   ├── test_auth.py
-│   ├── test_runs.py
-│   ├── test_guard_chain.py
-│   ├── test_cache_guard.py
-│   ├── test_subset_guard.py
-│   ├── test_pagination.py
-│   ├── test_webhook.py
-│   ├── test_ownership.py
-│   └── test_pipeline.py
-└── src/
-    ├── __main__.py       # CLI entry point (uvicorn + click)
-    ├── app.py            # FastAPI app factory
-    ├── auth.py           # require_auth / require_admin FastAPI dependencies
-    ├── pipeline.py       # Fetch + relevance filter pipeline (fetch → LLM title filter)
-    ├── db.py             # PostgreSQL connection, _Connection wrapper, DuplicateError, schema init
-    ├── seed.py           # Idempotent seed for run_statuses, frequencies, domains, sources, admin key
-    ├── models/           # DB query functions (repository layer)
-    │   ├── api_keys.py
-    │   ├── articles.py
-    │   ├── atomic.py
-    │   ├── domains.py
-    │   ├── frequencies.py
-    │   ├── runs.py
-    │   └── sources.py
-    ├── controllers/      # Business logic and multi-step orchestration
-    │   ├── domains.py
-    │   └── run.py
-    └── routes/           # Thin HTTP adapters (FastAPI APIRouters)
-        ├── api_keys.py
-        ├── articles.py
-        ├── domains.py
-        ├── frequencies.py
-        ├── health.py
-        ├── run.py
-        ├── runs.py
-        └── sources.py
+├── README.md
+├── docker-compose.yml        # all services + sidecars
+├── docker-compose.dev.yml    # dev overrides (hot reload, volume mounts)
+├── .env.example              # all env vars, grouped by service
+├── auth-service/             # see auth-service/STRUCTURE.md
+│   ├── CLAUDE.md
+│   ├── STRUCTURE.md
+│   ├── README.md
+│   ├── Dockerfile
+│   ├── requirements.txt
+│   ├── src/
+│   └── tests/
+├── news-retrieval/           # see news-retrieval/STRUCTURE.md
+│   ├── CLAUDE.md
+│   ├── STRUCTURE.md
+│   ├── README.md
+│   ├── Dockerfile
+│   ├── requirements.txt
+│   ├── src/
+│   └── tests/
+└── signal-detection/         # see signal-detection/STRUCTURE.md
+    ├── CLAUDE.md
+    ├── STRUCTURE.md
+    ├── README.md
+    ├── Dockerfile
+    ├── requirements.txt
+    ├── src/
+    └── tests/
 ```
 
 ## Guidance
 - Read only the docs relevant to your task — not all of them
 - Check the index above before asking for clarification; the answer is often in a doc
-- When in doubt about scope or requirements, read the Functional Requirements or PRD first
+- When in doubt about scope or requirements, read the PRD first
+- For service-specific context (architecture, endpoints, DB schema), read that service's CLAUDE.md
 - Use the Jira board (project key `CON`) to track and reference cards
 
 ## Maintenance
-- At the end of any session that restructures the codebase, update the Structure section above to reflect the changes
+- When adding or removing a service, update the Services table and Structure tree above
 - Do not modify the Documentation Index, Jira Board, Guidance, or Maintenance sections unless explicitly asked
+- Each service's CLAUDE.md owns its own Structure section; update it there after restructuring

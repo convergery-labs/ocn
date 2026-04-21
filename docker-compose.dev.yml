@@ -1,0 +1,25 @@
+services:
+
+  auth-service:
+    build:
+      context: auth-service/
+      target: dev
+    volumes:
+      - ./auth-service/src:/app/src
+    command: uvicorn src.__main__:app --host 0.0.0.0 --port 8001 --reload
+
+  news-retrieval:
+    build:
+      context: news-retrieval/
+      target: dev
+    volumes:
+      - ./news-retrieval/src:/app/src
+    command: uvicorn src.__main__:app --host 0.0.0.0 --port 8000 --reload
+
+  signal-detection:
+    build:
+      context: signal-detection/
+      target: dev
+    volumes:
+      - ./signal-detection/src:/app/src
+    command: uvicorn src.__main__:app --host 0.0.0.0 --port 8002 --reload

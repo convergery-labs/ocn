@@ -1,5 +1,7 @@
 # news-retrieval
 
+Part of the [ocn monorepo](../README.md). See root README for full system setup.
+
 Fetches RSS feeds and filters articles by relevance to a domain using LLMs. Returns structured JSON with articles grouped by run.
 
 ## Stack

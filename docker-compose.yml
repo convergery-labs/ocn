@@ -1,0 +1,128 @@
+services:
+
+  # ---------------------------------------------------------------------------
+  # auth-service (port 8001)
+  # ---------------------------------------------------------------------------
+  auth-service:
+    build: auth-service/
+    ports:
+      - "8001:8001"
+    env_file: .env
+    depends_on:
+      postgres-auth:
+        condition: service_healthy
+    networks:
+      - ocn-internal
+
+  postgres-auth:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: auth-service
+      POSTGRES_USER: auth-service
+      POSTGRES_PASSWORD: ${AUTH_POSTGRES_PASSWORD}
+    volumes:
+      - postgres-auth-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U auth-service"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ocn-internal
+
+  # ---------------------------------------------------------------------------
+  # news-retrieval (port 8000)
+  # ---------------------------------------------------------------------------
+  news-retrieval:
+    build: news-retrieval/
+    ports:
+      - "8000:8000"
+    env_file: .env
+    depends_on:
+      postgres-news:
+        condition: service_healthy
+    networks:
+      - ocn-internal
+
+  postgres-news:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: news-retrieval
+      POSTGRES_USER: news-retrieval
+      POSTGRES_PASSWORD: ${NEWS_POSTGRES_PASSWORD}
+    volumes:
+      - postgres-news-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U news-retrieval"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ocn-internal
+
+  postgres-news-test:
+    image: postgres:16
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_DB: news-retrieval-test
+      POSTGRES_USER: news-retrieval
+      POSTGRES_PASSWORD: ${NEWS_POSTGRES_PASSWORD}
+    networks:
+      - ocn-internal
+
+  # ---------------------------------------------------------------------------
+  # signal-detection (port 8002)
+  # ---------------------------------------------------------------------------
+  signal-detection:
+    build: signal-detection/
+    ports:
+      - "8002:8002"
+    env_file: .env
+    depends_on:
+      postgres-signal:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    networks:
+      - ocn-internal
+
+  postgres-signal:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: signal-detection
+      POSTGRES_USER: signal-detection
+      POSTGRES_PASSWORD: ${SIGNAL_POSTGRES_PASSWORD}
+    volumes:
+      - postgres-signal-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U signal-detection"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ocn-internal
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:6333/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ocn-internal
+
+networks:
+  ocn-internal:
+    driver: bridge
+
+volumes:
+  postgres-auth-data:
+  postgres-news-data:
+  postgres-signal-data:
+  qdrant-data:
