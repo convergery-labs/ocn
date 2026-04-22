@@ -164,3 +164,39 @@ async def test_yesterday_wider_run_does_not_cover(
     )
 
     assert resp.status_code == 202
+
+
+async def test_subset_with_naive_iso_published_dates(
+    client, admin_key
+) -> None:
+    """Subset run succeeds (200) when covering articles have naive ISO 8601
+    published dates — guards against TypeError on tz-naive vs tz-aware
+    comparison (CON-147)."""
+    from datetime import datetime, timedelta, timezone
+
+    recent = (
+        datetime.now(timezone.utc) - timedelta(days=1)
+    ).strftime("%Y-%m-%dT%H:%M:%S")  # naive ISO 8601, no tz suffix
+
+    _insert_covering_run(
+        "ai_news",
+        days_back=14,
+        articles=[
+            {
+                "url": "http://example.com/naive-dt",
+                "title": "Naive DateTime Article",
+                "summary": "",
+                "source": "Test",
+                "published": recent,
+            }
+        ],
+    )
+
+    resp = await client.post(
+        "/run",
+        json={"domain": "ai_news", "days_back": 7},
+        headers={"Authorization": f"Bearer {admin_key}"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["cache_hit"] is True
