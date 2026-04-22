@@ -4,15 +4,7 @@ Part of the [ocn monorepo](../CLAUDE.md).
 
 ## Overview
 
-TODO: Describe the auth-service — its role in the OCN platform, what it owns,
-and how other services interact with it.
-
-## Documentation Index
-
-TODO: Add links to relevant Confluence pages once auth-service documentation
-is created. Reference the root [CLAUDE.md](../CLAUDE.md) for platform-wide docs.
-
-Confluence space: `Projects` — Cloud: `opengrowthventures.atlassian.net`
+`auth-service` is a shared service for authenticating API requests as they come in. Both - `news-retrieval` as well as `signal-detection` safeguard their APIs with an authentication layer that depends on this service.
 
 ## Jira Board
 | Board | URL | Project Key |
@@ -32,5 +24,5 @@ TODO: Add directory tree once service is implemented.
 
 ## Maintenance
 
-- At the end of any session that restructures the codebase, update the Structure section above
+- At the end of any session that restructures the codebase, update the Structure section above and the STRUCTURE.md file
 - Do not modify the Jira Board, Guidance, or Maintenance sections unless explicitly asked
