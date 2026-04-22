@@ -11,11 +11,7 @@ fetch only those. Use the 'Read when' column as your guide.
 | Doc | Read when | Page ID |
 |-----|-----------|---------|
 | [Technical Specifications](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/30113793/Technical+Specifications) | Making architectural or technical decisions | 30113793 |
-| ↳ [AISquare Publishing Pipeline — Implementation Plan](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/38043649/AISquare+Publishing+Pipeline+—+Implementation+Plan) | Working on the publishing or delivery flow | 38043649 |
-| ↳ [OCN News Aggregator — Optimization Plan](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/35651593/OCN+News+Aggregator+—+Optimization+Plan) | Improving performance or efficiency | 35651593 |
-| &nbsp;&nbsp;↳ [Bottleneck 1: Low-Signal Feeds](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/35946498/Bottleneck+1%3A+Low-Signal+Feeds) | Working on feed quality or relevance filtering | 35946498 |
-| &nbsp;&nbsp;↳ [Bottleneck 2: Pre-filtering Articles by Title](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/36143105/Bottleneck+2%3A+Pre-filtering+Articles+by+Title) | Working on pre-LLM article filtering | 36143105 |
-| &nbsp;&nbsp;↳ [Bottleneck 3: LLM Context Explosion](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/35880962/Bottleneck+3%3A+LLM+Context+Explosion) | Working on LLM token usage or prompt efficiency | 35880962 |
+| ↳ [CON-95: API Integration-Readiness — Open Questions](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/61898754/CON-95+API+Integration-Readiness+Open+Questions) | Reviewing open questions for the API integration-readiness epic | 61898754 |
 | [Sources](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/28705610/Sources) | Adding, removing, or evaluating data sources | 28705610 |
 | [PRD](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/28705568/PRD) | Implementing or questioning any feature | 28705568 |
 | [Roadmap](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/28508185/Roadmap) | Planning, scoping, or prioritising work | 28508185 |
@@ -87,5 +83,5 @@ news-retrieval/
 - Use the Jira board (project key `CON`) to track and reference cards
 
 ## Maintenance
-- At the end of any session that restructures the codebase, update the Structure section above to reflect the changes
+- At the end of any session that restructures the codebase, update the Structure section above and the STRUCTURE.md file to reflect the changes
 - Do not modify the Documentation Index, Jira Board, Guidance, or Maintenance sections unless explicitly asked

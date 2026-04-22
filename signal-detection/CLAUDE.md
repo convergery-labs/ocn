@@ -9,9 +9,16 @@ what signals it detects, how it uses Qdrant for vector similarity, and how
 other services or consumers interact with it.
 
 ## Documentation Index
-
-TODO: Add links to relevant Confluence pages once signal-detection documentation
-is created. Reference the root [CLAUDE.md](../CLAUDE.md) for platform-wide docs.
+| Doc | Read when | Page ID |
+|-----|-----------|---------|
+| [Project Brief](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/73203716/Project+Brief+—+signal-detection) | Understanding the service's purpose and goals | 73203716 |
+| [Scope & Success Criteria](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/73629710/Scope+%26+Success+Criteria+—+signal-detection) | Defining or verifying acceptance criteria | 73629710 |
+| [Functional Requirements](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/74153986/Functional+Requirements+—+signal-detection) | Implementing or questioning any feature | 74153986 |
+| [Technical Specifications](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/74154013/Technical+Specifications+—+signal-detection) | Making architectural or technical decisions | 74154013 |
+| [Solution Exploration](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/74416130/Solution+Exploration+—+signal-detection) | Evaluating design or approach options | 74416130 |
+| [Evidence Base](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/75923457/Evidence+Base+—+signal-detection+Approach) | Validating or challenging the chosen approach | 75923457 |
+| [Infrastructure Request](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/74940431/Infrastructure+Request+—+OCN+Signal+Detection+Platform) | Provisioning or configuring infrastructure | 74940431 |
+| [Assumptions & Open Questions Log](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/73957390/Assumptions+%26+Open+Questions+Log+—+signal-detection) | Resolving ambiguities or open questions | 73957390 |
 
 Confluence space: `Projects` — Cloud: `opengrowthventures.atlassian.net`
 
@@ -33,5 +40,5 @@ TODO: Add directory tree once service is implemented.
 
 ## Maintenance
 
-- At the end of any session that restructures the codebase, update the Structure section above
+- At the end of any session that restructures the codebase, update the Structure section above and the STRUCTURE.md file to reflect the changes
 - Do not modify the Jira Board, Guidance, or Maintenance sections unless explicitly asked
