@@ -15,7 +15,7 @@ sys.path.insert(
 
 # Must be set before any src imports so DB connections hit the test DB.
 os.environ.setdefault("POSTGRES_HOST", "localhost")
-os.environ.setdefault("POSTGRES_PORT", "5432")
+os.environ.setdefault("POSTGRES_PORT", "5433")
 os.environ["POSTGRES_DB"] = "news-retrieval-test"
 os.environ.setdefault("POSTGRES_USER", "news-retrieval")
 os.environ.setdefault("POSTGRES_PASSWORD", "news-retrieval")
