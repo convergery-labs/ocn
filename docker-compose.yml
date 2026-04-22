@@ -66,6 +66,17 @@ services:
     networks:
       - ocn-internal
 
+  postgres-auth-test:
+    image: postgres:16
+    ports:
+      - "5434:5432"
+    environment:
+      POSTGRES_DB: ${AUTH_POSTGRES_DB}
+      POSTGRES_USER: ${AUTH_POSTGRES_USER}
+      POSTGRES_PASSWORD: ${AUTH_POSTGRES_PASSWORD}
+    networks:
+      - ocn-internal
+
   postgres-news-test:
     image: postgres:16
     ports:
