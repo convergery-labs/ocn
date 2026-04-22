@@ -36,14 +36,17 @@
 
 Run from the repo root:
 
-```
-cd auth-service
-pip install -r requirements-test.txt
-pytest
+```bash
+# Start the test sidecar (port 5434)
+docker compose up -d postgres-auth-test
+
+# Install test dependencies
+pip install -r auth-service/requirements-test.txt
+
+# Run suite
+AUTH_POSTGRES_PORT=5434 pytest auth-service/tests/
 ```
 
-Requires a local PostgreSQL instance with a user/password matching
-`AUTH_POSTGRES_USER` / `AUTH_POSTGRES_PASSWORD` (default: `auth-service`/`auth-service`).
 The test suite creates and wipes `auth-service-test` automatically.
 
 | File | Covers |
