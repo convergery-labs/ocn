@@ -32,7 +32,10 @@ logger = logging.getLogger(__name__)
 
 
 def _parse_published_date(published: str) -> Optional[datetime]:
-    """Try RFC 2822 then ISO 8601; return None if unparseable."""
+    """Try RFC 2822 then ISO 8601; return None if unparseable.
+
+    Always returns a UTC-aware datetime.
+    """
     if not published:
         return None
     try:
@@ -40,7 +43,10 @@ def _parse_published_date(published: str) -> Optional[datetime]:
     except Exception:
         pass
     try:
-        return datetime.fromisoformat(published)
+        dt = datetime.fromisoformat(published)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
     except Exception:
         return None
 
