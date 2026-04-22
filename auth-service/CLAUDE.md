@@ -33,6 +33,7 @@ auth-service/
 │   ├── models/
 │   │   └── api_keys.py   # ApiKeyRow, generate_key, hash_key, CRUD
 │   └── routes/
+│       ├── health.py     # GET /health
 │       ├── keys.py       # GET /keys, POST /keys
 │       └── validate.py   # POST /validate
 └── tests/

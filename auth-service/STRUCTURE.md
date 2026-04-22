@@ -15,6 +15,7 @@
 |-------|------|---------------|
 | Entry point | `src/__main__.py` | `init_db` → `seed_admin_key` → `uvicorn.run`; never imports routes |
 | App factory | `src/app.py` | Assembles `FastAPI`, registers routers; no DB or seed logic |
+| Routes | `src/routes/health.py` | `GET /health` — liveness check |
 | Routes | `src/routes/keys.py` | `GET /keys`, `POST /keys` — HTTP only, delegates to models |
 | Routes | `src/routes/validate.py` | `POST /validate` — HTTP only, delegates to models |
 | Auth | `src/auth.py` | `require_auth`, `require_admin` FastAPI dependencies |
@@ -26,6 +27,7 @@
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
+| `GET` | `/health` | none | Liveness check; returns `{"status": "ok"}` |
 | `GET` | `/keys` | admin | List all keys (hashes excluded) |
 | `POST` | `/keys` | admin | Create key; returns plaintext once (201) |
 | `POST` | `/validate` | Bearer token in header | Validate a key; returns `{valid, role, key_id}` |
