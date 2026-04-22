@@ -30,7 +30,6 @@ See [STRUCTURE.md](STRUCTURE.md) for descriptions.
 ```
 news-retrieval/
 ├── Dockerfile
-├── docker-compose.yml
 ├── pyproject.toml        # pytest config (asyncio_mode=auto)
 ├── requirements-test.txt # test-only pip deps
 ├── README.md

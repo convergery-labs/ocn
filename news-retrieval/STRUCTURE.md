@@ -5,7 +5,6 @@
 | Path | Description |
 |------|-------------|
 | `Dockerfile` | Builds a `python:3.11-slim` image; copies `src/` to `/app` and installs pip dependencies |
-| `docker-compose.yml` | See root `docker-compose.yml`; `postgres-news-test` service on port 5433 is used by the test suite |
 | `pyproject.toml` | pytest configuration: `asyncio_mode = "auto"`, `testpaths = ["tests"]` |
 | `requirements-test.txt` | Test-only pip dependencies (`pytest`, `pytest-asyncio`) |
 | `README.md` | Project overview and quick-start instructions |
@@ -34,7 +33,7 @@ The application is a single FastAPI process. `POST /run` uses FastAPI `Backgroun
 | **Repository** | `src/models/` | SQL query functions + Pydantic input models; no HTTP concepts |
 | **Pipeline** | `src/pipeline.py` | Stateless pipeline: parallel RSS fetch, title-based relevance filter (Pass 1 LLM); returns list of relevant article dicts |
 | **Database** | `src/db.py` | PostgreSQL connection (`psycopg2`), `_Connection` wrapper, `DuplicateError`, ambient transaction via `ContextVar`, schema init + migrations |
-| **Auth** | `src/auth.py` | `require_auth` / `require_admin` FastAPI dependencies; validates Bearer token against DB hash |
+| **Auth** | `src/auth.py` | `require_auth` / `require_admin` FastAPI dependencies; delegates to `POST {AUTH_SERVICE_URL}/validate` when set, falls back to local DB hash validation |
 | **Seed data** | `src/seed.py` | Idempotent batch seed for `run_statuses`, `frequencies`, `domains`, `sources`, and admin API key |
 
 ### HTTP API
@@ -106,7 +105,7 @@ pytest news-retrieval/tests/
 
 | Module | Coverage |
 |--------|----------|
-| `test_auth.py` | Missing/invalid auth header → 422/401; non-admin on admin endpoint → 403 |
+| `test_auth.py` | Missing/invalid auth header → 422/401; non-admin on admin endpoint → 403; delegated-path: valid key, rejected key, unreachable fallback |
 | `test_runs.py` | `POST /run`: 202 + DB record created; unknown domain → 404; non-owner → 403 |
 | `test_guard_chain.py` | CON-111 concurrent guard → 409 with `run_id`; `force=true` bypasses guard |
 | `test_cache_guard.py` | CON-120 same-day cache guard → 200 with `cache_hit: true`; different params miss cache; `force=true` bypasses; yesterday's run is not a hit |
@@ -139,12 +138,12 @@ pytest news-retrieval/tests/
 | `OPENROUTER_API_KEY` | — | Required. Server-level API key for OpenRouter |
 | `OPENROUTER_MODEL` | — | Required. Default model string for relevance filtering, e.g. `openrouter/elephant-alpha` |
 | `ADMIN_API_KEY` | — | Required. Plaintext admin API key seeded into the DB on first startup |
+| `AUTH_SERVICE_URL` | — | Optional. URL of the auth-service (e.g. `http://auth-service:8001`). When set, Bearer tokens are validated by `POST {AUTH_SERVICE_URL}/validate`; falls back to local auth if unset or unreachable |
 | `POSTGRES_HOST` | `localhost` | PostgreSQL server hostname |
 | `POSTGRES_PORT` | `5432` | PostgreSQL server port |
 | `POSTGRES_DB` | `news-retrieval` | Database name |
 | `POSTGRES_USER` | `news-retrieval` | Database user |
 | `POSTGRES_PASSWORD` | — | Database password |
-| Docker network `agents-net` | external | Shared bridge network for inter-agent communication |
 
 ### External services
 
