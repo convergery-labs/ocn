@@ -15,7 +15,31 @@ Part of the [ocn monorepo](../CLAUDE.md).
 
 See [STRUCTURE.md](STRUCTURE.md) for descriptions.
 
-TODO: Add directory tree once service is implemented.
+```
+auth-service/
+├── Dockerfile
+├── requirements.txt
+├── requirements-test.txt
+├── pyproject.toml
+├── CLAUDE.md
+├── STRUCTURE.md
+├── README.md
+├── src/
+│   ├── __main__.py       # Entry point: init_db → seed_admin_key → uvicorn
+│   ├── app.py            # FastAPI app factory
+│   ├── auth.py           # require_auth / require_admin dependencies
+│   ├── db.py             # psycopg2 connection, DuplicateError, init_db
+│   ├── seed.py           # seed_admin_key() from AUTH_ADMIN_API_KEY
+│   ├── models/
+│   │   └── api_keys.py   # ApiKeyRow, generate_key, hash_key, CRUD
+│   └── routes/
+│       ├── keys.py       # GET /keys, POST /keys
+│       └── validate.py   # POST /validate
+└── tests/
+    ├── conftest.py        # DB setup, admin_key, user_key, client fixtures
+    ├── test_keys.py       # /keys endpoint tests
+    └── test_validate.py   # /validate endpoint tests
+```
 
 ## Guidance
 
