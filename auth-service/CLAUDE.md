@@ -49,5 +49,4 @@ auth-service/
 
 ## Maintenance
 
-- At the end of any session that restructures the codebase, update the Structure section above and the STRUCTURE.md file
 - Do not modify the Jira Board, Guidance, or Maintenance sections unless explicitly asked

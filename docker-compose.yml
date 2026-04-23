@@ -99,11 +99,20 @@ services:
     ports:
       - "8002:8002"
     env_file: .env
+    environment:
+      POSTGRES_HOST: ${SIGNAL_POSTGRES_HOST}
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${SIGNAL_POSTGRES_DB}
+      POSTGRES_USER: ${SIGNAL_POSTGRES_USER}
+      POSTGRES_PASSWORD: ${SIGNAL_POSTGRES_PASSWORD}
+      AUTH_SERVICE_URL: http://auth-service:8001
     depends_on:
       postgres-signal:
         condition: service_healthy
       qdrant:
         condition: service_healthy
+      auth-service:
+        condition: service_started
     networks:
       - ocn-internal
 

@@ -64,3 +64,4 @@ ocn/
 - When adding or removing a service, update the Services table and Structure tree above
 - Do not modify the Documentation Index, Jira Board, Guidance, or Maintenance sections unless explicitly asked
 - Each service's CLAUDE.md owns its own Structure section; update it there after restructuring
+- When making structural changes, update the STRUCTURE.md and, if required, the CLAUDE.md files
