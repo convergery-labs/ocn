@@ -65,7 +65,7 @@ news-retrieval/
     │   ├── domains.py
     │   └── run.py
     └── routes/           # Thin HTTP adapters (FastAPI APIRouters)
-        ├── api_keys.py
+        ├── grants.py
         ├── articles.py
         ├── domains.py
         ├── frequencies.py

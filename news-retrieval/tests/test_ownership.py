@@ -81,7 +81,7 @@ async def test_multi_key_access_to_same_domain(
 
     # Admin grants other_user_key access to the same domain
     resp = await client.post(
-        f"/api-keys/{other_user_key[1]}/domains",
+        f"/grants/{other_user_key[1]}/domains",
         json={"domain_ids": [domain_id]},
         headers={"Authorization": f"Bearer {admin_key}"},
     )
@@ -122,7 +122,7 @@ async def test_revoked_access_returns_403(
 
     # Grant other_user_key access
     await client.post(
-        f"/api-keys/{other_id}/domains",
+        f"/grants/{other_id}/domains",
         json={"domain_ids": [domain_id]},
         headers={"Authorization": f"Bearer {admin_key}"},
     )
@@ -141,7 +141,7 @@ async def test_revoked_access_returns_403(
 
     # Revoke other_user_key's access
     resp = await client.delete(
-        f"/api-keys/{other_id}/domains/{domain_id}",
+        f"/grants/{other_id}/domains/{domain_id}",
         headers={"Authorization": f"Bearer {admin_key}"},
     )
     assert resp.status_code == 204
@@ -190,7 +190,7 @@ async def test_admin_bypass_unaffected(
 async def test_grant_domains_endpoint_returns_domain_list(
     client, admin_key, user_key, other_user_key
 ) -> None:
-    """POST /api-keys/{id}/domains returns the updated domain list."""
+    """POST /grants/{id}/domains returns the updated domain list."""
     user_k, _ = user_key
     _, other_id = other_user_key
 
@@ -205,7 +205,7 @@ async def test_grant_domains_endpoint_returns_domain_list(
 
     # Grant other_user_key access
     resp = await client.post(
-        f"/api-keys/{other_id}/domains",
+        f"/grants/{other_id}/domains",
         json={"domain_ids": [domain_id]},
         headers={"Authorization": f"Bearer {admin_key}"},
     )
@@ -217,10 +217,10 @@ async def test_grant_domains_endpoint_returns_domain_list(
 async def test_revoke_domain_endpoint_404_on_missing_grant(
     client, admin_key, other_user_key
 ) -> None:
-    """DELETE /api-keys/{id}/domains/{did} returns 404 if grant absent."""
+    """DELETE /grants/{id}/domains/{did} returns 404 if grant absent."""
     _, other_id = other_user_key
     resp = await client.delete(
-        f"/api-keys/{other_id}/domains/99999",
+        f"/grants/{other_id}/domains/99999",
         headers={"Authorization": f"Bearer {admin_key}"},
     )
     assert resp.status_code == 404
