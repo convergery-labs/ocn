@@ -91,6 +91,17 @@ services:
     networks:
       - ocn-internal
 
+  postgres-signal-test:
+    image: postgres:16
+    ports:
+      - "5435:5432"
+    environment:
+      POSTGRES_DB: ${SIGNAL_POSTGRES_DB}
+      POSTGRES_USER: ${SIGNAL_POSTGRES_USER}
+      POSTGRES_PASSWORD: ${SIGNAL_POSTGRES_PASSWORD}
+    networks:
+      - ocn-internal
+
   # ---------------------------------------------------------------------------
   # signal-detection (port 8002)
   # ---------------------------------------------------------------------------
@@ -106,6 +117,7 @@ services:
       POSTGRES_USER: ${SIGNAL_POSTGRES_USER}
       POSTGRES_PASSWORD: ${SIGNAL_POSTGRES_PASSWORD}
       AUTH_SERVICE_URL: http://auth-service:8001
+      NEWS_RETRIEVAL_URL: http://news-retrieval:8000
     depends_on:
       postgres-signal:
         condition: service_healthy
