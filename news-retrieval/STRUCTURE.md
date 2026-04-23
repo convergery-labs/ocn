@@ -49,7 +49,9 @@ The application is a single FastAPI process. `POST /run` uses FastAPI `Backgroun
 | `GET/POST /domains` | Manage domains (all require auth; `GET` scoped to caller's owned + null-owner domains; `POST` records caller as owner; `PATCH /{id}` requires ownership or admin) |
 | `GET/POST /sources` | Manage sources (`POST` requires auth; users restricted to domains they own) |
 | `GET/POST /frequencies` | Manage frequencies (`POST` admin only) |
-| `GET/POST /api-keys` | Manage API keys (admin only; `POST` returns plaintext key once) |
+| `GET/POST /api-keys` | Manage API keys (admin only; `POST` returns plaintext key once; optional `domain_ids` pre-grants access) |
+| `POST /api-keys/{id}/domains` | Grant domain access to a key — admin only; upserts grants, returns updated domain list |
+| `DELETE /api-keys/{id}/domains/{domain_id}` | Revoke a single domain grant — admin only; 204 on success, 404 if absent |
 
 ### Execution flow
 
@@ -154,15 +156,16 @@ pytest news-retrieval/tests/
 
 ### Database schema
 
-Eight normalized tables. `run_statuses`, `frequencies`, `domains`, `sources`, `roles`, and the seed admin `api_key` are populated at startup; new rows can be added through the API at runtime. `runs` and `articles` are populated by pipeline runs.
+Nine normalized tables. `run_statuses`, `frequencies`, `domains`, `sources`, `roles`, and the seed admin `api_key` are populated at startup; new rows can be added through the API at runtime. `runs` and `articles` are populated by pipeline runs.
 
 | Table | Key columns | Notes |
 |-------|-------------|-------|
 | `roles` | `name` (PK) | Lookup table: `admin`, `user` |
 | `api_keys` | `key_hash`, `label`, `role`, `created_by`, `last_used_at` | Hashed Bearer tokens; seed admin key created at first startup |
+| `api_key_domains` | `api_key_id`, `domain_id` (composite PK) | Junction table: explicit domain-access grants per key; replaces `created_by` for access-control decisions |
 | `run_statuses` | `name` (PK) | Lookup table: `running`, `completed`, `failed` |
 | `frequencies` | `name`, `min_days_back` | e.g. daily=1, weekly=7, monthly=30 |
-| `domains` | `name`, `slug`, `description`, `created_by` | FK to `api_keys`; owner identity — null = legacy / globally accessible |
+| `domains` | `name`, `slug`, `description`, `created_by` | FK to `api_keys`; `created_by` is audit-only — access control uses `api_key_domains`; null = legacy / globally accessible |
 | `sources` | `url`, `domain_id`, `frequency_id`, `name`, `description` | FK to `domains` and `frequencies` |
 | `runs` | `name`, `domain`, `started_at`, `completed_at`, `status`, `article_count`, `summary`, `callback_url`, `model` | One row per `POST /run`; `status` FK to `run_statuses`; `model` records the LLM used |
 | `articles` | `run_id`, `url`, `title`, `summary`, `source`, `published` | FK to `runs` |

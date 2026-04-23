@@ -9,6 +9,7 @@ import httpx
 from pydantic import BaseModel, Field, model_validator
 
 import pipeline as pl
+from models.api_key_domains import has_domain_access
 from models.api_keys import ApiKeyRow
 from models.articles import create_articles, fetch_all_articles_for_run
 from models.atomic import atomic
@@ -205,11 +206,13 @@ def create_run_record(
                 f"Unknown domain slug: '{request.domain}'."
             )
         if caller["role"] != "admin":
-            owner = domain.get("created_by")
-            if owner is not None and owner != caller["id"]:
-                raise PermissionError(
-                    "You do not own this domain."
-                )
+            if domain.get("created_by") is not None:
+                if not has_domain_access(
+                    caller["id"], domain["id"]
+                ):
+                    raise PermissionError(
+                        "You do not own this domain."
+                    )
         resolved_model = request.model or os.environ["OPENROUTER_MODEL"]
         if not request.force:
             cached = get_cached_run_today(
