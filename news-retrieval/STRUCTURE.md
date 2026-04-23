@@ -49,8 +49,8 @@ The application is a single FastAPI process. `POST /run` uses FastAPI `Backgroun
 | `GET/POST /domains` | Manage domains (all require auth; `GET` scoped to caller's owned + null-owner domains; `POST` records caller as owner; `PATCH /{id}` requires ownership or admin) |
 | `GET/POST /sources` | Manage sources (`POST` requires auth; users restricted to domains they own) |
 | `GET/POST /frequencies` | Manage frequencies (`POST` admin only) |
-| `POST /api-keys/{id}/domains` | Grant domain access to a key — admin only; upserts grants, returns updated domain list |
-| `DELETE /api-keys/{id}/domains/{domain_id}` | Revoke a single domain grant — admin only; 204 on success, 404 if absent |
+| `POST /grants/{id}/domains` | Grant domain access to a key — admin only; upserts grants, returns updated domain list |
+| `DELETE /grants/{id}/domains/{domain_id}` | Revoke a single domain grant — admin only; 204 on success, 404 if absent |
 
 ### Execution flow
 
