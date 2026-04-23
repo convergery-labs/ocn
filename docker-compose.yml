@@ -4,7 +4,9 @@ services:
   # auth-service (port 8001)
   # ---------------------------------------------------------------------------
   auth-service:
-    build: auth-service/
+    build:
+      context: auth-service/
+      target: base
     ports:
       - "8001:8001"
     env_file: .env
@@ -34,7 +36,9 @@ services:
   # news-retrieval (port 8000)
   # ---------------------------------------------------------------------------
   news-retrieval:
-    build: news-retrieval/
+    build:
+      context: news-retrieval/
+      target: base
     ports:
       - "8000:8000"
     env_file: .env
@@ -106,7 +110,9 @@ services:
   # signal-detection (port 8002)
   # ---------------------------------------------------------------------------
   signal-detection:
-    build: signal-detection/
+    build:
+      context: signal-detection/
+      target: base
     ports:
       - "8002:8002"
     env_file: .env
