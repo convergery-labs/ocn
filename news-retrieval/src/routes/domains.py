@@ -1,17 +1,18 @@
 """Routes for /domains."""
 from fastapi import APIRouter, Depends, HTTPException
 
+from typing import Any
+
 from auth import require_auth
 from controllers.domains import DomainIn, DomainPatch, create, get_all, update
 from db import DuplicateError
-from models.api_keys import ApiKeyRow
 
 router = APIRouter()
 
 
 @router.get("/domains")
 async def get_domains(
-    caller: ApiKeyRow = Depends(require_auth),
+    caller: dict[str, Any] = Depends(require_auth),
 ) -> list[dict]:
     """Return domains visible to the caller."""
     return get_all(caller)
@@ -20,7 +21,7 @@ async def get_domains(
 @router.post("/domains", status_code=201)
 async def post_domain(
     body: DomainIn,
-    caller: ApiKeyRow = Depends(require_auth),
+    caller: dict[str, Any] = Depends(require_auth),
 ) -> dict:
     """Create a domain owned by the caller."""
     try:
@@ -39,7 +40,7 @@ async def post_domain(
 async def patch_domain(
     domain_id: int,
     body: DomainPatch,
-    caller: ApiKeyRow = Depends(require_auth),
+    caller: dict[str, Any] = Depends(require_auth),
 ) -> dict:
     """Update a domain; caller must own it or be an admin."""
     try:

@@ -52,10 +52,9 @@ news-retrieval/
     ├── auth.py           # require_auth / require_admin FastAPI dependencies
     ├── pipeline.py       # Fetch + relevance filter pipeline (fetch → LLM title filter)
     ├── db.py             # PostgreSQL connection, _Connection wrapper, DuplicateError, schema init
-    ├── seed.py           # Idempotent seed for run_statuses, frequencies, domains, sources, admin key
+    ├── seed.py           # Idempotent seed for run_statuses, frequencies, domains, sources
     ├── models/           # DB query functions (repository layer)
     │   ├── api_key_domains.py
-    │   ├── api_keys.py
     │   ├── articles.py
     │   ├── atomic.py
     │   ├── domains.py
@@ -83,5 +82,4 @@ news-retrieval/
 - Use the Jira board (project key `CON`) to track and reference cards
 
 ## Maintenance
-- At the end of any session that restructures the codebase, update the Structure section above and the STRUCTURE.md file to reflect the changes
 - Do not modify the Documentation Index, Jira Board, Guidance, or Maintenance sections unless explicitly asked

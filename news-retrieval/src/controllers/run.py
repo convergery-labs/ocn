@@ -9,8 +9,9 @@ import httpx
 from pydantic import BaseModel, Field, model_validator
 
 import pipeline as pl
+from typing import Any
+
 from models.api_key_domains import has_domain_access
-from models.api_keys import ApiKeyRow
 from models.articles import create_articles, fetch_all_articles_for_run
 from models.atomic import atomic
 from models.domains import (
@@ -186,7 +187,7 @@ def _create_subset_run(
 
 
 def create_run_record(
-    request: RunRequest, caller: ApiKeyRow
+    request: RunRequest, caller: dict[str, Any]
 ) -> RunCreateResult:
     """Validate domain ownership and create a run record.
 

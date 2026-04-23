@@ -3,9 +3,10 @@ from typing import Optional
 
 from pydantic import BaseModel
 
+from typing import Any
+
 from models import domains as domain_model
 from models.api_key_domains import grant_domains, has_domain_access
-from models.api_keys import ApiKeyRow
 
 
 class DomainIn(BaseModel):
@@ -24,7 +25,7 @@ class DomainPatch(BaseModel):
     description: Optional[str] = None
 
 
-def get_all(caller: ApiKeyRow) -> list[dict]:
+def get_all(caller: dict[str, Any]) -> list[dict]:
     """Return domains visible to *caller*.
 
     Admins see all domains; regular callers see only their own and
@@ -35,7 +36,7 @@ def get_all(caller: ApiKeyRow) -> list[dict]:
     return domain_model.list_domains(caller_id=caller["id"])
 
 
-def create(body: DomainIn, caller: ApiKeyRow) -> dict:
+def create(body: DomainIn, caller: dict[str, Any]) -> dict:
     """Create a domain owned by *caller*, grant access, and return it.
 
     Raises:
@@ -52,7 +53,7 @@ def create(body: DomainIn, caller: ApiKeyRow) -> dict:
 def update(
     domain_id: int,
     body: DomainPatch,
-    caller: ApiKeyRow,
+    caller: dict[str, Any],
 ) -> dict:
     """Update a domain if *caller* owns it or is an admin.
 
@@ -71,7 +72,7 @@ def update(
 
 def _assert_owner_or_admin(
     domain: dict,
-    caller: ApiKeyRow,
+    caller: dict[str, Any],
 ) -> None:
     """Raise PermissionError if caller lacks access and is not admin."""
     if caller["role"] == "admin":

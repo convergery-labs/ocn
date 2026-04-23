@@ -3,6 +3,8 @@ import asyncio
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response
 
+from typing import Any
+
 from auth import require_auth
 from controllers.run import (
     RunConflictError,
@@ -10,7 +12,6 @@ from controllers.run import (
     create_run_record,
     run_pipeline,
 )
-from models.api_keys import ApiKeyRow
 
 router = APIRouter()
 
@@ -20,7 +21,7 @@ async def run(
     request: RunRequest,
     background_tasks: BackgroundTasks,
     response: Response,
-    caller: ApiKeyRow = Depends(require_auth),
+    caller: dict[str, Any] = Depends(require_auth),
 ) -> dict:
     """Accept a pipeline run request and start it in the background."""
     try:
