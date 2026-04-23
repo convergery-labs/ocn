@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from auth import require_auth
 from db import DuplicateError
+from models.api_key_domains import has_domain_access
 from models.api_keys import ApiKeyRow
 from models.domains import get_domain_by_id
 from models.sources import SourceIn, create_source, list_sources
@@ -38,7 +39,9 @@ async def post_source(
                 status_code=404,
                 detail=f"domain_id {body.domain_id} not found.",
             )
-        if domain.get("created_by") != caller["id"]:
+        if domain.get("created_by") is not None and not (
+            has_domain_access(caller["id"], body.domain_id)
+        ):
             raise HTTPException(
                 status_code=403,
                 detail="You do not own this domain.",

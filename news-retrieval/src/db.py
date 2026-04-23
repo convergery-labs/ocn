@@ -193,6 +193,13 @@ def init_db() -> None:
             )
         """)
         conn.execute("""
+            CREATE TABLE IF NOT EXISTS api_key_domains (
+                api_key_id INTEGER NOT NULL REFERENCES api_keys(id),
+                domain_id  INTEGER NOT NULL REFERENCES domains(id),
+                PRIMARY KEY (api_key_id, domain_id)
+            )
+        """)
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS frequencies (
                 id            SERIAL PRIMARY KEY,
                 name          TEXT    NOT NULL UNIQUE,
@@ -300,3 +307,10 @@ def init_db() -> None:
             " ADD COLUMN IF NOT EXISTS model TEXT NOT NULL"
             " DEFAULT 'openrouter/elephant-alpha'"
         )
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS api_key_domains (
+                api_key_id INTEGER NOT NULL REFERENCES api_keys(id),
+                domain_id  INTEGER NOT NULL REFERENCES domains(id),
+                PRIMARY KEY (api_key_id, domain_id)
+            )
+        """)

@@ -54,6 +54,7 @@ news-retrieval/
     ├── db.py             # PostgreSQL connection, _Connection wrapper, DuplicateError, schema init
     ├── seed.py           # Idempotent seed for run_statuses, frequencies, domains, sources, admin key
     ├── models/           # DB query functions (repository layer)
+    │   ├── api_key_domains.py
     │   ├── api_keys.py
     │   ├── articles.py
     │   ├── atomic.py

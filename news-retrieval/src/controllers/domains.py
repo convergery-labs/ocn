@@ -4,6 +4,7 @@ from typing import Optional
 from pydantic import BaseModel
 
 from models import domains as domain_model
+from models.api_key_domains import grant_domains, has_domain_access
 from models.api_keys import ApiKeyRow
 
 
@@ -35,14 +36,16 @@ def get_all(caller: ApiKeyRow) -> list[dict]:
 
 
 def create(body: DomainIn, caller: ApiKeyRow) -> dict:
-    """Create a domain owned by *caller* and return it.
+    """Create a domain owned by *caller*, grant access, and return it.
 
     Raises:
         DuplicateError: if name or slug already exists.
     """
     domain_id = domain_model.insert_domain(
-        body.name, body.slug, body.description, created_by=caller["id"]
+        body.name, body.slug, body.description,
+        created_by=caller["id"],
     )
+    grant_domains(caller["id"], [domain_id])
     return domain_model.get_domain_by_id(domain_id)
 
 
@@ -70,9 +73,10 @@ def _assert_owner_or_admin(
     domain: dict,
     caller: ApiKeyRow,
 ) -> None:
-    """Raise ValueError if caller is neither owner nor admin."""
+    """Raise PermissionError if caller lacks access and is not admin."""
     if caller["role"] == "admin":
         return
-    if domain.get("created_by") == caller["id"]:
+    if domain.get("created_by") is None:
         return
-    raise PermissionError("You do not own this domain.")
+    if not has_domain_access(caller["id"], domain["id"]):
+        raise PermissionError("You do not own this domain.")

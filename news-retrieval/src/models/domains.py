@@ -47,8 +47,9 @@ def list_domains(
 ) -> list[DomainRow]:
     """Return domains ordered by id.
 
-    If *caller_id* is provided, only domains owned by that caller
-    or with no owner are returned.  Pass ``None`` to return all.
+    If *caller_id* is provided, only null-owner domains and domains
+    explicitly granted to that caller (via api_key_domains) are
+    returned.  Pass ``None`` to return all.
     """
     with get_db() as conn:
         if caller_id is None:
@@ -57,9 +58,13 @@ def list_domains(
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM domains"
-                " WHERE created_by = ? OR created_by IS NULL"
-                " ORDER BY id",
+                "SELECT d.* FROM domains d"
+                " WHERE d.created_by IS NULL"
+                " OR d.id IN ("
+                "   SELECT domain_id FROM api_key_domains"
+                "   WHERE api_key_id = ?"
+                " )"
+                " ORDER BY d.id",
                 (caller_id,),
             ).fetchall()
     return [dict(r) for r in rows]  # type: ignore[return-value]

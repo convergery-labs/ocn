@@ -93,6 +93,17 @@ def list_api_keys() -> list[ApiKeyRow]:
     return [dict(r) for r in rows]  # type: ignore[return-value]
 
 
+def get_api_key_by_id(key_id: int) -> Optional[ApiKeyRow]:
+    """Return the api_key row for *key_id*, or ``None`` if not found."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT id, label, role, created_by, created_at,"
+            " last_used_at FROM api_keys WHERE id = ?",
+            (key_id,),
+        ).fetchone()
+    return dict(row) if row else None  # type: ignore[return-value]
+
+
 def has_any_admin_key() -> bool:
     """Return True if at least one admin key exists."""
     with get_db() as conn:

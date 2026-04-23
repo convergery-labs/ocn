@@ -23,6 +23,7 @@ os.environ["OPENROUTER_MODEL"] = "test-model"
 
 from app import create_app  # noqa: E402
 from db import get_db, init_db  # noqa: E402
+from models.api_key_domains import grant_domains  # noqa: E402
 from models.api_keys import create_api_key, generate_key  # noqa: E402
 from models.domains import insert_domain  # noqa: E402
 from seed import seed  # noqa: E402
@@ -112,11 +113,13 @@ def other_user_key(db_setup: None) -> tuple[str, int]:
 
 @pytest.fixture(scope="session")
 def user_domain(user_key: tuple[str, int]) -> int:
-    """Return the id of a domain owned by user_key."""
+    """Return the id of a domain owned by and granted to user_key."""
     _, user_id = user_key
-    return insert_domain(
+    domain_id = insert_domain(
         "Test Domain", "test-domain", None, user_id
     )
+    grant_domains(user_id, [domain_id])
+    return domain_id
 
 
 @pytest.fixture(scope="session")
