@@ -13,3 +13,10 @@ ENV PYTHONPATH=/app/src
 CMD ["python", "-m", "src", "--host", "0.0.0.0", "--port", "8002"]
 
 FROM base AS dev
+
+FROM base AS test
+COPY requirements-test.txt .
+RUN pip install --no-cache-dir -r requirements-test.txt
+COPY tests/ tests/
+COPY pyproject.toml .
+CMD ["pytest", "tests/", "-v"]
