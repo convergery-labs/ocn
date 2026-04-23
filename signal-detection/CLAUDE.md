@@ -40,5 +40,4 @@ TODO: Add directory tree once service is implemented.
 
 ## Maintenance
 
-- At the end of any session that restructures the codebase, update the Structure section above and the STRUCTURE.md file to reflect the changes
 - Do not modify the Jira Board, Guidance, or Maintenance sections unless explicitly asked
