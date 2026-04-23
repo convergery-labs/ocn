@@ -1,5 +1,4 @@
 """Tests for multi-tenant ownership enforcement."""
-import pytest
 
 
 async def test_post_source_by_non_owner_returns_403(
@@ -227,31 +226,3 @@ async def test_revoke_domain_endpoint_404_on_missing_grant(
     assert resp.status_code == 404
 
 
-async def test_create_key_with_domain_ids_grants_access(
-    client, admin_key, user_domain, daily_frequency_id
-) -> None:
-    """POST /api-keys with domain_ids immediately grants the new key access."""
-    # Create a new user key with access pre-granted to user_domain
-    resp = await client.post(
-        "/api-keys",
-        json={
-            "label": "pre-granted-key",
-            "role": "user",
-            "domain_ids": [user_domain],
-        },
-        headers={"Authorization": f"Bearer {admin_key}"},
-    )
-    assert resp.status_code == 201
-    new_key = resp.json()["key"]
-
-    # The new key can POST source to user_domain immediately
-    resp = await client.post(
-        "/sources",
-        json={
-            "url": "http://pre-granted.example.com/feed.xml",
-            "domain_id": user_domain,
-            "frequency_id": daily_frequency_id,
-        },
-        headers={"Authorization": f"Bearer {new_key}"},
-    )
-    assert resp.status_code == 201

@@ -33,8 +33,8 @@ The application is a single FastAPI process. `POST /run` uses FastAPI `Backgroun
 | **Repository** | `src/models/` | SQL query functions + Pydantic input models; no HTTP concepts |
 | **Pipeline** | `src/pipeline.py` | Stateless pipeline: parallel RSS fetch, title-based relevance filter (Pass 1 LLM); returns list of relevant article dicts |
 | **Database** | `src/db.py` | PostgreSQL connection (`psycopg2`), `_Connection` wrapper, `DuplicateError`, ambient transaction via `ContextVar`, schema init + migrations |
-| **Auth** | `src/auth.py` | `require_auth` / `require_admin` FastAPI dependencies; delegates to `POST {AUTH_SERVICE_URL}/validate` when set, falls back to local DB hash validation |
-| **Seed data** | `src/seed.py` | Idempotent batch seed for `run_statuses`, `frequencies`, `domains`, `sources`, and admin API key |
+| **Auth** | `src/auth.py` | `require_auth` / `require_admin` FastAPI dependencies; delegates all token validation to `POST {AUTH_SERVICE_URL}/validate`; returns 503 if unconfigured |
+| **Seed data** | `src/seed.py` | Idempotent batch seed for `run_statuses`, `frequencies`, `domains`, and `sources` |
 
 ### HTTP API
 
@@ -49,7 +49,6 @@ The application is a single FastAPI process. `POST /run` uses FastAPI `Backgroun
 | `GET/POST /domains` | Manage domains (all require auth; `GET` scoped to caller's owned + null-owner domains; `POST` records caller as owner; `PATCH /{id}` requires ownership or admin) |
 | `GET/POST /sources` | Manage sources (`POST` requires auth; users restricted to domains they own) |
 | `GET/POST /frequencies` | Manage frequencies (`POST` admin only) |
-| `GET/POST /api-keys` | Manage API keys (admin only; `POST` returns plaintext key once; optional `domain_ids` pre-grants access) |
 | `POST /api-keys/{id}/domains` | Grant domain access to a key — admin only; upserts grants, returns updated domain list |
 | `DELETE /api-keys/{id}/domains/{domain_id}` | Revoke a single domain grant — admin only; 204 on success, 404 if absent |
 
@@ -107,14 +106,14 @@ pytest news-retrieval/tests/
 
 | Module | Coverage |
 |--------|----------|
-| `test_auth.py` | Missing/invalid auth header → 422/401; non-admin on admin endpoint → 403; delegated-path: valid key, rejected key, unreachable fallback |
+| `test_auth.py` | Missing/invalid auth header → 422/401; non-admin on admin endpoint → 403; delegated-path: valid key, rejected key, 503 when `AUTH_SERVICE_URL` unset |
 | `test_runs.py` | `POST /run`: 202 + DB record created; unknown domain → 404; non-owner → 403 |
 | `test_guard_chain.py` | CON-111 concurrent guard → 409 with `run_id`; `force=true` bypasses guard |
 | `test_cache_guard.py` | CON-120 same-day cache guard → 200 with `cache_hit: true`; different params miss cache; `force=true` bypasses; yesterday's run is not a hit |
 | `test_subset_guard.py` | Time-window subset guard; reuses articles from wider same-day run |
 | `test_pagination.py` | Cursor advances on `GET /runs` and `GET /runs/{id}/articles`; last page has `next_cursor: null` |
 | `test_webhook.py` | `callback_url` POSTed with `status=completed` on success and `status=failed` on pipeline error |
-| `test_ownership.py` | `POST /sources` and `PATCH /domains/{id}` reject non-owners → 403; null-owner domains visible to all users |
+| `test_ownership.py` | `POST /sources` and `PATCH /domains/{id}` reject non-owners → 403; null-owner domains visible to all users; multi-key grants; grant revocation; admin bypass |
 | `test_pipeline.py` | LLM batch error keeps all articles (fail-open) |
 
 ## Dependencies
@@ -139,8 +138,7 @@ pytest news-retrieval/tests/
 |--------------------|---------|-------------|
 | `OPENROUTER_API_KEY` | — | Required. Server-level API key for OpenRouter |
 | `OPENROUTER_MODEL` | — | Required. Default model string for relevance filtering, e.g. `openrouter/elephant-alpha` |
-| `ADMIN_API_KEY` | — | Required. Plaintext admin API key seeded into the DB on first startup |
-| `AUTH_SERVICE_URL` | — | Optional. URL of the auth-service (e.g. `http://auth-service:8001`). When set, Bearer tokens are validated by `POST {AUTH_SERVICE_URL}/validate`; falls back to local auth if unset or unreachable |
+| `AUTH_SERVICE_URL` | — | Required. URL of the auth-service (e.g. `http://auth-service:8001`). All Bearer tokens are validated by `POST {AUTH_SERVICE_URL}/validate`; returns 503 if unset |
 | `POSTGRES_HOST` | `localhost` | PostgreSQL server hostname |
 | `POSTGRES_PORT` | `5432` | PostgreSQL server port |
 | `POSTGRES_DB` | `news-retrieval` | Database name |
@@ -156,16 +154,14 @@ pytest news-retrieval/tests/
 
 ### Database schema
 
-Nine normalized tables. `run_statuses`, `frequencies`, `domains`, `sources`, `roles`, and the seed admin `api_key` are populated at startup; new rows can be added through the API at runtime. `runs` and `articles` are populated by pipeline runs.
+Seven normalized tables. `run_statuses`, `frequencies`, `domains`, and `sources` are populated at startup; new rows can be added through the API at runtime. `runs` and `articles` are populated by pipeline runs. API key lifecycle is managed entirely by auth-service — news-retrieval stores only per-key domain grants.
 
 | Table | Key columns | Notes |
 |-------|-------------|-------|
-| `roles` | `name` (PK) | Lookup table: `admin`, `user` |
-| `api_keys` | `key_hash`, `label`, `role`, `created_by`, `last_used_at` | Hashed Bearer tokens; seed admin key created at first startup |
-| `api_key_domains` | `api_key_id`, `domain_id` (composite PK) | Junction table: explicit domain-access grants per key; replaces `created_by` for access-control decisions |
+| `api_key_domains` | `api_key_id`, `domain_id` (composite PK) | Junction table: explicit domain-access grants per key (key IDs come from auth-service) |
 | `run_statuses` | `name` (PK) | Lookup table: `running`, `completed`, `failed` |
 | `frequencies` | `name`, `min_days_back` | e.g. daily=1, weekly=7, monthly=30 |
-| `domains` | `name`, `slug`, `description`, `created_by` | FK to `api_keys`; `created_by` is audit-only — access control uses `api_key_domains`; null = legacy / globally accessible |
+| `domains` | `name`, `slug`, `description`, `created_by` | `created_by` is audit-only (plain integer, no FK); access control uses `api_key_domains`; null = globally accessible |
 | `sources` | `url`, `domain_id`, `frequency_id`, `name`, `description` | FK to `domains` and `frequencies` |
 | `runs` | `name`, `domain`, `started_at`, `completed_at`, `status`, `article_count`, `summary`, `callback_url`, `model` | One row per `POST /run`; `status` FK to `run_statuses`; `model` records the LLM used |
 | `articles` | `run_id`, `url`, `title`, `summary`, `source`, `published` | FK to `runs` |

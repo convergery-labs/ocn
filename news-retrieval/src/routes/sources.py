@@ -3,10 +3,11 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from typing import Any
+
 from auth import require_auth
 from db import DuplicateError
 from models.api_key_domains import has_domain_access
-from models.api_keys import ApiKeyRow
 from models.domains import get_domain_by_id
 from models.sources import SourceIn, create_source, list_sources
 
@@ -24,7 +25,7 @@ async def get_sources(
 @router.post("/sources", status_code=201)
 async def post_source(
     body: SourceIn,
-    caller: ApiKeyRow = Depends(require_auth),
+    caller: dict[str, Any] = Depends(require_auth),
 ) -> dict:
     """Add a new RSS feed source.
 

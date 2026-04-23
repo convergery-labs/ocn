@@ -5,58 +5,55 @@ from typing import Any
 import httpx
 from fastapi import Depends, Header, HTTPException
 
-from models.api_keys import ApiKeyRow, get_by_hash, hash_key, touch_last_used
+
+class CallerInfo(dict):
+    """Caller identity returned by require_auth.
+
+    Always contains ``id`` (int) and ``role`` (str), sourced from the
+    auth-service response.
+    """
 
 
 async def require_auth(
     authorization: str = Header(...),
 ) -> dict[str, Any]:
-    """Validate the Bearer token and return key metadata.
+    """Validate the Bearer token via the auth-service.
 
-    When ``AUTH_SERVICE_URL`` is set, delegates to
-    ``POST {AUTH_SERVICE_URL}/validate``. Falls back to local auth if
-    the remote service is unreachable. When ``AUTH_SERVICE_URL`` is not
-    set, validates locally against the news-retrieval DB.
+    Delegates to ``POST {AUTH_SERVICE_URL}/validate``.
 
     Raises:
-        HTTPException 401: if the header is absent or the key is unknown.
+        HTTPException 401: if the token is rejected by auth-service.
+        HTTPException 503: if AUTH_SERVICE_URL is not configured.
     """
     auth_service_url = os.environ.get("AUTH_SERVICE_URL")
-
-    if auth_service_url:
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.post(
-                    f"{auth_service_url}/validate",
-                    headers={"Authorization": authorization},
-                )
-            if resp.status_code == 200:
-                data = resp.json()
-                return {"id": data["key_id"], "role": data["role"]}
-            raise HTTPException(
-                status_code=401, detail="Invalid or unknown API key."
+    if not auth_service_url:
+        raise HTTPException(
+            status_code=503,
+            detail="AUTH_SERVICE_URL is not configured.",
+        )
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(
+                f"{auth_service_url}/validate",
+                headers={"Authorization": authorization},
             )
-        except httpx.HTTPError:
-            pass  # auth-service unreachable — fall through to local auth
-
-    if not authorization.startswith("Bearer "):
+    except httpx.HTTPError:
         raise HTTPException(
-            status_code=401, detail="Invalid Authorization header."
+            status_code=503,
+            detail="Auth service unreachable.",
         )
-    raw_key = authorization[len("Bearer "):]
-    key_hash = hash_key(raw_key)
-    row = get_by_hash(key_hash)
-    if row is None:
+    if resp.status_code != 200:
         raise HTTPException(
-            status_code=401, detail="Invalid or unknown API key."
+            status_code=401,
+            detail="Invalid or unknown API key.",
         )
-    touch_last_used(row["id"])
-    return row
+    data = resp.json()
+    return {"id": data["key_id"], "role": data["role"]}
 
 
 def require_admin(
-    caller: ApiKeyRow = Depends(require_auth),
-) -> ApiKeyRow:
+    caller: dict[str, Any] = Depends(require_auth),
+) -> dict[str, Any]:
     """Require the caller to hold the admin role.
 
     Raises:
