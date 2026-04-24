@@ -8,7 +8,7 @@ Fetches RSS feeds and filters articles by relevance to a domain using LLMs. Retu
 
 - **Server**: FastAPI + uvicorn
 - **Database**: PostgreSQL (persisted via Docker volume)
-- **LLM**: Configurable via `OPENROUTER_MODEL` (e.g. `openrouter/elephant-alpha`) via OpenRouter
+- **LLM**: Configurable via `OPENROUTER_MODEL` (e.g. `inclusionai/ling-2.6-flash:free`) via OpenRouter
 
 ## Quick start
 
@@ -26,7 +26,7 @@ The API is available at `http://localhost:8000`. Interactive docs at `/docs`.
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `OPENROUTER_API_KEY` | Yes | Server-level API key for OpenRouter |
-| `OPENROUTER_MODEL` | Yes | Default model for relevance filtering, e.g. `openrouter/elephant-alpha` |
+| `OPENROUTER_MODEL` | Yes | Default model for relevance filtering, e.g. `inclusionai/ling-2.6-flash:free` |
 | `ADMIN_API_KEY` | Yes | Plaintext admin API key seeded into the DB on first startup |
 | `POSTGRES_HOST` | No | PostgreSQL host (default: `localhost`) |
 | `POSTGRES_PORT` | No | PostgreSQL port (default: `5432`) |

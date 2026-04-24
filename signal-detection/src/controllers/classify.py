@@ -323,7 +323,7 @@ def _claim_embedding_model() -> str:
 
 def _llm_model() -> str:
     """Return the configured LLM model for claim extraction."""
-    return os.environ.get("OPENROUTER_MODEL", "openrouter/elephant-alpha")
+    return os.environ.get("OPENROUTER_MODEL", "inclusionai/ling-2.6-flash:free")
 
 
 def _langfuse_client():
