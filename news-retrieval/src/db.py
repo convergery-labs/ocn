@@ -198,6 +198,7 @@ def init_db() -> None:
                 frequency_id INTEGER NOT NULL REFERENCES frequencies(id),
                 name         TEXT,
                 description  TEXT,
+                no_fetch     BOOLEAN NOT NULL DEFAULT FALSE,
                 created_at   TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -239,6 +240,7 @@ def init_db() -> None:
                 url         TEXT,
                 title       TEXT,
                 summary     TEXT,
+                body        TEXT,
                 source      TEXT,
                 published   TEXT,
                 created_at  TIMESTAMPTZ NOT NULL
@@ -284,4 +286,13 @@ def init_db() -> None:
             "ALTER TABLE runs"
             " ADD COLUMN IF NOT EXISTS model TEXT NOT NULL"
             " DEFAULT 'openrouter/elephant-alpha'"
+        )
+        conn.execute(
+            "ALTER TABLE articles"
+            " ADD COLUMN IF NOT EXISTS body TEXT"
+        )
+        conn.execute(
+            "ALTER TABLE sources"
+            " ADD COLUMN IF NOT EXISTS no_fetch"
+            " BOOLEAN NOT NULL DEFAULT FALSE"
         )

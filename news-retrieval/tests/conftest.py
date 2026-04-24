@@ -192,6 +192,18 @@ async def real_auth_client() -> AsyncClient:
 
 
 @pytest.fixture(autouse=True)
+def mock_trafilatura(monkeypatch) -> None:
+    """Patch trafilatura to avoid live HTTP fetches in unit tests.
+
+    Tests that exercise the Trafilatura fallback path override this
+    with their own ``patch`` context managers.
+    """
+    import trafilatura as _traf
+    monkeypatch.setattr(_traf, "fetch_url", lambda url: None)
+    monkeypatch.setattr(_traf, "extract", lambda html: None)
+
+
+@pytest.fixture(autouse=True)
 def clean_runs() -> None:
     """Delete all run and article rows after each test."""
     yield

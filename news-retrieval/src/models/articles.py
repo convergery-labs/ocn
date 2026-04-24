@@ -34,7 +34,7 @@ def create_articles(articles: list[dict]) -> None:
     with get_db() as conn:
         conn.execute_values(
             "INSERT INTO articles"
-            " (run_id, url, title, summary, source, published)"
+            " (run_id, url, title, summary, source, published, body)"
             " VALUES %s",
             [
                 (
@@ -44,6 +44,7 @@ def create_articles(articles: list[dict]) -> None:
                     a.get("summary"),
                     a.get("source"),
                     a.get("published"),
+                    a.get("body"),
                 )
                 for a in articles
             ],
