@@ -4,7 +4,6 @@ import logging
 import click
 import uvicorn
 
-from app import app
 from db import init_db
 from seed import seed
 
@@ -22,6 +21,8 @@ def cli() -> None:
 @click.option("--port", default=8002)
 def serve(host: str, port: int) -> None:
     """Start the uvicorn server."""
+    from app import app
+
     logger.info("Initialising database...")
     init_db()
     logger.info("Seeding database...")
