@@ -10,7 +10,7 @@ COPY src/ src/
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app/src
 
-CMD ["python", "-m", "src", "--host", "0.0.0.0", "--port", "8002"]
+CMD ["python", "-m", "src", "serve", "--host", "0.0.0.0", "--port", "8002"]
 
 FROM base AS dev
 
