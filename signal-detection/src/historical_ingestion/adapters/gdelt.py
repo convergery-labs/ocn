@@ -45,6 +45,15 @@ class GDELTAdapter(AbstractHistoricalAdapter):
                 timeout=30,
             )
             resp.raise_for_status()
+            text = resp.text.strip()
+            if not text:
+                logger.info("GDELT returned no results")
+                return []
+            if not resp.headers.get("content-type", "").startswith(
+                "application/json"
+            ):
+                logger.error("GDELT API error: %s", text)
+                return []
             data = resp.json()
         except Exception:
             logger.exception("GDELT API request failed")

@@ -46,6 +46,10 @@ def run_ingestion(
     if not docs:
         return {"total": 0, "new": 0, "skipped": 0, "failed": 0}
 
+    if dry_run:
+        _log_cost_estimate(docs)
+        return {"total": total, "new": total, "skipped": 0, "failed": 0}
+
     qdrant = _qdrant_client()
     _ensure_collection(qdrant, collection)
 
@@ -60,15 +64,6 @@ def run_ingestion(
     logger.info(
         "Deduplication: %d new, %d already in Qdrant", len(new_docs), skipped
     )
-
-    if dry_run:
-        _log_cost_estimate(new_docs)
-        return {
-            "total": total,
-            "new": len(new_docs),
-            "skipped": skipped,
-            "failed": 0,
-        }
 
     failed = _embed_and_upsert(qdrant, collection, new_docs)
 
