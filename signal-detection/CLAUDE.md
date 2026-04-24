@@ -4,9 +4,9 @@ Part of the [ocn monorepo](../CLAUDE.md).
 
 ## Overview
 
-TODO: Describe the signal-detection service — its role in the OCN platform,
-what signals it detects, how it uses Qdrant for vector similarity, and how
-other services or consumers interact with it.
+`signal-detection` is a FastAPI service (port 8002) that classifies news articles as **Signal**, **Weak Signal**, or **Noise** using vector similarity against a rolling reference corpus stored in Qdrant. It is a downstream consumer of `news-retrieval` — it never ingests articles directly.
+
+The corpus is bootstrapped via a CLI command that fetches historical articles from `news-retrieval`, embeds them with `text-embedding-3-large` (via OpenRouter), clusters them into topic groups with MiniBatchKMeans, and writes `topic_clusters` + `corpus_centroids` rows to Postgres.
 
 ## Documentation Index
 | Doc | Read when | Page ID |
@@ -31,7 +31,32 @@ Confluence space: `Projects` — Cloud: `opengrowthventures.atlassian.net`
 
 See [STRUCTURE.md](STRUCTURE.md) for descriptions.
 
-TODO: Add directory tree once service is implemented.
+```
+signal-detection/
+├── Dockerfile
+├── requirements.txt
+├── requirements-test.txt
+├── pyproject.toml
+├── src/
+│   ├── __main__.py          Entry point (Click group: serve, bootstrap)
+│   ├── app.py               FastAPI factory
+│   ├── auth.py              Bearer token validation
+│   ├── db.py                DB infrastructure (psycopg2, init_db)
+│   ├── seed.py              Seed classification_statuses
+│   ├── controllers/
+│   │   ├── classify.py      Classification job orchestration
+│   │   └── bootstrap.py     Corpus bootstrap pipeline
+│   ├── models/
+│   │   ├── jobs.py          classification_jobs repository
+│   │   └── clusters.py      topic_clusters / corpus_centroids repository
+│   └── routes/
+│       ├── health.py        GET /health
+│       └── classify.py      POST /classify, GET /classifications/*
+└── tests/
+    ├── conftest.py
+    ├── test_smoke.py
+    └── test_classify.py
+```
 
 ## Guidance
 

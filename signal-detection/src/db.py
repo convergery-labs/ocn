@@ -184,6 +184,19 @@ def init_db() -> None:
             )
         """)
         conn.execute("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'corpus_centroids_cluster_id_key'
+                ) THEN
+                    ALTER TABLE corpus_centroids
+                    ADD CONSTRAINT corpus_centroids_cluster_id_key
+                    UNIQUE (cluster_id);
+                END IF;
+            END$$
+        """)
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS classification_jobs (
                 id SERIAL PRIMARY KEY,
                 run_id TEXT NOT NULL,

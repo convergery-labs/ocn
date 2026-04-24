@@ -1,5 +1,13 @@
 # ocn
 
+## Session Startup Rules
+- Do not proactively read files to understand the project.
+- Do not summarise the codebase unless explicitly asked.
+- Ask clarifying questions instead of exploring files to resolve ambiguity.
+- When working on a Jira task,
+  - Use the STRUCTURE.md file to orient yourself with files relevant to the task.
+  - Always fetch the task first before deciding which project files to read
+
 ## How to use this file
 For service-specific context and documentation links, read the relevant service's CLAUDE.md.
 
@@ -64,4 +72,4 @@ ocn/
 - When adding or removing a service, update the Services table and Structure tree above
 - Do not modify the Documentation Index, Jira Board, Guidance, or Maintenance sections unless explicitly asked
 - Each service's CLAUDE.md owns its own Structure section; update it there after restructuring
-- When making structural changes, update the STRUCTURE.md and, if required, the CLAUDE.md files
+- When making structural changes, update the STRUCTURE.md and, if required, the CLAUDE.md and README.md files

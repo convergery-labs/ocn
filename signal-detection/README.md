@@ -2,8 +2,9 @@
 
 Part of the [ocn monorepo](../README.md). See root README for full system setup.
 
-Classifies articles against topic clusters to detect signals, weak signals, and
-noise using vector similarity (Qdrant) and LLM scoring.
+Classifies news articles as Signal, Weak Signal, or Noise using vector
+similarity against a reference corpus stored in Qdrant. Downstream consumer of
+`news-retrieval` — does not ingest articles directly.
 
 ## Stack
 
@@ -15,8 +16,12 @@ noise using vector similarity (Qdrant) and LLM scoring.
 ## Quick Start
 
 ```bash
-# From the repo root
+# From the repo root — start the HTTP service
 docker compose up postgres-signal qdrant signal-detection
+
+# Bootstrap the corpus (run once per domain before classifying)
+docker compose run --rm signal-detection python -m src bootstrap \
+    --domain ai_news --days-back 180 --k 8
 ```
 
 ## Environment Variables
@@ -31,6 +36,27 @@ docker compose up postgres-signal qdrant signal-detection
 | `QDRANT_PORT` | No | `6333` | Qdrant port |
 | `NEWS_RETRIEVAL_URL` | Yes | — | news-retrieval base URL for run validation |
 | `AUTH_SERVICE_URL` | Yes | — | auth-service base URL for token validation |
+| `OPENROUTER_API_KEY` | Yes (bootstrap) | — | OpenRouter API key for embeddings |
+| `EMBEDDING_MODEL` | No | `openai/text-embedding-3-large` | Embedding model (OpenRouter prefix format) |
+
+## Bootstrap CLI
+
+Seeds the Qdrant corpus before the service can classify articles. Idempotent — re-runs skip already-embedded documents.
+
+```bash
+docker compose run --rm signal-detection python -m src bootstrap \
+    --domain <slug> \
+    --days-back 180 \
+    --k 8
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--domain` | required | Domain slug (e.g. `ai_news`, `smart_money`) |
+| `--days-back` | `180` | How many days of historical articles to fetch |
+| `--k` | `8` | Number of topic clusters (k-means k) |
+
+The command fetches completed runs from `news-retrieval`, embeds article bodies via OpenRouter (`text-embedding-3-large`, truncated to 30,000 characters), clusters with MiniBatchKMeans, and writes `topic_clusters` + `corpus_centroids` rows to Postgres with one Qdrant collection per cluster.
 
 ## API
 
