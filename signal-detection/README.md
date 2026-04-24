@@ -59,6 +59,38 @@ docker compose run --rm signal-detection python -m src bootstrap \
 
 The command fetches completed runs from `news-retrieval`, embeds article bodies via OpenRouter (`text-embedding-3-large`, truncated to 30,000 characters), clusters with MiniBatchKMeans, and writes `topic_clusters` + `corpus_centroids` rows to Postgres with one Qdrant collection per cluster.
 
+## Historical Ingest CLI
+
+Seeds the Qdrant corpus with historical documents from external sources. Qdrant-only — no Postgres involvement. Idempotent: re-runs skip already-upserted documents.
+
+```bash
+docker compose run --rm signal-detection python -m src historical-ingest \
+    --adapter gdelt \
+    --query "large language model" \
+    --from 2023-01-01 \
+    --to 2023-03-31
+
+docker compose run --rm signal-detection python -m src historical-ingest \
+    --adapter arxiv \
+    --query "attention mechanism" \
+    --from 2017-06-01 \
+    --to 2017-12-31 \
+    --dry-run
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--adapter` | required | `gdelt` (news articles) or `arxiv` (research papers) |
+| `--query` | required | Keyword or phrase to search for |
+| `--from` | required | Inclusive start date (`YYYY-MM-DD`) |
+| `--to` | required | Inclusive end date (`YYYY-MM-DD`) |
+| `--collection` | `historical_{adapter}` | Target Qdrant collection name |
+| `--dry-run` | `false` | Report document count without embedding |
+
+**GDELT**: returns up to 250 articles per call (API hard limit). Narrow the date range for more targeted results. Article bodies are fetched via Trafilatura; articles with no extractable body are skipped.
+
+**arXiv**: paginates through all matching papers in batches of 100. Uses the paper abstract as the document body.
+
 ## Promote Corpus CLI
 
 Runs the nightly deferred corpus promotion job. Processes all `deferred_promotions` rows that are due (`promote_at <= now()`), re-scores each article against the current centroid, and updates the centroid for confirmed Signal documents.

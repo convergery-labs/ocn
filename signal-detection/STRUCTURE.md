@@ -13,7 +13,8 @@
 
 ```
 src/
-├── __main__.py          Entry point — Click group: serve, bootstrap, promote-corpus
+├── __main__.py          Entry point — Click group: serve, bootstrap, promote-corpus,
+│                                      historical-ingest
 ├── app.py               App factory — assembles FastAPI, registers routers
 ├── auth.py              Infrastructure — Bearer token validation via auth-service
 ├── db.py                Infrastructure — psycopg2 wrapper, init_db(), transaction()
@@ -25,12 +26,21 @@ src/
 │   ├── classify.py      Controller — job submission and background execution
 │   ├── bootstrap.py     Controller — corpus bootstrap pipeline orchestration
 │   └── promote.py       Controller — nightly deferred corpus promotion job
-└── models/
-    ├── jobs.py           Repository — classification_jobs, classifications, deferred_promotions
-    └── clusters.py       Repository — topic_clusters, corpus_centroids (incl. EWMA update)
+├── models/
+│   ├── jobs.py           Repository — classification_jobs, classifications, deferred_promotions
+│   └── clusters.py       Repository — topic_clusters, corpus_centroids (incl. EWMA update)
+└── historical_ingestion/
+    ├── schema.py         HistoricalDocument dataclass — common shape for all adapters
+    ├── pipeline.py       Orchestrator — fetch, deduplicate, embed, upsert to Qdrant
+    └── adapters/
+        ├── base.py       AbstractHistoricalAdapter — fetch() interface
+        ├── gdelt.py      GDELT 2.0 Doc API adapter
+        └── arxiv.py      arXiv Atom feed adapter
 ```
 
 Dependencies flow one way: `__main__` → `app` → `routes` → `controllers` → `models` → `db`.
+`historical_ingestion` is a self-contained package; `pipeline.py` imports only adapters,
+schema, and infrastructure (openai, qdrant-client) — no Postgres dependency.
 
 ## Bootstrap Pipeline
 
@@ -66,6 +76,25 @@ For each `deferred_promotions` row where `promote_at <= NOW()` and `promoted_at 
 
 Each promotion is committed in its own transaction so a single failure does not abort the batch.
 
+## Historical Ingestion Pipeline
+
+Invoked via `python -m src historical-ingest --adapter <gdelt|arxiv> --query <text> --from YYYY-MM-DD --to YYYY-MM-DD [--collection <name>] [--dry-run]`.
+
+Adds historical documents (news articles or research papers) directly to a Qdrant
+collection with no Postgres involvement. Used to widen corpus coverage beyond what
+`news-retrieval` provides.
+
+1. **Fetch** — delegates to the selected adapter (GDELT or arXiv).
+   - **GDELT**: queries the GDELT 2.0 Doc API (up to 250 results per call); fetches article body via Trafilatura; skips articles where body extraction fails.
+   - **arXiv**: queries the arXiv Atom feed API, paginates in batches of 100, uses paper abstract as body.
+2. **Deduplicate** — computes `uuid5(NAMESPACE_URL, url)` for each document; checks Qdrant for existing point IDs; skips documents already present.
+3. **Embed** — batches of 50 bodies sent to OpenRouter (`text-embedding-3-large`, truncated to 30,000 chars).
+4. **Upsert** — stores each point with payload `{url, source_adapter, published_date, label: null}`.
+
+**Resumability**: deterministic point IDs mean interrupted runs are safe to restart — already-upserted documents are silently skipped.
+
+**Adding a new adapter**: create `adapters/new_source.py` implementing `AbstractHistoricalAdapter.fetch()`, then add it to the `adapter_map` dict in `__main__.py`. No other files change.
+
 ## Vector Store
 
 **Collections:**
@@ -74,6 +103,7 @@ Each promotion is committed in its own transaction so a single failure does not 
 |------------|----------|------------|
 | `bootstrap_{domain}` | All article embeddings for a domain (staging) | `bootstrap` CLI |
 | `corpus_{domain}_{i}` | Documents assigned to cluster `i` | `bootstrap` CLI |
+| `historical_{adapter}` | Historical documents from GDELT or arXiv | `historical-ingest` CLI |
 
 **Vector config:** size = 3072, distance = Cosine (matches `text-embedding-3-large` output).
 
