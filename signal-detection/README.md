@@ -38,6 +38,7 @@ docker compose run --rm signal-detection python -m src bootstrap \
 | `AUTH_SERVICE_URL` | Yes | — | auth-service base URL for token validation |
 | `OPENROUTER_API_KEY` | Yes (bootstrap) | — | OpenRouter API key for embeddings |
 | `EMBEDDING_MODEL` | No | `openai/text-embedding-3-large` | Embedding model (OpenRouter prefix format) |
+| `SIGNAL_THRESHOLD` | No | `0.5` | Cosine similarity threshold used by the deferred promotion job |
 
 ## Bootstrap CLI
 
@@ -57,6 +58,16 @@ docker compose run --rm signal-detection python -m src bootstrap \
 | `--k` | `8` | Number of topic clusters (k-means k) |
 
 The command fetches completed runs from `news-retrieval`, embeds article bodies via OpenRouter (`text-embedding-3-large`, truncated to 30,000 characters), clusters with MiniBatchKMeans, and writes `topic_clusters` + `corpus_centroids` rows to Postgres with one Qdrant collection per cluster.
+
+## Promote Corpus CLI
+
+Runs the nightly deferred corpus promotion job. Processes all `deferred_promotions` rows that are due (`promote_at <= now()`), re-scores each article against the current centroid, and updates the centroid for confirmed Signal documents.
+
+```bash
+docker compose run --rm signal-detection python -m src promote-corpus
+```
+
+Can be run at any time for manual testing; idempotent (already-promoted rows are ignored).
 
 ## API
 

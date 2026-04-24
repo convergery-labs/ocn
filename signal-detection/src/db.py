@@ -246,3 +246,16 @@ def init_db() -> None:
                     CHECK (final_label IN ('Signal', 'Weak Signal', 'Noise'))
             )
         """)
+        conn.execute(
+            "ALTER TABLE corpus_centroids"
+            " ADD COLUMN IF NOT EXISTS centroid_vector REAL[]"
+        )
+        conn.execute(
+            "ALTER TABLE classifications"
+            " ADD COLUMN IF NOT EXISTS article_embedding REAL[]"
+        )
+        conn.execute(
+            "ALTER TABLE classifications"
+            " ADD COLUMN IF NOT EXISTS cluster_id INTEGER"
+            " REFERENCES topic_clusters(id)"
+        )

@@ -8,6 +8,8 @@ Part of the [ocn monorepo](../CLAUDE.md).
 
 The corpus is bootstrapped via a CLI command that fetches historical articles from `news-retrieval`, embeds them with `text-embedding-3-large` (via OpenRouter), clusters them into topic groups with MiniBatchKMeans, and writes `topic_clusters` + `corpus_centroids` rows to Postgres.
 
+After each classification, the article embedding incrementally updates the EWMA centroid for its assigned cluster. Signal articles are deferred for 30 days and re-evaluated by a nightly `promote-corpus` job before their centroid contribution is accepted.
+
 ## Documentation Index
 | Doc | Read when | Page ID |
 |-----|-----------|---------|
@@ -38,17 +40,18 @@ signal-detection/
 ├── requirements-test.txt
 ├── pyproject.toml
 ├── src/
-│   ├── __main__.py          Entry point (Click group: serve, bootstrap)
+│   ├── __main__.py          Entry point (Click group: serve, bootstrap, promote-corpus)
 │   ├── app.py               FastAPI factory
 │   ├── auth.py              Bearer token validation
 │   ├── db.py                DB infrastructure (psycopg2, init_db)
 │   ├── seed.py              Seed classification_statuses
 │   ├── controllers/
 │   │   ├── classify.py      Classification job orchestration
-│   │   └── bootstrap.py     Corpus bootstrap pipeline
+│   │   ├── bootstrap.py     Corpus bootstrap pipeline
+│   │   └── promote.py       Nightly deferred corpus promotion job
 │   ├── models/
-│   │   ├── jobs.py          classification_jobs repository
-│   │   └── clusters.py      topic_clusters / corpus_centroids repository
+│   │   ├── jobs.py          classification_jobs / classifications / deferred_promotions repository
+│   │   └── clusters.py      topic_clusters / corpus_centroids repository (incl. EWMA update)
 │   └── routes/
 │       ├── health.py        GET /health
 │       └── classify.py      POST /classify, GET /classifications/*
