@@ -36,7 +36,7 @@ def _news_retrieval_url() -> str:
 
 def _embedding_model() -> str:
     """Return the configured embedding model name."""
-    return os.environ.get("EMBEDDING_MODEL", "text-embedding-3-large")
+    return os.environ.get("EMBEDDING_MODEL", "openai/text-embedding-3-large")
 
 
 def _openai_client() -> OpenAI:
@@ -124,13 +124,21 @@ def _fetch_articles(
                 break
 
 
+_MAX_BODY_CHARS = 30_000
+
+
 def _embed_batch(
     client: OpenAI,
     texts: list[str],
     model: str,
 ) -> list[list[float]]:
-    """Return embeddings for a batch of texts."""
-    response = client.embeddings.create(model=model, input=texts)
+    """Return embeddings for a batch of texts.
+
+    Truncates each text to _MAX_BODY_CHARS to stay within the
+    8191-token context limit of text-embedding-3-large.
+    """
+    truncated = [t[:_MAX_BODY_CHARS] for t in texts]
+    response = client.embeddings.create(model=model, input=truncated)
     return [item.embedding for item in response.data]
 
 
