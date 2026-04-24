@@ -13,7 +13,8 @@ logger = logging.getLogger(__name__)
 
 _ARXIV_API = "http://export.arxiv.org/api/query"
 _PAGE_SIZE = 100
-_RETRY_DELAY = 3.0  # arXiv asks for polite crawling
+_MAX_RESULTS = 1000   # hard cap across all pages
+_RETRY_DELAY = 3.0    # arXiv asks for polite crawling
 
 
 class ArXivAdapter(AbstractHistoricalAdapter):
@@ -29,19 +30,24 @@ class ArXivAdapter(AbstractHistoricalAdapter):
         date_from: date,
         date_to: date,
     ) -> list[HistoricalDocument]:
-        """Return all arXiv papers matching *query* in the date range."""
-        # arXiv date format for submittedDate: YYYYMMDDHHMMSS
-        from_str = date_from.strftime("%Y%m%d") + "0000"
-        to_str = date_to.strftime("%Y%m%d") + "2359"
+        """Return arXiv papers matching *query* in the date range.
+
+        Paginates until exhausted or _MAX_RESULTS is reached.
+        """
+        # Quote multi-word queries so the Lucene parser doesn't split the
+        # boolean AND on spaces within the phrase.
+        quoted = f'"{query}"' if " " in query else query
+        from_str = date_from.strftime("%Y%m%d")
+        to_str = date_to.strftime("%Y%m%d")
         search_query = (
-            f"all:{query}"
-            f"+AND+submittedDate:[{from_str}+TO+{to_str}]"
+            f"all:{quoted}"
+            f" AND submittedDate:[{from_str} TO {to_str}]"
         )
 
         docs: list[HistoricalDocument] = []
         start = 0
 
-        while True:
+        while len(docs) < _MAX_RESULTS:
             try:
                 resp = requests.get(
                     _ARXIV_API,
@@ -72,7 +78,8 @@ class ArXivAdapter(AbstractHistoricalAdapter):
                     docs.append(doc)
 
             logger.info(
-                "arXiv: fetched %d entries (offset %d)", len(entries), start
+                "arXiv: fetched %d entries (offset %d, total so far: %d)",
+                len(entries), start, len(docs),
             )
 
             if len(entries) < _PAGE_SIZE:
@@ -81,7 +88,14 @@ class ArXivAdapter(AbstractHistoricalAdapter):
             start += _PAGE_SIZE
             time.sleep(_RETRY_DELAY)
 
-        logger.info("arXiv: %d documents total", len(docs))
+        if len(docs) >= _MAX_RESULTS:
+            logger.warning(
+                "arXiv: hit _MAX_RESULTS cap (%d); narrow the date range "
+                "or keyword for more targeted results",
+                _MAX_RESULTS,
+            )
+
+        logger.info("arXiv: %d documents in date range", len(docs))
         return docs
 
 
