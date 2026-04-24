@@ -2,18 +2,10 @@ FROM python:3.12-slim AS base
 
 WORKDIR /app
 
-COPY src/ /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-RUN pip install --no-cache-dir \
-    fastapi>=0.109.0 \
-    uvicorn>=0.27.0 \
-    pydantic>=2.6.0 \
-    openai>=1.0.0 \
-    click>=8.1.7 \
-    feedparser>=6.0.11 \
-    httpx>=0.27.0 \
-    psycopg2-binary>=2.9.0 \
-    numpy>=1.26.0
+COPY src/ /app
 
 ENV PYTHONUNBUFFERED=1
 
