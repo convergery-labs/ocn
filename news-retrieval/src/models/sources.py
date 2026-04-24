@@ -15,6 +15,7 @@ class SourceIn(BaseModel):
     frequency_id: int
     name: Optional[str] = None
     description: Optional[str] = None
+    no_fetch: bool = False
 
 
 class SourceBase(TypedDict):
@@ -26,6 +27,7 @@ class SourceBase(TypedDict):
     frequency_id: int
     name: Optional[str]
     description: Optional[str]
+    no_fetch: bool
     created_at: datetime
 
 
@@ -41,6 +43,7 @@ class SourceRef(TypedDict):
 
     url: str
     min_days_back: int
+    no_fetch: bool
 
 
 def load_sources(domain_slug: str, days_back: int) -> list[SourceRef]:
@@ -51,7 +54,7 @@ def load_sources(domain_slug: str, days_back: int) -> list[SourceRef]:
     with get_db() as conn:
         rows = conn.execute(
             """
-            SELECT s.url, f.min_days_back
+            SELECT s.url, f.min_days_back, s.no_fetch
             FROM   sources     s
             JOIN   frequencies f ON f.id = s.frequency_id
             JOIN   domains     d ON d.id = s.domain_id
@@ -117,9 +120,11 @@ def create_source(body: SourceIn) -> SourceBase:
         cursor = conn.execute(
             """
             INSERT INTO sources
-                (url, domain_id, frequency_id, name, description)
+                (url, domain_id, frequency_id, name, description,
+                 no_fetch)
             VALUES
-                (:url, :domain_id, :frequency_id, :name, :description)
+                (:url, :domain_id, :frequency_id, :name, :description,
+                 :no_fetch)
             RETURNING id
             """,
             body.model_dump(),

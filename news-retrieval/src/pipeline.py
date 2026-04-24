@@ -17,6 +17,7 @@ from typing import Any
 import feedparser
 import httpx
 import openai
+import trafilatura
 from openai import OpenAI
 from pydantic import BaseModel
 
@@ -95,16 +96,45 @@ def _clean_summary(raw: str) -> str:
 # Step 1 — fetch
 # ---------------------------------------------------------------------------
 
-def _parse_feed(url: str, cutoff: datetime) -> list[dict]:
+def _extract_body(entry: Any, url: str, no_fetch: bool) -> str | None:
+    """Return the best available body text for an article entry.
+
+    Tries ``content:encoded`` first (≥ 150 words). Falls back to a
+    Trafilatura fetch when the source permits it (``no_fetch=False``).
+
+    Args:
+        entry: feedparser entry object.
+        url: Article URL used for Trafilatura fallback fetch.
+        no_fetch: When True, skip the Trafilatura fetch.
+
+    Returns:
+        Cleaned body string, or None if unavailable.
+    """
+    content_list = entry.get("content", [])
+    raw_body = (
+        content_list[0].get("value", "") if content_list else ""
+    )
+    clean_body = _clean_summary(raw_body) if raw_body else ""
+    if len(clean_body.split()) >= 150:
+        return clean_body
+    if no_fetch:
+        return None
+    downloaded = trafilatura.fetch_url(url)
+    return trafilatura.extract(downloaded) if downloaded else None
+
+
+def _parse_feed(source: dict, cutoff: datetime) -> list[dict]:
     """Parse a single RSS feed and return articles published after cutoff.
 
     Args:
-        url: RSS feed URL.
+        source: Source dict with ``url`` and ``no_fetch`` keys.
         cutoff: Exclude entries published before this datetime.
 
     Returns:
         List of article dicts with a ``_pub_date`` key for sorting.
     """
+    url: str = source["url"]
+    no_fetch: bool = source["no_fetch"]
     t0 = time.perf_counter()
     feed = feedparser.parse(url)
     results = []
@@ -119,12 +149,14 @@ def _parse_feed(url: str, cutoff: datetime) -> list[dict]:
             )
             if pub_date < cutoff:
                 continue
+        article_url = entry.get("link", "")
         results.append({
             "title": entry.get("title", ""),
-            "url": entry.get("link", ""),
+            "url": article_url,
             "published": entry.get("published", ""),
             "source": feed.feed.get("title", url),
             "summary": _clean_summary(entry.get("summary", "")),
+            "body": _extract_body(entry, article_url, no_fetch),
             "_pub_date": pub_date,
         })
     logger.info(
@@ -156,7 +188,7 @@ def _fetch_articles(
     with ThreadPoolExecutor(max_workers=10) as executor:
         for feed_articles in executor.map(
             partial(_parse_feed, cutoff=cutoff),
-            [s["url"] for s in sources],
+            sources,
         ):
             articles.extend(feed_articles)
 
@@ -307,7 +339,7 @@ def _filter_articles(
 # Public entry point
 # ---------------------------------------------------------------------------
 
-_ARTICLE_KEYS = ("url", "title", "summary", "source", "published")
+_ARTICLE_KEYS = ("url", "title", "summary", "source", "published", "body")
 
 
 def run(
