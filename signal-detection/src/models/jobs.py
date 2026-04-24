@@ -1,6 +1,7 @@
 """Repository functions for classification_jobs and classifications."""
 import base64
 import json
+from datetime import datetime
 from typing import Any
 
 from db import get_db
@@ -127,6 +128,82 @@ def update_job_status(
         """
     with get_db() as conn:
         conn.execute(sql, {"status": status, "job_id": job_id})
+
+
+def get_classification(
+    classification_id: int,
+) -> ClassificationRow | None:
+    """Return a classifications row by id, or None."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM classifications WHERE id = :id",
+            {"id": classification_id},
+        ).fetchone()
+    return ClassificationRow(row) if row else None
+
+
+def insert_deferred_promotion(
+    classification_id: int,
+    promote_at: datetime,
+) -> None:
+    """Insert a deferred_promotions row for a Signal article."""
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO deferred_promotions
+                (classification_id, promote_at)
+            VALUES (:classification_id, :promote_at)
+            """,
+            {
+                "classification_id": classification_id,
+                "promote_at": promote_at,
+            },
+        )
+
+
+def get_pending_promotions() -> list[dict[str, Any]]:
+    """Return deferred_promotions due for processing.
+
+    Returns rows where promote_at <= NOW() and promoted_at IS NULL,
+    joined with classifications to include article_embedding and cluster_id.
+    """
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                dp.id            AS promotion_id,
+                dp.classification_id,
+                dp.promote_at,
+                c.article_embedding,
+                c.cluster_id,
+                c.label          AS original_label
+            FROM deferred_promotions dp
+            JOIN classifications c ON c.id = dp.classification_id
+            WHERE dp.promote_at <= NOW()
+              AND dp.promoted_at IS NULL
+            ORDER BY dp.promote_at ASC
+            """,
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def mark_promotion_done(
+    promotion_id: int,
+    final_label: str,
+) -> None:
+    """Set promoted_at = NOW() and final_label on a deferred_promotions row."""
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE deferred_promotions
+            SET promoted_at = NOW(), final_label = :final_label
+            WHERE id = :promotion_id
+            """,
+            {
+                "promotion_id": promotion_id,
+                "final_label": final_label,
+            },
+        )
 
 
 def find_processing_job(run_id: str) -> JobRow | None:

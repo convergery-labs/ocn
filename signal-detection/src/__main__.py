@@ -53,5 +53,16 @@ def bootstrap(domain: str, days_back: int, k: int) -> None:
     run_bootstrap(domain=domain, days_back=days_back, k=k)
 
 
+@cli.command("promote-corpus")
+def promote_corpus() -> None:
+    """Process deferred corpus promotions (nightly job)."""
+    from controllers.promote import promote_deferred_corpus
+
+    logger.info("Initialising database...")
+    init_db()
+    stats = promote_deferred_corpus()
+    logger.info("promote-corpus complete: %s", stats)
+
+
 if __name__ == "__main__":
     cli()

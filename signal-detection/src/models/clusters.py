@@ -1,5 +1,7 @@
 """Repository functions for topic_clusters and corpus_centroids."""
-from db import get_db
+from typing import Any
+
+from db import get_db, transaction
 
 
 def upsert_topic_cluster(
@@ -29,6 +31,62 @@ def upsert_topic_cluster(
             },
         ).fetchone()
     return row["id"]
+
+
+def get_corpus_centroid(cluster_id: int) -> dict[str, Any] | None:
+    """Return the corpus_centroids row (with alpha) for cluster_id, or None."""
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT cc.*, tc.alpha
+            FROM corpus_centroids cc
+            JOIN topic_clusters tc ON tc.id = cc.cluster_id
+            WHERE cc.cluster_id = :cluster_id
+            """,
+            {"cluster_id": cluster_id},
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def update_centroid_ewma(
+    cluster_id: int,
+    embedding: list[float],
+    alpha: float,
+) -> None:
+    """Apply the EWMA update to the stored centroid and increment document_count.
+
+    centroid_t = alpha * embedding + (1 - alpha) * centroid_{t-1}
+    Seeds with the incoming embedding when no centroid vector exists yet.
+    Must be called inside a transaction() block so the update is atomic
+    with the accompanying classification insert.
+    """
+    row = get_corpus_centroid(cluster_id)
+    if row is None:
+        raise ValueError(
+            f"No corpus_centroids row for cluster_id={cluster_id}"
+        )
+    existing: list[float] | None = row.get("centroid_vector")
+    if existing is None:
+        updated = embedding
+    else:
+        updated = [
+            alpha * n + (1.0 - alpha) * c
+            for n, c in zip(embedding, existing)
+        ]
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE corpus_centroids
+            SET centroid_vector = :vec,
+                document_count = document_count + 1,
+                last_updated_at = NOW()
+            WHERE cluster_id = :cluster_id
+            """,
+            {
+                "vec": updated,
+                "cluster_id": cluster_id,
+            },
+        )
 
 
 def upsert_corpus_centroid(
