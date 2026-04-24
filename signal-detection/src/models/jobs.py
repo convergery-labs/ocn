@@ -66,6 +66,40 @@ def get_job(job_id: int) -> JobRow | None:
     return JobRow(row) if row else None
 
 
+def insert_classification(
+    job_id: int,
+    article_url: str,
+    article_embedding: list[float],
+    model_embedding: str,
+    model_llm: str,
+) -> int:
+    """Insert a placeholder classification row and return its id.
+
+    label='Noise' and composite_score=0.0 are placeholders;
+    CON-138 will UPDATE these with actual scores and labels.
+    """
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            INSERT INTO classifications
+                (job_id, article_url, label, composite_score,
+                 model_embedding, model_llm, article_embedding)
+            VALUES
+                (:job_id, :article_url, 'Noise', 0.0,
+                 :model_embedding, :model_llm, :article_embedding)
+            RETURNING id
+            """,
+            {
+                "job_id": job_id,
+                "article_url": article_url,
+                "model_embedding": model_embedding,
+                "model_llm": model_llm,
+                "article_embedding": article_embedding,
+            },
+        ).fetchone()
+    return row["id"]
+
+
 def get_job_stats(job_id: int) -> dict[str, int]:
     """Return label counts for a completed job."""
     with get_db() as conn:

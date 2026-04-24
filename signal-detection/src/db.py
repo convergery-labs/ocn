@@ -232,7 +232,9 @@ def init_db() -> None:
                 classification_id INTEGER NOT NULL
                     REFERENCES classifications(id),
                 claim_text TEXT NOT NULL,
-                claim_embedding_id UUID NOT NULL
+                claim_embedding_id UUID NOT NULL,
+                embedding_model TEXT NOT NULL
+                    DEFAULT 'openai/text-embedding-3-small'
             )
         """)
         conn.execute("""
@@ -258,4 +260,9 @@ def init_db() -> None:
             "ALTER TABLE classifications"
             " ADD COLUMN IF NOT EXISTS cluster_id INTEGER"
             " REFERENCES topic_clusters(id)"
+        )
+        conn.execute(
+            "ALTER TABLE claims"
+            " ADD COLUMN IF NOT EXISTS embedding_model TEXT NOT NULL"
+            " DEFAULT 'openai/text-embedding-3-small'"
         )
