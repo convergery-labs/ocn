@@ -64,5 +64,64 @@ def promote_corpus() -> None:
     logger.info("promote-corpus complete: %s", stats)
 
 
+@cli.command("historical-ingest")
+@click.option(
+    "--adapter",
+    required=True,
+    type=click.Choice(["gdelt", "arxiv"]),
+    help="Historical source adapter to use.",
+)
+@click.option("--query", required=True, help="Keyword or phrase to search for.")
+@click.option(
+    "--from",
+    "date_from",
+    required=True,
+    type=click.DateTime(formats=["%Y-%m-%d"]),
+    help="Inclusive start date (YYYY-MM-DD).",
+)
+@click.option(
+    "--to",
+    "date_to",
+    required=True,
+    type=click.DateTime(formats=["%Y-%m-%d"]),
+    help="Inclusive end date (YYYY-MM-DD).",
+)
+@click.option(
+    "--collection",
+    default=None,
+    help="Qdrant collection name (default: historical_{adapter}).",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Show document count without embedding or upserting.",
+)
+def historical_ingest(
+    adapter: str,
+    query: str,
+    date_from: object,
+    date_to: object,
+    collection: str | None,
+    dry_run: bool,
+) -> None:
+    """Ingest historical documents from GDELT or arXiv into Qdrant."""
+    from historical_ingestion.adapters.arxiv import ArXivAdapter
+    from historical_ingestion.adapters.gdelt import GDELTAdapter
+    from historical_ingestion.pipeline import run_ingestion
+
+    adapter_map = {"gdelt": GDELTAdapter(), "arxiv": ArXivAdapter()}
+    col = collection or f"historical_{adapter}"
+    stats = run_ingestion(
+        adapter=adapter_map[adapter],
+        query=query,
+        date_from=date_from.date(),  # type: ignore[union-attr]
+        date_to=date_to.date(),      # type: ignore[union-attr]
+        collection=col,
+        dry_run=dry_run,
+    )
+    logger.info("historical-ingest complete: %s", stats)
+
+
 if __name__ == "__main__":
     cli()

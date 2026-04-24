@@ -8,6 +8,8 @@ Part of the [ocn monorepo](../CLAUDE.md).
 
 The corpus is bootstrapped via a CLI command that fetches historical articles from `news-retrieval`, embeds them with `text-embedding-3-large` (via OpenRouter), clusters them into topic groups with MiniBatchKMeans, and writes `topic_clusters` + `corpus_centroids` rows to Postgres.
 
+Additional historical content can be ingested directly into Qdrant via the `historical-ingest` CLI (GDELT news and arXiv research papers), with no Postgres involvement.
+
 After each classification, the article embedding incrementally updates the EWMA centroid for its assigned cluster. Signal articles are deferred for 30 days and re-evaluated by a nightly `promote-corpus` job before their centroid contribution is accepted.
 
 ## Documentation Index
@@ -40,7 +42,8 @@ signal-detection/
 ├── requirements-test.txt
 ├── pyproject.toml
 ├── src/
-│   ├── __main__.py          Entry point (Click group: serve, bootstrap, promote-corpus)
+│   ├── __main__.py          Entry point (Click group: serve, bootstrap, promote-corpus,
+│   │                                     historical-ingest)
 │   ├── app.py               FastAPI factory
 │   ├── auth.py              Bearer token validation
 │   ├── db.py                DB infrastructure (psycopg2, init_db)
@@ -50,11 +53,18 @@ signal-detection/
 │   │   ├── bootstrap.py     Corpus bootstrap pipeline
 │   │   └── promote.py       Nightly deferred corpus promotion job
 │   ├── models/
-│   │   ├── jobs.py          classification_jobs / classifications / deferred_promotions repository
-│   │   └── clusters.py      topic_clusters / corpus_centroids repository (incl. EWMA update)
-│   └── routes/
-│       ├── health.py        GET /health
-│       └── classify.py      POST /classify, GET /classifications/*
+│   │   ├── jobs.py          classification_jobs / classifications / deferred_promotions
+│   │   └── clusters.py      topic_clusters / corpus_centroids (incl. EWMA update)
+│   ├── routes/
+│   │   ├── health.py        GET /health
+│   │   └── classify.py      POST /classify, GET /classifications/*
+│   └── historical_ingestion/
+│       ├── schema.py        HistoricalDocument dataclass
+│       ├── pipeline.py      Orchestrator (fetch, deduplicate, embed, upsert)
+│       └── adapters/
+│           ├── base.py      AbstractHistoricalAdapter
+│           ├── gdelt.py     GDELT 2.0 Doc API adapter
+│           └── arxiv.py     arXiv Atom feed adapter
 └── tests/
     ├── conftest.py
     ├── test_smoke.py
