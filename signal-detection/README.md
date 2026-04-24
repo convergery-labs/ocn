@@ -37,7 +37,7 @@ docker compose run --rm signal-detection python -m src bootstrap \
 | `NEWS_RETRIEVAL_URL` | Yes | — | news-retrieval base URL for run validation |
 | `AUTH_SERVICE_URL` | Yes | — | auth-service base URL for token validation |
 | `OPENROUTER_API_KEY` | Yes | — | OpenRouter API key for embeddings and LLM calls |
-| `OPENROUTER_MODEL` | No | `openrouter/elephant-alpha` | LLM model used for claim extraction |
+| `OPENROUTER_MODEL` | No | `inclusionai/ling-2.6-flash:free` | LLM model used for claim extraction |
 | `EMBEDDING_MODEL` | No | `openai/text-embedding-3-large` | Article embedding model (OpenRouter prefix format) |
 | `CLAIM_EMBEDDING_MODEL` | No | `openai/text-embedding-3-small` | Claim embedding model (1536 dims; claims are short, compared only to other claims) |
 | `SIGNAL_THRESHOLD` | No | `0.5` | Cosine similarity threshold used by the deferred promotion job |

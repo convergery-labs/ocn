@@ -137,7 +137,7 @@ pytest news-retrieval/tests/
 | Variable / resource | Default | Description |
 |--------------------|---------|-------------|
 | `OPENROUTER_API_KEY` | — | Required. Server-level API key for OpenRouter |
-| `OPENROUTER_MODEL` | — | Required. Default model string for relevance filtering, e.g. `openrouter/elephant-alpha` |
+| `OPENROUTER_MODEL` | — | Required. Default model string for relevance filtering, e.g. `inclusionai/ling-2.6-flash:free` |
 | `AUTH_SERVICE_URL` | — | Required. URL of the auth-service (e.g. `http://auth-service:8001`). All Bearer tokens are validated by `POST {AUTH_SERVICE_URL}/validate`; returns 503 if unset |
 | `POSTGRES_HOST` | `localhost` | PostgreSQL server hostname |
 | `POSTGRES_PORT` | `5432` | PostgreSQL server port |
