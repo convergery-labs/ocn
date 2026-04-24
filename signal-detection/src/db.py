@@ -176,7 +176,7 @@ def init_db() -> None:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS corpus_centroids (
                 id SERIAL PRIMARY KEY,
-                cluster_id INTEGER NOT NULL
+                cluster_id INTEGER NOT NULL UNIQUE
                     REFERENCES topic_clusters(id),
                 embedding_model TEXT NOT NULL,
                 last_updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
