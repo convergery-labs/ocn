@@ -36,9 +36,14 @@ docker compose run --rm signal-detection python -m src bootstrap \
 | `QDRANT_PORT` | No | `6333` | Qdrant port |
 | `NEWS_RETRIEVAL_URL` | Yes | — | news-retrieval base URL for run validation |
 | `AUTH_SERVICE_URL` | Yes | — | auth-service base URL for token validation |
-| `OPENROUTER_API_KEY` | Yes (bootstrap) | — | OpenRouter API key for embeddings |
-| `EMBEDDING_MODEL` | No | `openai/text-embedding-3-large` | Embedding model (OpenRouter prefix format) |
+| `OPENROUTER_API_KEY` | Yes | — | OpenRouter API key for embeddings and LLM calls |
+| `OPENROUTER_MODEL` | No | `openrouter/elephant-alpha` | LLM model used for claim extraction |
+| `EMBEDDING_MODEL` | No | `openai/text-embedding-3-large` | Article embedding model (OpenRouter prefix format) |
+| `CLAIM_EMBEDDING_MODEL` | No | `openai/text-embedding-3-small` | Claim embedding model (1536 dims; claims are short, compared only to other claims) |
 | `SIGNAL_THRESHOLD` | No | `0.5` | Cosine similarity threshold used by the deferred promotion job |
+| `LANGFUSE_PUBLIC_KEY` | No | — | Langfuse public key; tracing disabled if absent |
+| `LANGFUSE_SECRET_KEY` | No | — | Langfuse secret key |
+| `LANGFUSE_HOST` | No | `https://cloud.langfuse.com` | Langfuse host |
 
 ## Bootstrap CLI
 
@@ -143,11 +148,11 @@ query parameters.
 
 ## Testing
 
-Postgres and Qdrant must be running before executing the test suite.
+Tests connect to `postgres-signal-test` on `localhost:5435`. Qdrant is not needed.
 
 ```bash
 # From the repo root
-docker compose up postgres-signal qdrant -d
+docker compose up postgres-signal-test -d
 pip install -r signal-detection/requirements-test.txt
 pytest signal-detection/tests/
 ```

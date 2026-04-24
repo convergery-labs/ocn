@@ -28,6 +28,7 @@ src/
 │   └── promote.py       Controller — nightly deferred corpus promotion job
 ├── models/
 │   ├── jobs.py           Repository — classification_jobs, classifications, deferred_promotions
+│   ├── claims.py         Repository — claims
 │   └── clusters.py       Repository — topic_clusters, corpus_centroids (incl. EWMA update)
 └── historical_ingestion/
     ├── schema.py         HistoricalDocument dataclass — common shape for all adapters
@@ -51,9 +52,25 @@ Invoked via `python -m src bootstrap --domain <slug> [--days-back 180] [--k 8]`.
 3. **Cluster** — all vectors scrolled from Qdrant; `MiniBatchKMeans(n_clusters=k)` run locally.
 4. **Persist** — one Qdrant collection per cluster (`corpus_{domain}_{i}`); `topic_clusters` and `corpus_centroids` rows upserted to Postgres.
 
+## Feature Extraction Pipeline
+
+Runs as the background task for each `/classify` job (`run_classification_stub()` in `controllers/classify.py`).
+
+For each article in the job:
+
+1. **MinHash LSH dedup** — tokenises the body, builds a `MinHashLSH` index (threshold = 0.85, 128 permutations); near-duplicate articles are skipped and logged.
+2. **Language filter** — `langdetect.detect()`; non-English articles are skipped and logged with their detected language code.
+3. **Article embedding** — batch of 50 bodies sent to OpenRouter (`EMBEDDING_MODEL`, default `text-embedding-3-large`, 3072 dims); upserted to Qdrant `articles` collection with payload `{url, domain, published_date, label: null}`.
+4. **Placeholder classification row** — `classifications` row inserted with `label='Noise'` and `composite_score=0.0`; CON-138 will UPDATE these with actual scores.
+5. **Claim extraction** — LLM prompt (model: `OPENROUTER_MODEL`) returns 3–5 factual claims as a JSON array; malformed JSON falls back to no claims with a warning log.
+6. **Claim embedding** — each claim embedded with `CLAIM_EMBEDDING_MODEL` (default `openai/text-embedding-3-small`, 1536 dims); upserted to Qdrant `claims` collection.
+7. **Claim storage** — `claims` Postgres rows inserted with `claim_text`, `claim_embedding_id` (Qdrant UUID), and `embedding_model`.
+
+All steps emit Langfuse spans when `LANGFUSE_PUBLIC_KEY` is set; tracing is silently disabled if absent.
+
 ## EWMA Centroid Update
 
-After every classification (implemented by CON-137), the article embedding updates the EWMA centroid for its assigned cluster:
+After every classification, the article embedding updates the EWMA centroid for its assigned cluster (implemented by CON-138):
 
 ```
 centroid_t = alpha * embed(doc) + (1 - alpha) * centroid_{t-1}
@@ -99,13 +116,15 @@ collection with no Postgres involvement. Used to widen corpus coverage beyond wh
 
 **Collections:**
 
-| Collection | Contents | Created by |
-|------------|----------|------------|
-| `bootstrap_{domain}` | All article embeddings for a domain (staging) | `bootstrap` CLI |
-| `corpus_{domain}_{i}` | Documents assigned to cluster `i` | `bootstrap` CLI |
-| `historical_{adapter}` | Historical documents from GDELT or arXiv | `historical-ingest` CLI |
+| Collection | Contents | Vector size | Created by |
+|------------|----------|-------------|------------|
+| `bootstrap_{domain}` | All article embeddings for a domain (staging) | 3072 | `bootstrap` CLI |
+| `corpus_{domain}_{i}` | Documents assigned to cluster `i` | 3072 | `bootstrap` CLI |
+| `historical_{adapter}` | Historical documents from GDELT or arXiv | 3072 | `historical-ingest` CLI |
+| `articles` | Live articles submitted via `/classify` | 3072 | Feature extraction pipeline |
+| `claims` | Extracted claim embeddings linked to parent articles | 1536 | Feature extraction pipeline |
 
-**Vector config:** size = 3072, distance = Cosine (matches `text-embedding-3-large` output).
+**Distance metric:** Cosine for all collections.
 
 ## Database Schema
 
@@ -116,7 +135,7 @@ collection with no Postgres involvement. Used to widen corpus coverage beyond wh
 | `classification_jobs` | `id`, `run_id`, `status`, `article_count`, `callback_url` |
 | `classifications` | `id`, `job_id`, `article_url`, `label`, `composite_score`, `article_embedding REAL[]`, `cluster_id` |
 | `deferred_promotions` | `id`, `classification_id`, `promote_at`, `promoted_at`, `final_label` |
-| `claims` | `id`, `classification_id`, `claim_text`, `claim_embedding_id` |
+| `claims` | `id`, `classification_id`, `claim_text`, `claim_embedding_id`, `embedding_model` |
 
 ## HTTP API
 
@@ -129,12 +148,23 @@ collection with no Postgres involvement. Used to widen corpus coverage beyond wh
 
 ## Testing
 
-Integration tests require Postgres and Qdrant to be running:
+Integration tests require `postgres-signal-test` (port 5435) to be running. Qdrant is not needed.
 
 ```bash
-docker compose up postgres-signal qdrant -d
+# From the repo root
+docker compose up postgres-signal-test -d
+
+# Run locally (conftest connects to localhost:5435)
 pip install -r signal-detection/requirements-test.txt
 pytest signal-detection/tests/
+
+# Or inside Docker (override the DB host for the container network)
+docker build -t signal-detection-test --target test signal-detection/
+docker run --rm --network ocn_ocn-internal \
+  --env-file .env \
+  -e POSTGRES_HOST=postgres-signal-test \
+  -e POSTGRES_PORT=5432 \
+  signal-detection-test pytest tests/
 ```
 
 | Module | Coverage |

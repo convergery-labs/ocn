@@ -54,6 +54,7 @@ signal-detection/
 │   │   └── promote.py       Nightly deferred corpus promotion job
 │   ├── models/
 │   │   ├── jobs.py          classification_jobs / classifications / deferred_promotions
+│   │   ├── claims.py        claims
 │   │   └── clusters.py      topic_clusters / corpus_centroids (incl. EWMA update)
 │   ├── routes/
 │   │   ├── health.py        GET /health
