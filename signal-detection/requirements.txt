@@ -11,3 +11,6 @@ numpy>=1.26.0
 trafilatura>=1.6.0
 feedparser>=6.0.10
 requests>=2.31.0
+datasketch>=1.6.4
+langdetect>=1.0.9
+langfuse>=2.0.0
