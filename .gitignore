@@ -24,3 +24,10 @@ reports/
 
 # Qdrant storage (if running locally outside Docker)
 qdrant_storage/
+
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.backup
+infra/staging/terraform.tfvars
+infra/production/terraform.tfvars

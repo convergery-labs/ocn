@@ -1,0 +1,229 @@
+name: Test and Deploy
+
+
+on:
+  push:
+    branches: [main]
+
+
+permissions:
+  id-token: write
+  contents: read
+
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      auth:   ${{ steps.filter.outputs.auth }}
+      news:   ${{ steps.filter.outputs.news }}
+      signal: ${{ steps.filter.outputs.signal }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            auth:   ['auth-service/**']
+            news:   ['news-retrieval/**']
+            signal: ['signal-detection/**']
+
+
+  test:
+    needs: changes
+    runs-on: ubuntu-latest
+    services:
+      postgres-auth-test:
+        image: postgres:16
+        env:
+          POSTGRES_DB:       auth_test
+          POSTGRES_USER:     auth_user
+          POSTGRES_PASSWORD: test_password
+        ports: ['5434:5432']
+        options: --health-cmd pg_isready --health-interval 5s --health-retries 5
+      postgres-news-test:
+        image: postgres:16
+        env:
+          POSTGRES_DB:       news_test
+          POSTGRES_USER:     news_user
+          POSTGRES_PASSWORD: test_password
+        ports: ['5433:5432']
+        options: --health-cmd pg_isready --health-interval 5s --health-retries 5
+      postgres-signal-test:
+        image: postgres:16
+        env:
+          POSTGRES_DB:       signal_test
+          POSTGRES_USER:     signal_user
+          POSTGRES_PASSWORD: test_password
+        ports: ['5435:5432']
+        options: --health-cmd pg_isready --health-interval 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+
+      - name: Test auth-service
+        if: needs.changes.outputs.auth == 'true'
+        working-directory: auth-service
+        run: |
+          pip install -r requirements.txt -r requirements-test.txt
+          pytest tests/ -v
+        env:
+          POSTGRES_HOST:     localhost
+          POSTGRES_PORT:     5434
+          POSTGRES_DB:       auth_test
+          POSTGRES_USER:     auth_user
+          POSTGRES_PASSWORD: test_password
+
+
+      - name: Test news-retrieval
+        if: needs.changes.outputs.news == 'true'
+        working-directory: news-retrieval
+        run: |
+          pip install -r requirements.txt -r requirements-test.txt
+          pytest tests/ -v
+        env:
+          POSTGRES_HOST:     localhost
+          POSTGRES_PORT:     5433
+          POSTGRES_DB:       news_test
+          POSTGRES_USER:     news_user
+          POSTGRES_PASSWORD: test_password
+          OPENROUTER_API_KEY: mock-key
+          OPENROUTER_MODEL:   mock-model
+          ADMIN_API_KEY:      test-admin-key
+
+
+      - name: Test signal-detection
+        if: needs.changes.outputs.signal == 'true'
+        working-directory: signal-detection
+        run: |
+          pip install -r requirements.txt -r requirements-test.txt
+          pytest tests/ -v
+        env:
+          POSTGRES_HOST:      localhost
+          POSTGRES_PORT:      5435
+          POSTGRES_DB:        signal_test
+          POSTGRES_USER:      signal_user
+          POSTGRES_PASSWORD:  test_password
+          AUTH_SERVICE_URL:   http://localhost:8001
+          NEWS_RETRIEVAL_URL: http://localhost:8000
+          OPENROUTER_API_KEY: mock-key
+          OPENROUTER_MODEL:   mock-model
+
+
+  deploy-auth:
+    needs: [changes, test]
+    if: needs.changes.outputs.auth == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region:     ${{ secrets.AWS_REGION }}
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: login-ecr
+      - name: Build and push
+        env:
+          IMAGE: ${{ secrets.ECR_REGISTRY }}/ocn/auth-service
+          TAG:   ${{ github.sha }}
+        run: |
+          docker build --target base -t $IMAGE:$TAG -t $IMAGE:latest auth-service/
+          docker push $IMAGE:$TAG
+          docker push $IMAGE:latest
+      - name: Deploy
+        env:
+          IMAGE: ${{ secrets.ECR_REGISTRY }}/ocn/auth-service
+          TAG:   ${{ github.sha }}
+        run: |
+          TASK_DEF=$(aws ecs describe-task-definition \
+            --task-definition staging-auth-service \
+            --query taskDefinition)
+          NEW_TASK=$(echo $TASK_DEF | jq \
+            --arg img "$IMAGE:$TAG" \
+            '.containerDefinitions[0].image = $img')
+          aws ecs register-task-definition --cli-input-json "$NEW_TASK"
+          aws ecs update-service \
+            --cluster staging-ocn-cluster \
+            --service staging-auth-service \
+            --task-definition staging-auth-service \
+            --force-new-deployment
+
+
+  deploy-news:
+    needs: [changes, test]
+    if: needs.changes.outputs.news == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region:     ${{ secrets.AWS_REGION }}
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: login-ecr
+      - name: Build and push
+        env:
+          IMAGE: ${{ secrets.ECR_REGISTRY }}/ocn/news-retrieval
+          TAG:   ${{ github.sha }}
+        run: |
+          docker build --target base -t $IMAGE:$TAG -t $IMAGE:latest news-retrieval/
+          docker push $IMAGE:$TAG
+          docker push $IMAGE:latest
+      - name: Deploy
+        env:
+          IMAGE: ${{ secrets.ECR_REGISTRY }}/ocn/news-retrieval
+          TAG:   ${{ github.sha }}
+        run: |
+          TASK_DEF=$(aws ecs describe-task-definition \
+            --task-definition staging-news-retrieval \
+            --query taskDefinition)
+          NEW_TASK=$(echo $TASK_DEF | jq \
+            --arg img "$IMAGE:$TAG" \
+            '.containerDefinitions[0].image = $img')
+          aws ecs register-task-definition --cli-input-json "$NEW_TASK"
+          aws ecs update-service \
+            --cluster staging-ocn-cluster \
+            --service staging-news-retrieval \
+            --task-definition staging-news-retrieval \
+            --force-new-deployment
+
+  deploy-signal:
+    needs: [changes, test]
+    if: needs.changes.outputs.signal == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region:     ${{ secrets.AWS_REGION }}
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: login-ecr
+      - name: Build and push
+        env:
+          IMAGE: ${{ secrets.ECR_REGISTRY }}/ocn/signal-detection
+          TAG:   ${{ github.sha }}
+        run: |
+          docker build --target base -t $IMAGE:$TAG -t $IMAGE:latest signal-detection/
+          docker push $IMAGE:$TAG
+          docker push $IMAGE:latest
+      - name: Deploy
+        env:
+          IMAGE: ${{ secrets.ECR_REGISTRY }}/ocn/signal-detection
+          TAG:   ${{ github.sha }}
+        run: |
+          TASK_DEF=$(aws ecs describe-task-definition \
+            --task-definition staging-signal-detection \
+            --query taskDefinition)
+          NEW_TASK=$(echo $TASK_DEF | jq \
+            --arg img "$IMAGE:$TAG" \
+            '.containerDefinitions[0].image = $img')
+          aws ecs register-task-definition --cli-input-json "$NEW_TASK"
+          aws ecs update-service \
+            --cluster staging-ocn-cluster \
+            --service staging-signal-detection \
+            --task-definition staging-signal-detection \
+            --force-new-deployment
