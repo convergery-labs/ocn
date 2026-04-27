@@ -15,18 +15,19 @@ resource "aws_ecs_task_definition" "auth_service" {
         { containerPort = 8001 }
       ]
       environment = [
-        { name = "POSTGRES_HOST", value = var.rds_endpoint },
-        { name = "POSTGRES_PORT", value = "5432" },
-        { name = "POSTGRES_DB",   value = "auth_db" },
-        { name = "POSTGRES_USER", value = "auth_user" }
+        { name = "AUTH_POSTGRES_HOST", value = var.rds_endpoint },
+        { name = "AUTH_POSTGRES_PORT", value = "5432" },
+        { name = "AUTH_POSTGRES_DB",   value = "auth_db" },
+        { name = "AUTH_POSTGRES_USER", value = "auth_user" },
+        { name = "PGSSLMODE",          value = "require" }
       ]
       secrets = [
         {
-          name      = "POSTGRES_PASSWORD"
+          name      = "AUTH_POSTGRES_PASSWORD"
           valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:ocn/${var.env}/auth-service:POSTGRES_PASSWORD::"
         },
         {
-          name      = "ADMIN_API_KEY"
+          name      = "AUTH_ADMIN_API_KEY"
           valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:ocn/${var.env}/auth-service:ADMIN_API_KEY::"
         }
       ]
@@ -96,7 +97,9 @@ resource "aws_ecs_task_definition" "news_retrieval" {
         { name = "POSTGRES_PORT",    value = "5432" },
         { name = "POSTGRES_DB",      value = "news_retrieval_db" },
         { name = "POSTGRES_USER",    value = "news_user" },
-        { name = "AUTH_SERVICE_URL", value = "http://auth-service.${var.env}.ocn.internal:8001" }
+        { name = "PGSSLMODE",        value = "require" },
+        { name = "AUTH_SERVICE_URL", value = "http://auth-service.${var.env}.ocn.internal:8001" },
+        { name = "OPENROUTER_MODEL", value = "openrouter/elephant-alpha" }
       ]
       secrets = [
         {
@@ -106,10 +109,6 @@ resource "aws_ecs_task_definition" "news_retrieval" {
         {
           name      = "OPENROUTER_API_KEY"
           valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:ocn/${var.env}/news-retrieval:OPENROUTER_API_KEY::"
-        },
-        {
-          name      = "ADMIN_API_KEY"
-          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:ocn/${var.env}/news-retrieval:ADMIN_API_KEY::"
         }
       ]
       logConfiguration = {
@@ -185,6 +184,7 @@ resource "aws_ecs_task_definition" "signal_detection" {
         { name = "POSTGRES_PORT",       value = "5432" },
         { name = "POSTGRES_DB",         value = "signal_detection_db" },
         { name = "POSTGRES_USER",       value = "signal_user" },
+        { name = "PGSSLMODE",           value = "require" },
         { name = "AUTH_SERVICE_URL",    value = "http://auth-service.${var.env}.ocn.internal:8001" },
         { name = "NEWS_RETRIEVAL_URL",  value = "http://news-retrieval.${var.env}.ocn.internal:8000" },
         { name = "QDRANT_HOST",         value = var.qdrant_host },
