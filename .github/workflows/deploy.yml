@@ -71,11 +71,10 @@ jobs:
           pip install -r requirements.txt -r requirements-test.txt
           pytest tests/ -v
         env:
-          POSTGRES_HOST:     localhost
-          POSTGRES_PORT:     5434
-          POSTGRES_DB:       auth_test
-          POSTGRES_USER:     auth_user
-          POSTGRES_PASSWORD: test_password
+          AUTH_POSTGRES_HOST:     localhost
+          AUTH_POSTGRES_PORT:     5434
+          AUTH_POSTGRES_USER:     auth_user
+          AUTH_POSTGRES_PASSWORD: test_password
 
 
       - name: Test news-retrieval
@@ -92,7 +91,6 @@ jobs:
           POSTGRES_PASSWORD: test_password
           OPENROUTER_API_KEY: mock-key
           OPENROUTER_MODEL:   mock-model
-          ADMIN_API_KEY:      test-admin-key
 
 
       - name: Test signal-detection

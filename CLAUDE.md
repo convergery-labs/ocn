@@ -20,6 +20,7 @@ Confluence space: `Projects` — Cloud: `opengrowthventures.atlassian.net`
 | `auth-service` | [auth-service/](auth-service/) | [auth-service/CLAUDE.md](auth-service/CLAUDE.md) | Authentication and API key management |
 | `news-retrieval` | [news-retrieval/](news-retrieval/) | [news-retrieval/CLAUDE.md](news-retrieval/CLAUDE.md) | RSS feed fetching and LLM-based relevance filtering |
 | `signal-detection` | [signal-detection/](signal-detection/) | [signal-detection/CLAUDE.md](signal-detection/CLAUDE.md) | Signal detection and vector-similarity pipelines |
+| `infra` | [infra/](infra/) | [infra/CLAUDE.md](infra/CLAUDE.md) | Terraform infrastructure (VPC, RDS, ECS, ALB, IAM) |
 
 ## Jira Board
 | Board | URL | Project Key |
@@ -53,14 +54,21 @@ ocn/
 │   ├── requirements.txt
 │   ├── src/
 │   └── tests/
-└── signal-detection/         # see signal-detection/STRUCTURE.md
+├── signal-detection/         # see signal-detection/STRUCTURE.md
+│   ├── CLAUDE.md
+│   ├── STRUCTURE.md
+│   ├── README.md
+│   ├── Dockerfile
+│   ├── requirements.txt
+│   ├── src/
+│   └── tests/
+└── infra/                    # see infra/STRUCTURE.md
     ├── CLAUDE.md
     ├── STRUCTURE.md
     ├── README.md
-    ├── Dockerfile
-    ├── requirements.txt
-    ├── src/
-    └── tests/
+    ├── bootstrap/
+    ├── modules/
+    └── staging/
 ```
 
 ## Guidance

@@ -106,6 +106,7 @@ def _new_connection() -> _Connection:
         dbname=os.environ.get("POSTGRES_DB", "news-retrieval"),
         user=os.environ.get("POSTGRES_USER", "news-retrieval"),
         password=os.environ.get("POSTGRES_PASSWORD", ""),
+        sslmode=os.environ.get("PGSSLMODE", "prefer"),
     )
     raw.cursor_factory = psycopg2.extras.RealDictCursor
     return _Connection(raw)

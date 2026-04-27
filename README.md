@@ -38,6 +38,37 @@ curl http://localhost:8000/health   # news-retrieval
 curl http://localhost:8002/health   # signal-detection
 ```
 
+## Deploying to ECS
+
+Images must be built for `linux/amd64` regardless of the host OS. Use the Makefile targets — they bake in the correct platform flag and the ECR registry URL.
+
+```bash
+# Authenticate to ECR (once per session)
+make ecr-login
+
+# Build and push a single service
+make push-auth
+make push-news
+make push-signal
+
+# Build and push all three (includes ecr-login)
+make push-all
+```
+
+Individual `push-*` targets do not authenticate — run `make ecr-login` first if your session has expired.
+
+See [infra/README.md](infra/README.md) for Terraform apply instructions.
+
+## Connecting to RDS locally
+
+RDS is in a private subnet. Use the Makefile target to tunnel through the bastion via SSM (requires the [SSM Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html)):
+
+```bash
+make tunnel-rds
+```
+
+Then connect DBeaver (or any Postgres client) to `localhost:5433`.
+
 ## Environment variables
 
 See [.env.example](.env.example) for the full list, grouped by service.
