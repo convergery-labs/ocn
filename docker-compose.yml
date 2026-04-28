@@ -73,6 +73,30 @@ services:
     networks:
       - ocn-internal
 
+  # ---------------------------------------------------------------------------
+  # api-gateway (port 8003)
+  # ---------------------------------------------------------------------------
+  api-gateway:
+    build:
+      context: api-gateway/
+      target: base
+    ports:
+      - "8003:8003"
+    env_file: .env
+    environment:
+      GATEWAY_AUTH_URL: http://auth-service:8001
+      GATEWAY_NEWS_URL: http://news-retrieval:8000
+      GATEWAY_SIGNAL_URL: http://signal-detection:8002
+    depends_on:
+      auth-service:
+        condition: service_started
+      news-retrieval:
+        condition: service_started
+      signal-detection:
+        condition: service_started
+    networks:
+      - ocn-internal
+
   postgres-auth-test:
     image: postgres:16
     ports:
