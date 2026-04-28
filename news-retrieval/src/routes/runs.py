@@ -48,13 +48,14 @@ def get_articles_for_run(
     run_id: int,
     limit: int = Query(default=20, ge=1, le=100),
     cursor: Optional[str] = None,
+    include_body: bool = False,
 ) -> dict:
     """Return paginated articles for a run."""
     if get_run(run_id) is None:
         raise HTTPException(status_code=404, detail="Run not found.")
     try:
         articles, next_cursor = list_articles_for_run(
-            run_id, limit=limit, cursor=cursor
+            run_id, limit=limit, cursor=cursor, include_body=include_body
         )
     except ValueError:
         raise HTTPException(status_code=422, detail="Invalid cursor.")

@@ -43,7 +43,7 @@ All write endpoints require an `Authorization: Bearer <token>` header. Admin-onl
 | `POST` | `/run` | Required | Submit a pipeline run; returns `202` with `run_id`, or `200` with `cache_hit: true` if an identical run completed today |
 | `GET` | `/runs` | — | List runs newest-first; filter by `domain`, `status`, `from_date`, `to_date`; cursor-paginated |
 | `GET` | `/runs/{id}` | — | Single run record |
-| `GET` | `/runs/{id}/articles` | — | Articles for a run; cursor-paginated |
+| `GET` | `/runs/{id}/articles` | — | Articles for a run; cursor-paginated. Pass `include_body=true` to include article body text (omitted by default) |
 | `GET` | `/articles/{id}` | — | Single article record |
 | `GET` | `/domains` | — | List domains (caller's owned + null-owner domains) |
 | `POST` | `/domains` | Required | Create a domain |

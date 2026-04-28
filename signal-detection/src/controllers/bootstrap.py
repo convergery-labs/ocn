@@ -93,7 +93,10 @@ def _fetch_articles(
             for run in runs:
                 article_cursor: str | None = None
                 while True:
-                    art_params: dict = {"limit": _FETCH_PAGE_SIZE}
+                    art_params: dict = {
+                        "limit": _FETCH_PAGE_SIZE,
+                        "include_body": "true",
+                    }
                     if article_cursor:
                         art_params["cursor"] = article_cursor
 
