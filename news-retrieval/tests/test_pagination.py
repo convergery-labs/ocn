@@ -169,6 +169,7 @@ async def test_get_all_articles_paginates(client) -> None:
     body1 = resp1.json()
     assert len(body1["articles"]) == 2
     assert body1["next_cursor"] is not None
+    assert "domain" in body1["articles"][0]
 
     resp2 = await client.get(
         f"/articles?limit=2&cursor={body1['next_cursor']}"
@@ -205,6 +206,7 @@ async def test_get_all_articles_domain_filter(client) -> None:
     articles = resp.json()["articles"]
     assert len(articles) == 1
     assert articles[0]["url"] == "http://ex.com/ai/1"
+    assert articles[0]["domain"] == "ai_news"
 
 
 async def test_get_all_articles_body_excluded_by_default(
