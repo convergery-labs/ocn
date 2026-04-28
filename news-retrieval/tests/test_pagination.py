@@ -79,3 +79,64 @@ async def test_articles_pagination_advances_through_pages(
     body3 = resp3.json()
     assert len(body3["articles"]) == 1
     assert body3["next_cursor"] is None
+
+
+async def test_articles_body_excluded_by_default(client) -> None:
+    """GET /runs/{id}/articles omits body field by default."""
+    run_id = _make_run("no-body-default-run")
+    create_articles([{
+        "run_id": run_id,
+        "url": "http://ex.com/1",
+        "title": "Art 1",
+        "summary": "s",
+        "source": "src",
+        "published": "2026-01-01",
+        "body": "full article text",
+    }])
+
+    resp = await client.get(f"/runs/{run_id}/articles")
+    assert resp.status_code == 200
+    article = resp.json()["articles"][0]
+    assert "body" not in article
+
+
+async def test_articles_body_included_when_requested(client) -> None:
+    """GET /runs/{id}/articles?include_body=true returns body field."""
+    run_id = _make_run("with-body-run")
+    create_articles([{
+        "run_id": run_id,
+        "url": "http://ex.com/1",
+        "title": "Art 1",
+        "summary": "s",
+        "source": "src",
+        "published": "2026-01-01",
+        "body": "full article text",
+    }])
+
+    resp = await client.get(
+        f"/runs/{run_id}/articles?include_body=true"
+    )
+    assert resp.status_code == 200
+    article = resp.json()["articles"][0]
+    assert article["body"] == "full article text"
+
+
+async def test_articles_body_excluded_when_false(client) -> None:
+    """GET /runs/{id}/articles?include_body=false omits body field."""
+    run_id = _make_run("explicit-no-body-run")
+    create_articles([{
+        "run_id": run_id,
+        "url": "http://ex.com/1",
+        "title": "Art 1",
+        "summary": "s",
+        "source": "src",
+        "published": "2026-01-01",
+        "body": "full article text",
+    }])
+
+    resp = await client.get(
+        f"/runs/{run_id}/articles?include_body=false"
+    )
+    assert resp.status_code == 200
+    article = resp.json()["articles"][0]
+    assert "body" not in article

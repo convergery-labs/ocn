@@ -55,11 +55,13 @@ def list_articles_for_run(
     run_id: int,
     limit: int = 20,
     cursor: Optional[str] = None,
+    include_body: bool = True,
 ) -> tuple[list[dict], Optional[str]]:
     """Return paginated articles for a run, ordered by id asc.
 
     Returns a (rows, next_cursor) tuple. next_cursor is None when
-    there are no further pages.
+    there are no further pages. Body fields are omitted unless
+    include_body is True.
     """
     params: dict = {"run_id": run_id, "limit": limit + 1}
     after_clause = ""
@@ -80,6 +82,10 @@ def list_articles_for_run(
             params,
         )
         rows = [dict(row) for row in cur.fetchall()]
+
+    if not include_body:
+        for row in rows:
+            row.pop("body", None)
 
     next_cursor: Optional[str] = None
     if len(rows) > limit:
