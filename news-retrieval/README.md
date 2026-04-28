@@ -44,6 +44,7 @@ All write endpoints require an `Authorization: Bearer <token>` header. Admin-onl
 | `GET` | `/runs` | — | List runs newest-first; filter by `domain`, `status`, `from_date`, `to_date`; cursor-paginated |
 | `GET` | `/runs/{id}` | — | Single run record |
 | `GET` | `/runs/{id}/articles` | — | Articles for a run; cursor-paginated. Pass `include_body=true` to include article body text (omitted by default) |
+| `GET` | `/articles` | — | All articles across runs; filter by `domain` slug; cursor-paginated. Pass `include_body=true` to include body text (omitted by default) |
 | `GET` | `/articles/{id}` | — | Single article record |
 | `GET` | `/domains` | — | List domains (caller's owned + null-owner domains) |
 | `POST` | `/domains` | Required | Create a domain |

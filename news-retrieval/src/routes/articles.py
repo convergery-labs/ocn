@@ -1,9 +1,34 @@
 """Routes for /articles."""
-from fastapi import APIRouter, HTTPException
+from typing import Optional
 
-from models.articles import get_article
+from fastapi import APIRouter, HTTPException, Query
+
+from models.articles import get_article, list_articles
 
 router = APIRouter()
+
+
+@router.get("/articles")
+def get_articles(
+    domain: Optional[str] = None,
+    limit: int = Query(default=20, ge=1, le=100),
+    cursor: Optional[str] = None,
+    include_body: bool = False,
+) -> dict:
+    """Return paginated articles across all runs, newest id first.
+
+    Optionally filtered to a domain slug via ``?domain=``.
+    """
+    try:
+        articles, next_cursor = list_articles(
+            domain=domain,
+            limit=limit,
+            cursor=cursor,
+            include_body=include_body,
+        )
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid cursor.")
+    return {"articles": articles, "next_cursor": next_cursor}
 
 
 @router.get("/articles/{article_id}")
