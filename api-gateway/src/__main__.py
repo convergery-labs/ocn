@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 if __name__ == "__main__":
     @click.command()
     @click.option("--host", default="0.0.0.0")
-    @click.option("--port", default=8003)
+    @click.option("--port", default=8004)
     def main(host: str, port: int) -> None:
         """Start the api-gateway uvicorn server."""
         logger.info("Starting api-gateway...")

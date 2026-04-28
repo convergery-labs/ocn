@@ -1,4 +1,8 @@
 """Generic async HTTP proxy using httpx.AsyncClient."""
+import base64
+import json
+from typing import Any
+
 import httpx
 from fastapi import Request
 from fastapi.responses import Response
@@ -22,6 +26,7 @@ async def forward_request(
     upstream_base: str,
     path: str,
     request: Request,
+    caller: dict[str, Any] | None = None,
 ) -> Response:
     """Forward *request* to *upstream_base*/*path* and return the response.
 
@@ -33,6 +38,9 @@ async def forward_request(
             slash), e.g. ``http://auth-service:8001``.
         path: Path segment to append, e.g. ``health``.
         request: The incoming FastAPI request to forward.
+        caller: Authenticated caller dict (``sub``, ``role``,
+            ``domains``). When provided, ``X-OCN-Caller`` is injected
+            as a base64-encoded JSON header.
 
     Returns:
         A :class:`fastapi.responses.Response` with the upstream's
@@ -47,6 +55,15 @@ async def forward_request(
         for k, v in request.headers.items()
         if k.lower() not in _HOP_BY_HOP
     }
+    if caller:
+        payload = json.dumps({
+            "sub": caller["sub"],
+            "role": caller["role"],
+            "domains": caller.get("domains", []),
+        })
+        headers["x-ocn-caller"] = base64.b64encode(
+            payload.encode()
+        ).decode()
     body = await request.body()
 
     try:

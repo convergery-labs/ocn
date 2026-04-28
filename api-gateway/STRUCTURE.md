@@ -4,7 +4,7 @@
 
 | File | Purpose |
 |------|---------|
-| `Dockerfile` | Multi-stage build: `base` runs uvicorn on port 8003; `test` adds pytest |
+| `Dockerfile` | Multi-stage build: `base` runs uvicorn on port 8004; `test` adds pytest |
 | `requirements.txt` | Production dependencies (fastapi, uvicorn, httpx, click) |
 | `requirements-test.txt` | Test-only dependencies (pytest, pytest-asyncio, httpx) |
 | `pyproject.toml` | Pytest config (`asyncio_mode=auto`, `testpaths=["tests"]`) |
@@ -18,9 +18,10 @@
 | App factory | `src/app.py` | Assembles `FastAPI`, registers routers; no I/O |
 | Routes | `src/routes/health.py` | `GET /health` — validates upstream URL config |
 | Routes | `src/routes/proxy_routes.py` | Catch-all proxy routes per upstream service |
+| Auth | `src/auth.py` | `require_auth` / `require_admin` FastAPI dependencies |
 | Infrastructure | `src/proxy.py` | `forward_request()` using a shared `httpx.AsyncClient` |
 
-Dependencies flow one way: `__main__` → `app` → `routes` → `proxy`.
+Dependencies flow one way: `__main__` → `app` → `routes` → `auth` / `proxy`.
 
 ## Proxy Forwarding Flow
 
@@ -51,11 +52,13 @@ A `502` is returned if the upstream is unreachable (`httpx.RequestError`).
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `GET` | `/health` | none | 200 if all `GATEWAY_*` URLs are set; 503 otherwise |
-| `*` | `/auth/{path}` | upstream | Proxied to `GATEWAY_AUTH_URL/{path}` |
-| `*` | `/news/{path}` | upstream | Proxied to `GATEWAY_NEWS_URL/{path}` |
-| `*` | `/signal/{path}` | upstream | Proxied to `GATEWAY_SIGNAL_URL/{path}` |
+| `*` | `/auth/{path}` | `require_auth` | Proxied to `GATEWAY_AUTH_URL/{path}` |
+| `*` | `/news/{path}` | `require_auth` | Proxied to `GATEWAY_NEWS_URL/{path}` |
+| `*` | `/signal/{path}` | `require_admin` | Proxied to `GATEWAY_SIGNAL_URL/{path}` (admin only) |
 
-Auth is enforced by the upstream service, not the gateway.
+Auth is enforced at the gateway via Bearer token validation against
+`POST {GATEWAY_AUTH_URL}/validate`. Validated caller identity is
+propagated downstream via `X-Caller-Id` and `X-Caller-Role` headers.
 
 ## Testing
 
@@ -79,3 +82,4 @@ docker compose run --rm --build api-gateway pytest tests/ -v
 |------|--------|
 | `tests/conftest.py` | ASGI `client` fixture with all `GATEWAY_*` vars pre-set |
 | `tests/test_health.py` | `/health` — 200 when all vars set, 503 when one is missing |
+| `tests/test_auth.py` | missing token → 401; unknown → 401; wrong role → 403; valid admin → 200 |
