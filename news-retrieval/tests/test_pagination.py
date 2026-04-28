@@ -140,3 +140,88 @@ async def test_articles_body_excluded_when_false(client) -> None:
     assert resp.status_code == 200
     article = resp.json()["articles"][0]
     assert "body" not in article
+
+
+def _make_run_for_domain(name: str, domain: str) -> int:
+    """Insert a completed run for a given domain slug."""
+    run_id = create_run(name, domain, 7, None, None, "test-model")
+    complete_run(run_id, 0)
+    return run_id
+
+
+async def test_get_all_articles_paginates(client) -> None:
+    """GET /articles returns cursor-paginated articles across runs."""
+    run_id = _make_run("all-art-pag-run")
+    create_articles([
+        {
+            "run_id": run_id,
+            "url": f"http://ex.com/all/{i}",
+            "title": f"Art {i}",
+            "summary": "s",
+            "source": "src",
+            "published": "2026-01-01",
+        }
+        for i in range(3)
+    ])
+
+    resp1 = await client.get("/articles?limit=2")
+    assert resp1.status_code == 200
+    body1 = resp1.json()
+    assert len(body1["articles"]) == 2
+    assert body1["next_cursor"] is not None
+
+    resp2 = await client.get(
+        f"/articles?limit=2&cursor={body1['next_cursor']}"
+    )
+    body2 = resp2.json()
+    assert len(body2["articles"]) == 1
+    assert body2["next_cursor"] is None
+
+
+async def test_get_all_articles_domain_filter(client) -> None:
+    """GET /articles?domain= returns only articles from that domain."""
+    ai_run = _make_run_for_domain("filter-ai-run", "ai_news")
+    sm_run = _make_run_for_domain("filter-sm-run", "smart_money")
+
+    create_articles([{
+        "run_id": ai_run,
+        "url": "http://ex.com/ai/1",
+        "title": "AI Art",
+        "summary": "s",
+        "source": "src",
+        "published": "2026-01-01",
+    }])
+    create_articles([{
+        "run_id": sm_run,
+        "url": "http://ex.com/sm/1",
+        "title": "SM Art",
+        "summary": "s",
+        "source": "src",
+        "published": "2026-01-01",
+    }])
+
+    resp = await client.get("/articles?domain=ai_news")
+    assert resp.status_code == 200
+    articles = resp.json()["articles"]
+    assert len(articles) == 1
+    assert articles[0]["url"] == "http://ex.com/ai/1"
+
+
+async def test_get_all_articles_body_excluded_by_default(
+    client,
+) -> None:
+    """GET /articles omits body by default."""
+    run_id = _make_run("all-art-no-body-run")
+    create_articles([{
+        "run_id": run_id,
+        "url": "http://ex.com/nb/1",
+        "title": "Art",
+        "summary": "s",
+        "source": "src",
+        "published": "2026-01-01",
+        "body": "full text",
+    }])
+
+    resp = await client.get("/articles")
+    assert resp.status_code == 200
+    assert "body" not in resp.json()["articles"][0]

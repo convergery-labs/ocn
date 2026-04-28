@@ -95,6 +95,55 @@ def list_articles_for_run(
     return rows, next_cursor
 
 
+def list_articles(
+    domain: Optional[str] = None,
+    limit: int = 20,
+    cursor: Optional[str] = None,
+    include_body: bool = True,
+) -> tuple[list[dict], Optional[str]]:
+    """Return paginated articles across all runs, ordered by id asc.
+
+    Optionally filtered to a single domain slug. Body fields are
+    omitted unless include_body is True.
+    """
+    params: dict = {"limit": limit + 1}
+    domain_clause = ""
+    after_clause = ""
+
+    if domain is not None:
+        domain_clause = "AND r.domain = :domain"
+        params["domain"] = domain
+
+    if cursor is not None:
+        after_id = _decode_article_cursor(cursor)
+        after_clause = "AND a.id > :after_id"
+        params["after_id"] = after_id
+
+    with get_db() as conn:
+        cur = conn.execute(
+            f"""
+            SELECT a.* FROM articles a
+            JOIN runs r ON r.id = a.run_id
+            WHERE TRUE {domain_clause} {after_clause}
+            ORDER BY a.id ASC
+            LIMIT :limit
+            """,
+            params,
+        )
+        rows = [dict(row) for row in cur.fetchall()]
+
+    if not include_body:
+        for row in rows:
+            row.pop("body", None)
+
+    next_cursor: Optional[str] = None
+    if len(rows) > limit:
+        rows = rows[:limit]
+        next_cursor = _encode_article_cursor(rows[-1]["id"])
+
+    return rows, next_cursor
+
+
 def fetch_all_articles_for_run(run_id: int) -> list[dict]:
     """Return all article rows for a run as dicts (no pagination)."""
     with get_db() as conn:
