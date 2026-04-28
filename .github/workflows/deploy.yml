@@ -141,7 +141,8 @@ jobs:
             --query taskDefinition)
           NEW_TASK=$(echo $TASK_DEF | jq \
             --arg img "$IMAGE:$TAG" \
-            '.containerDefinitions[0].image = $img')
+            'del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy)
+            | .containerDefinitions[0].image = $img')
           aws ecs register-task-definition --cli-input-json "$NEW_TASK"
           aws ecs update-service \
             --cluster staging-ocn-cluster \
@@ -180,7 +181,8 @@ jobs:
             --query taskDefinition)
           NEW_TASK=$(echo $TASK_DEF | jq \
             --arg img "$IMAGE:$TAG" \
-            '.containerDefinitions[0].image = $img')
+            'del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy)
+            | .containerDefinitions[0].image = $img')
           aws ecs register-task-definition --cli-input-json "$NEW_TASK"
           aws ecs update-service \
             --cluster staging-ocn-cluster \
@@ -218,7 +220,8 @@ jobs:
             --query taskDefinition)
           NEW_TASK=$(echo $TASK_DEF | jq \
             --arg img "$IMAGE:$TAG" \
-            '.containerDefinitions[0].image = $img')
+            'del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy)
+            | .containerDefinitions[0].image = $img')
           aws ecs register-task-definition --cli-input-json "$NEW_TASK"
           aws ecs update-service \
             --cluster staging-ocn-cluster \
