@@ -20,6 +20,7 @@ Confluence space: `Projects` — Cloud: `opengrowthventures.atlassian.net`
 | `auth-service` | [auth-service/](auth-service/) | [auth-service/CLAUDE.md](auth-service/CLAUDE.md) | Authentication and API key management |
 | `news-retrieval` | [news-retrieval/](news-retrieval/) | [news-retrieval/CLAUDE.md](news-retrieval/CLAUDE.md) | RSS feed fetching and LLM-based relevance filtering |
 | `signal-detection` | [signal-detection/](signal-detection/) | [signal-detection/CLAUDE.md](signal-detection/CLAUDE.md) | Signal detection and vector-similarity pipelines |
+| `api-gateway` | [api-gateway/](api-gateway/) | [api-gateway/CLAUDE.md](api-gateway/CLAUDE.md) | Async HTTP reverse proxy to OCN upstream services |
 | `infra` | [infra/](infra/) | [infra/CLAUDE.md](infra/CLAUDE.md) | Terraform infrastructure (VPC, RDS, ECS, ALB, IAM) |
 
 ## Jira Board
@@ -55,6 +56,14 @@ ocn/
 │   ├── src/
 │   └── tests/
 ├── signal-detection/         # see signal-detection/STRUCTURE.md
+│   ├── CLAUDE.md
+│   ├── STRUCTURE.md
+│   ├── README.md
+│   ├── Dockerfile
+│   ├── requirements.txt
+│   ├── src/
+│   └── tests/
+├── api-gateway/              # see api-gateway/STRUCTURE.md
 │   ├── CLAUDE.md
 │   ├── STRUCTURE.md
 │   ├── README.md
