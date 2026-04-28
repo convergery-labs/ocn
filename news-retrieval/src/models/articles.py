@@ -122,7 +122,7 @@ def list_articles(
     with get_db() as conn:
         cur = conn.execute(
             f"""
-            SELECT a.* FROM articles a
+            SELECT a.*, r.domain FROM articles a
             JOIN runs r ON r.id = a.run_id
             WHERE TRUE {domain_clause} {after_clause}
             ORDER BY a.id ASC
