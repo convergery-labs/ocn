@@ -19,7 +19,7 @@ service based on the URL prefix.
 docker compose up api-gateway
 ```
 
-The gateway listens on port **8003**.
+The gateway listens on port **8004**.
 
 ## Environment Variables
 
@@ -41,7 +41,7 @@ The gateway listens on port **8003**.
 ### Example: health check
 
 ```bash
-curl http://localhost:8003/health
+curl http://localhost:8004/health
 # {"status": "ok"}
 ```
 
@@ -49,7 +49,7 @@ curl http://localhost:8003/health
 
 ```bash
 # Reaches auth-service GET /health via the gateway
-curl http://localhost:8003/auth/health
+curl http://localhost:8004/auth/health
 # {"status": "ok"}
 ```
 
