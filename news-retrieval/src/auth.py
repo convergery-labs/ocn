@@ -3,7 +3,10 @@ import os
 from typing import Any
 
 import httpx
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
+_bearer = HTTPBearer()
 
 
 class CallerInfo(dict):
@@ -15,7 +18,7 @@ class CallerInfo(dict):
 
 
 async def require_auth(
-    authorization: str = Header(...),
+    credentials: HTTPAuthorizationCredentials = Depends(_bearer),
 ) -> dict[str, Any]:
     """Validate the Bearer token via the auth-service.
 
@@ -35,7 +38,11 @@ async def require_auth(
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.post(
                 f"{auth_service_url}/validate",
-                headers={"Authorization": authorization},
+                headers={
+                    "Authorization": (
+                        f"Bearer {credentials.credentials}"
+                    )
+                },
             )
     except httpx.HTTPError:
         raise HTTPException(
