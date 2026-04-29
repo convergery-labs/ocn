@@ -13,7 +13,7 @@ async def test_post_source_by_non_owner_returns_403(
             "domain_id": user_domain,
             "frequency_id": daily_frequency_id,
         },
-        headers={"Authorization": f"Bearer {key}"},
+        headers={"x-ocn-caller": key},
     )
     assert resp.status_code == 403
 
@@ -30,7 +30,7 @@ async def test_post_source_by_owner_returns_201(
             "domain_id": user_domain,
             "frequency_id": daily_frequency_id,
         },
-        headers={"Authorization": f"Bearer {key}"},
+        headers={"x-ocn-caller": key},
     )
     assert resp.status_code == 201
 
@@ -43,7 +43,7 @@ async def test_patch_domain_by_non_owner_returns_403(
     resp = await client.patch(
         f"/domains/{user_domain}",
         json={"description": "unauthorized update"},
-        headers={"Authorization": f"Bearer {key}"},
+        headers={"x-ocn-caller": key},
     )
     assert resp.status_code == 403
 
@@ -55,7 +55,7 @@ async def test_null_owner_domains_visible_to_all_users(
     key, _ = user_key
     resp = await client.get(
         "/domains",
-        headers={"Authorization": f"Bearer {key}"},
+        headers={"x-ocn-caller": key},
     )
     assert resp.status_code == 200
     slugs = {d["slug"] for d in resp.json()}
@@ -74,7 +74,7 @@ async def test_multi_key_access_to_same_domain(
     resp = await client.post(
         "/domains",
         json={"name": "Shared Domain", "slug": "shared-domain"},
-        headers={"Authorization": f"Bearer {user_k}"},
+        headers={"x-ocn-caller": user_k},
     )
     assert resp.status_code == 201
     domain_id = resp.json()["id"]
@@ -83,7 +83,7 @@ async def test_multi_key_access_to_same_domain(
     resp = await client.post(
         f"/grants/{other_user_key[1]}/domains",
         json={"domain_ids": [domain_id]},
-        headers={"Authorization": f"Bearer {admin_key}"},
+        headers={"x-ocn-caller": admin_key},
     )
     assert resp.status_code == 200
 
@@ -99,7 +99,7 @@ async def test_multi_key_access_to_same_domain(
                 "domain_id": domain_id,
                 "frequency_id": daily_frequency_id,
             },
-            headers={"Authorization": f"Bearer {key}"},
+            headers={"x-ocn-caller": key},
         )
         assert resp.status_code == 201
 
@@ -115,7 +115,7 @@ async def test_revoked_access_returns_403(
     resp = await client.post(
         "/domains",
         json={"name": "Revoke Domain", "slug": "revoke-domain"},
-        headers={"Authorization": f"Bearer {user_k}"},
+        headers={"x-ocn-caller": user_k},
     )
     assert resp.status_code == 201
     domain_id = resp.json()["id"]
@@ -124,7 +124,7 @@ async def test_revoked_access_returns_403(
     await client.post(
         f"/grants/{other_id}/domains",
         json={"domain_ids": [domain_id]},
-        headers={"Authorization": f"Bearer {admin_key}"},
+        headers={"x-ocn-caller": admin_key},
     )
 
     # other_user_key can POST source
@@ -135,14 +135,14 @@ async def test_revoked_access_returns_403(
             "domain_id": domain_id,
             "frequency_id": daily_frequency_id,
         },
-        headers={"Authorization": f"Bearer {other_k}"},
+        headers={"x-ocn-caller": other_k},
     )
     assert resp.status_code == 201
 
     # Revoke other_user_key's access
     resp = await client.delete(
         f"/grants/{other_id}/domains/{domain_id}",
-        headers={"Authorization": f"Bearer {admin_key}"},
+        headers={"x-ocn-caller": admin_key},
     )
     assert resp.status_code == 204
 
@@ -154,7 +154,7 @@ async def test_revoked_access_returns_403(
             "domain_id": domain_id,
             "frequency_id": daily_frequency_id,
         },
-        headers={"Authorization": f"Bearer {other_k}"},
+        headers={"x-ocn-caller": other_k},
     )
     assert resp.status_code == 403
 
@@ -169,7 +169,7 @@ async def test_admin_bypass_unaffected(
     resp = await client.post(
         "/domains",
         json={"name": "Admin Bypass Domain", "slug": "admin-bypass"},
-        headers={"Authorization": f"Bearer {user_k}"},
+        headers={"x-ocn-caller": user_k},
     )
     assert resp.status_code == 201
     domain_id = resp.json()["id"]
@@ -182,7 +182,7 @@ async def test_admin_bypass_unaffected(
             "domain_id": domain_id,
             "frequency_id": daily_frequency_id,
         },
-        headers={"Authorization": f"Bearer {admin_key}"},
+        headers={"x-ocn-caller": admin_key},
     )
     assert resp.status_code == 201
 
@@ -198,7 +198,7 @@ async def test_grant_domains_endpoint_returns_domain_list(
     resp = await client.post(
         "/domains",
         json={"name": "Grant Test Domain", "slug": "grant-test"},
-        headers={"Authorization": f"Bearer {user_k}"},
+        headers={"x-ocn-caller": user_k},
     )
     assert resp.status_code == 201
     domain_id = resp.json()["id"]
@@ -207,7 +207,7 @@ async def test_grant_domains_endpoint_returns_domain_list(
     resp = await client.post(
         f"/grants/{other_id}/domains",
         json={"domain_ids": [domain_id]},
-        headers={"Authorization": f"Bearer {admin_key}"},
+        headers={"x-ocn-caller": admin_key},
     )
     assert resp.status_code == 200
     granted_ids = [d["id"] for d in resp.json()]
@@ -221,7 +221,7 @@ async def test_revoke_domain_endpoint_404_on_missing_grant(
     _, other_id = other_user_key
     resp = await client.delete(
         f"/grants/{other_id}/domains/99999",
-        headers={"Authorization": f"Bearer {admin_key}"},
+        headers={"x-ocn-caller": admin_key},
     )
     assert resp.status_code == 404
 

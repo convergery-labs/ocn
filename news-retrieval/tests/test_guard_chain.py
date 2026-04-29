@@ -24,7 +24,7 @@ async def test_concurrent_run_returns_409_with_run_id(
     resp = await client.post(
         "/run",
         json={"domain": "ai_news"},
-        headers={"Authorization": f"Bearer {admin_key}"},
+        headers={"x-ocn-caller": admin_key},
     )
 
     assert resp.status_code == 409
@@ -41,7 +41,7 @@ async def test_force_bypasses_concurrent_guard(
     resp = await client.post(
         "/run",
         json={"domain": "ai_news", "force": True},
-        headers={"Authorization": f"Bearer {admin_key}"},
+        headers={"x-ocn-caller": admin_key},
     )
 
     assert resp.status_code == 202
