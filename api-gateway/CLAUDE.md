@@ -38,7 +38,8 @@ api-gateway/
 │       └── proxy_routes.py # /auth/*, /news/*, /signal/* catch-alls
 └── tests/
     ├── conftest.py          # ASGI client fixture
-    └── test_health.py       # /health endpoint tests
+    ├── test_health.py       # /health endpoint tests
+    └── test_auth.py         # auth enforcement + public route tests
 ```
 
 ## Documentation

@@ -34,9 +34,10 @@ The gateway listens on port **8004**.
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/health` | 200 if all upstream URLs configured; 503 otherwise |
-| `*` | `/auth/{path}` | Proxy to auth-service |
-| `*` | `/news/{path}` | Proxy to news-retrieval |
-| `*` | `/signal/{path}` | Proxy to signal-detection |
+| `GET` | `/auth/jwks` | Proxy to auth-service `/jwks` — public, no auth |
+| `*` | `/auth/{path}` | Proxy to auth-service (requires auth) |
+| `*` | `/news/{path}` | Proxy to news-retrieval (requires auth) |
+| `*` | `/signal/{path}` | Proxy to signal-detection (requires admin) |
 
 ### Example: health check
 

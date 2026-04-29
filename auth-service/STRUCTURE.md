@@ -19,6 +19,7 @@
 | Routes | `src/routes/auth.py` | `POST /register`, `POST /login` — public endpoints; no auth required |
 | Routes | `src/routes/keys.py` | `GET /keys`, `POST /keys` — HTTP only, delegates to models |
 | Routes | `src/routes/validate.py` | `POST /validate` — HTTP only, delegates to models |
+| Routes | `src/routes/jwks.py` | `GET /jwks` — unauthenticated; returns RS256 public key in JWKS format |
 | Auth | `src/auth.py` | `require_auth`, `require_admin` FastAPI dependencies |
 | Models | `src/models/api_keys.py` | `ApiKeyRow`, `generate_key`, `hash_key`, CRUD functions |
 | Models | `src/models/users.py` | `UserRow`, `create_user`, `get_user_by_username`, `update_last_login` |
@@ -34,6 +35,7 @@
 | `GET` | `/health` | none | Liveness check; returns `{"status": "ok"}` |
 | `POST` | `/register` | none | Create user account; returns `{id, username, email, role, domains}` (201); 409 on duplicate; 404 on unknown domain slug |
 | `POST` | `/login` | none | Verify credentials; returns `{access_token, token_type}` with RS256 JWT; 401 on bad credentials; 403 if inactive |
+| `GET` | `/jwks` | none | RS256 public key as JWKS; no auth required |
 | `GET` | `/keys` | admin | List all keys (hashes excluded) |
 | `POST` | `/keys` | admin | Create key; returns plaintext once (201) |
 | `POST` | `/validate` | Bearer token in header | Validate a key; returns `{valid, role, key_id}` |
@@ -61,3 +63,4 @@ The test suite creates and wipes `auth-service-test` automatically.
 | `tests/test_auth.py` | `POST /register`, `POST /login` — happy paths, duplicate/unknown domain, wrong password, inactive account |
 | `tests/test_keys.py` | `GET /keys`, `POST /keys` — auth enforcement, response shape |
 | `tests/test_validate.py` | `POST /validate` — valid keys, unknown keys, missing/malformed headers |
+| `tests/test_jwks.py` | `GET /jwks` — response shape, public key verifies issued JWT |

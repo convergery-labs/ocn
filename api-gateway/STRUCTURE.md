@@ -52,6 +52,7 @@ A `502` is returned if the upstream is unreachable (`httpx.RequestError`).
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `GET` | `/health` | none | 200 if all `GATEWAY_*` URLs are set; 503 otherwise |
+| `GET` | `/auth/jwks` | none | Proxied to auth-service `/jwks`; public |
 | `*` | `/auth/{path}` | `require_auth` | Proxied to `GATEWAY_AUTH_URL/{path}` |
 | `*` | `/news/{path}` | `require_auth` | Proxied to `GATEWAY_NEWS_URL/{path}` |
 | `*` | `/signal/{path}` | `require_admin` | Proxied to `GATEWAY_SIGNAL_URL/{path}` (admin only) |
