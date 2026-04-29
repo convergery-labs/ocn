@@ -30,6 +30,14 @@ async def proxy_auth_register(request: Request) -> Response:
     )
 
 
+@router.api_route("/auth/jwks", methods=_METHODS)
+async def proxy_auth_jwks(request: Request) -> Response:
+    """Proxy /auth/jwks to the auth-service (public — no auth)."""
+    return await forward_request(
+        os.environ.get("GATEWAY_AUTH_URL", ""), "jwks", request
+    )
+
+
 @router.api_route("/auth/{path:path}", methods=_METHODS)
 async def proxy_auth(
     path: str,

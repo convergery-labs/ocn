@@ -38,6 +38,7 @@ auth-service/
 │   └── routes/
 │       ├── health.py     # GET /health
 │       ├── auth.py       # POST /register, POST /login (public)
+│       ├── jwks.py       # GET /jwks (public — RS256 public key in JWKS format)
 │       ├── keys.py       # GET /keys, POST /keys
 │       └── validate.py   # POST /validate
 └── tests/
