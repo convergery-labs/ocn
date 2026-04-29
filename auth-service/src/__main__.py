@@ -6,7 +6,7 @@ import uvicorn
 
 from app import app
 from db import init_db
-from seed import seed_admin_key
+from seed import seed_admin_key, seed_admin_user
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -22,6 +22,8 @@ if __name__ == "__main__":
         init_db()
         logger.info("Seeding admin key...")
         seed_admin_key()
+        logger.info("Seeding admin user...")
+        seed_admin_user()
         logger.info("Startup complete.")
         uvicorn.run(app, host=host, port=port)
 

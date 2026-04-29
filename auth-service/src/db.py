@@ -28,7 +28,7 @@ db_utils.configure(_new_connection)
 
 
 def init_db() -> None:
-    """Create the roles and api_keys tables if they do not exist."""
+    """Create all auth-service tables if they do not exist."""
     with get_db() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS roles (
@@ -48,5 +48,31 @@ def init_db() -> None:
                 created_by   INTEGER     REFERENCES api_keys(id),
                 created_at   TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 last_used_at TIMESTAMPTZ
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS domains (
+                id   SERIAL PRIMARY KEY,
+                slug TEXT NOT NULL UNIQUE
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id            SERIAL PRIMARY KEY,
+                username      TEXT        NOT NULL UNIQUE,
+                email         TEXT        NOT NULL UNIQUE,
+                password_hash TEXT        NOT NULL,
+                role          TEXT        NOT NULL REFERENCES roles(name)
+                                          DEFAULT 'user',
+                is_active     BOOLEAN     NOT NULL DEFAULT TRUE,
+                created_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                last_login_at TIMESTAMPTZ
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_domains (
+                user_id   INTEGER NOT NULL REFERENCES users(id),
+                domain_id INTEGER NOT NULL REFERENCES domains(id),
+                PRIMARY KEY (user_id, domain_id)
             )
         """)

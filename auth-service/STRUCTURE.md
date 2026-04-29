@@ -13,21 +13,27 @@
 
 | Layer | File | Responsibility |
 |-------|------|---------------|
-| Entry point | `src/__main__.py` | `init_db` → `seed_admin_key` → `uvicorn.run`; never imports routes |
+| Entry point | `src/__main__.py` | `init_db` → `seed_admin_key` → `seed_admin_user` → `uvicorn.run`; never imports routes |
 | App factory | `src/app.py` | Assembles `FastAPI`, registers routers; no DB or seed logic |
 | Routes | `src/routes/health.py` | `GET /health` — liveness check |
+| Routes | `src/routes/auth.py` | `POST /register`, `POST /login` — public endpoints; no auth required |
 | Routes | `src/routes/keys.py` | `GET /keys`, `POST /keys` — HTTP only, delegates to models |
 | Routes | `src/routes/validate.py` | `POST /validate` — HTTP only, delegates to models |
 | Auth | `src/auth.py` | `require_auth`, `require_admin` FastAPI dependencies |
 | Models | `src/models/api_keys.py` | `ApiKeyRow`, `generate_key`, `hash_key`, CRUD functions |
+| Models | `src/models/users.py` | `UserRow`, `create_user`, `get_user_by_username`, `update_last_login` |
+| Models | `src/models/domains.py` | `DomainRow`, `get_domains_by_slugs`, `get_domain_slugs_for_user`, `attach_domains_to_user` |
+| JWT | `src/jwt_utils.py` | `issue_token()` — RS256 JWT issuance via `AUTH_JWT_PRIVATE_KEY` env var (PEM) |
 | Infrastructure | `src/db.py` | Thin adapter: `_new_connection` (reads `AUTH_POSTGRES_*`), `init_db`, `db_utils.configure()`; re-exports `get_db` and `DuplicateError` from `shared/src/db_utils.py` |
-| Seed | `src/seed.py` | `seed_admin_key()` — idempotent, called from entry point only |
+| Seed | `src/seed.py` | `seed_admin_key()`, `seed_admin_user()` — idempotent, called from entry point only |
 
 ## HTTP API
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `GET` | `/health` | none | Liveness check; returns `{"status": "ok"}` |
+| `POST` | `/register` | none | Create user account; returns `{id, username, email, role, domains}` (201); 409 on duplicate; 404 on unknown domain slug |
+| `POST` | `/login` | none | Verify credentials; returns `{access_token, token_type}` with RS256 JWT; 401 on bad credentials; 403 if inactive |
 | `GET` | `/keys` | admin | List all keys (hashes excluded) |
 | `POST` | `/keys` | admin | Create key; returns plaintext once (201) |
 | `POST` | `/validate` | Bearer token in header | Validate a key; returns `{valid, role, key_id}` |
@@ -51,6 +57,7 @@ The test suite creates and wipes `auth-service-test` automatically.
 
 | File | Covers |
 |------|--------|
-| `tests/conftest.py` | DB setup, `admin_key`, `user_key`, async `client` fixtures |
+| `tests/conftest.py` | DB setup, RSA key pair generation, `admin_key`, `user_key`, `seed_domains`, async `client` fixtures |
+| `tests/test_auth.py` | `POST /register`, `POST /login` — happy paths, duplicate/unknown domain, wrong password, inactive account |
 | `tests/test_keys.py` | `GET /keys`, `POST /keys` — auth enforcement, response shape |
 | `tests/test_validate.py` | `POST /validate` — valid keys, unknown keys, missing/malformed headers |
