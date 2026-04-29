@@ -1,5 +1,4 @@
 """Route for GET /health."""
-import asyncio
 import os
 
 import httpx
@@ -25,19 +24,6 @@ async def _check_qdrant() -> bool:
         return False
 
 
-async def _check_auth_service() -> bool | None:
-    """Return True/False if AUTH_SERVICE_URL is set, else None."""
-    auth_service_url = os.environ.get("AUTH_SERVICE_URL")
-    if not auth_service_url:
-        return None
-    try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            resp = await client.get(f"{auth_service_url}/health")
-        return resp.status_code == 200
-    except httpx.HTTPError:
-        return False
-
-
 @router.get("/health")
 async def health() -> JSONResponse:
     """Return health status of the server and its dependencies."""
@@ -50,14 +36,7 @@ async def health() -> JSONResponse:
     except Exception:
         checks["postgres"] = False
 
-    qdrant_result, auth_result = await asyncio.gather(
-        _check_qdrant(),
-        _check_auth_service(),
-    )
-
-    checks["qdrant"] = qdrant_result
-    if auth_result is not None:
-        checks["auth_service"] = auth_result
+    checks["qdrant"] = await _check_qdrant()
 
     healthy = all(checks.values())
     return JSONResponse(
