@@ -46,7 +46,7 @@ class TestPostClassifyModeB:
         """Valid Mode B request returns 202 with job_id and status."""
         resp = await client.post(
             "/classify",
-            headers={"Authorization": f"Bearer {user_key}"},
+            headers={"x-ocn-caller": user_key},
             json={"articles": [_ARTICLE]},
         )
         assert resp.status_code == 202
@@ -54,23 +54,23 @@ class TestPostClassifyModeB:
         assert "job_id" in data
         assert data["status"] == "processing"
 
-    async def test_422_without_auth(
+    async def test_401_without_caller_header(
         self, client: AsyncClient
     ) -> None:
-        """Missing Authorization header returns 422 (required header)."""
+        """Missing x-ocn-caller header returns 401."""
         resp = await client.post(
             "/classify",
             json={"articles": [_ARTICLE]},
         )
-        assert resp.status_code == 422
+        assert resp.status_code == 401
 
-    async def test_401_invalid_token(
+    async def test_401_invalid_caller_header(
         self, client: AsyncClient
     ) -> None:
-        """Unknown token returns 401."""
+        """Malformed x-ocn-caller header returns 401."""
         resp = await client.post(
             "/classify",
-            headers={"Authorization": "Bearer bad-token"},
+            headers={"x-ocn-caller": "not-valid-base64!!!"},
             json={"articles": [_ARTICLE]},
         )
         assert resp.status_code == 401
@@ -81,7 +81,7 @@ class TestPostClassifyModeB:
         """Request with neither run_id nor articles returns 422."""
         resp = await client.post(
             "/classify",
-            headers={"Authorization": f"Bearer {user_key}"},
+            headers={"x-ocn-caller": user_key},
             json={},
         )
         assert resp.status_code == 422
@@ -93,7 +93,7 @@ class TestPostClassifyModeB:
         with _mock_news_retrieval_ok():
             resp = await client.post(
                 "/classify",
-                headers={"Authorization": f"Bearer {user_key}"},
+                headers={"x-ocn-caller": user_key},
                 json={"run_id": 1, "articles": [_ARTICLE]},
             )
         assert resp.status_code == 422
@@ -109,7 +109,7 @@ class TestPostClassifyModeA:
         with _mock_news_retrieval_ok():
             resp = await client.post(
                 "/classify",
-                headers={"Authorization": f"Bearer {user_key}"},
+                headers={"x-ocn-caller": user_key},
                 json={"run_id": 42},
             )
         assert resp.status_code == 202
@@ -123,7 +123,7 @@ class TestPostClassifyModeA:
         with _mock_news_retrieval_not_found():
             resp = await client.post(
                 "/classify",
-                headers={"Authorization": f"Bearer {user_key}"},
+                headers={"x-ocn-caller": user_key},
                 json={"run_id": 999},
             )
         assert resp.status_code == 404
@@ -141,7 +141,7 @@ class TestPostClassifyModeA:
         with _mock_news_retrieval_ok():
             resp = await client.post(
                 "/classify",
-                headers={"Authorization": f"Bearer {user_key}"},
+                headers={"x-ocn-caller": user_key},
                 json={"run_id": 77},
             )
         assert resp.status_code == 409
@@ -156,7 +156,7 @@ class TestGetClassification:
         """Non-existent job_id returns 404."""
         resp = await client.get(
             "/classifications/99999",
-            headers={"Authorization": f"Bearer {user_key}"},
+            headers={"x-ocn-caller": user_key},
         )
         assert resp.status_code == 404
 
@@ -172,7 +172,7 @@ class TestGetClassification:
         )
         resp = await client.get(
             f"/classifications/{job['id']}",
-            headers={"Authorization": f"Bearer {user_key}"},
+            headers={"x-ocn-caller": user_key},
         )
         assert resp.status_code == 200
         data = resp.json()
@@ -181,12 +181,12 @@ class TestGetClassification:
         assert data["article_count"] == 5
         assert data["stats"] is None
 
-    async def test_422_without_auth(
+    async def test_401_without_caller_header(
         self, client: AsyncClient
     ) -> None:
-        """Missing Authorization header returns 422 (required header)."""
+        """Missing x-ocn-caller header returns 401."""
         resp = await client.get("/classifications/1")
-        assert resp.status_code == 422
+        assert resp.status_code == 401
 
 
 class TestGetClassificationResults:
@@ -198,7 +198,7 @@ class TestGetClassificationResults:
         """Non-existent job_id returns 404."""
         resp = await client.get(
             "/classifications/99999/results",
-            headers={"Authorization": f"Bearer {user_key}"},
+            headers={"x-ocn-caller": user_key},
         )
         assert resp.status_code == 404
 
@@ -214,7 +214,7 @@ class TestGetClassificationResults:
         )
         resp = await client.get(
             f"/classifications/{job['id']}/results",
-            headers={"Authorization": f"Bearer {user_key}"},
+            headers={"x-ocn-caller": user_key},
         )
         assert resp.status_code == 200
         data = resp.json()
@@ -233,7 +233,7 @@ class TestGetClassificationResults:
         )
         resp = await client.get(
             f"/classifications/{job['id']}/results?limit=200",
-            headers={"Authorization": f"Bearer {user_key}"},
+            headers={"x-ocn-caller": user_key},
         )
         assert resp.status_code == 422
 
@@ -249,6 +249,6 @@ class TestGetClassificationResults:
         )
         resp = await client.get(
             f"/classifications/{job['id']}/results?cursor=notbase64!!!",
-            headers={"Authorization": f"Bearer {user_key}"},
+            headers={"x-ocn-caller": user_key},
         )
         assert resp.status_code == 422

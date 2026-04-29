@@ -45,7 +45,7 @@ signal-detection/
 │   ├── __main__.py          Entry point (Click group: serve, bootstrap, promote-corpus,
 │   │                                     historical-ingest)
 │   ├── app.py               FastAPI factory
-│   ├── auth.py              Bearer token validation
+│   ├── auth.py              x-ocn-caller header extraction
 │   ├── db.py                DB adapter — _new_connection(), init_db(); delegates
 │   │                        connection pooling, get_db(), transaction(), and
 │   │                        DuplicateError to shared/src/db_utils.py

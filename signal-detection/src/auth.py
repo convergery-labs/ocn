@@ -1,54 +1,40 @@
 """FastAPI dependency functions for authentication and authorisation."""
-import os
-from typing import Any
+import base64
+import json
+from typing import Any, Optional
 
-import httpx
 from fastapi import Depends, Header, HTTPException
 
 
-class CallerInfo(dict):
-    """Caller identity returned by require_auth.
-
-    Always contains ``id`` (int) and ``role`` (str), sourced from the
-    auth-service response.
-    """
-
-
 async def require_auth(
-    authorization: str = Header(...),
+    x_ocn_caller: Optional[str] = Header(
+        None, alias="x-ocn-caller"
+    ),
 ) -> dict[str, Any]:
-    """Validate the Bearer token via the auth-service.
+    """Extract caller identity from the x-ocn-caller header.
 
-    Delegates to ``POST {AUTH_SERVICE_URL}/validate``.
+    The API gateway validates the Bearer token and injects this header
+    as base64-encoded JSON before forwarding the request. The header
+    payload is ``{"sub": int, "role": str, "domains": [int]}``.
+
+    Returns a dict with ``id`` (int) and ``role`` (str).
 
     Raises:
-        HTTPException 401: if the token is rejected by auth-service.
-        HTTPException 503: if AUTH_SERVICE_URL is not configured.
+        HTTPException 401: if the header is absent or cannot be decoded.
     """
-    auth_service_url = os.environ.get("AUTH_SERVICE_URL")
-    if not auth_service_url:
-        raise HTTPException(
-            status_code=503,
-            detail="AUTH_SERVICE_URL is not configured.",
-        )
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.post(
-                f"{auth_service_url}/validate",
-                headers={"Authorization": authorization},
-            )
-    except httpx.HTTPError:
-        raise HTTPException(
-            status_code=503,
-            detail="Auth service unreachable.",
-        )
-    if resp.status_code != 200:
+    if not x_ocn_caller:
         raise HTTPException(
             status_code=401,
-            detail="Invalid or unknown API key.",
+            detail="Invalid or missing x-ocn-caller header.",
         )
-    data = resp.json()
-    return {"id": data["key_id"], "role": data["role"]}
+    try:
+        payload = json.loads(base64.b64decode(x_ocn_caller))
+        return {"id": payload["sub"], "role": payload["role"]}
+    except Exception:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing x-ocn-caller header.",
+        )
 
 
 def require_admin(

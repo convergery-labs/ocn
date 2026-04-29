@@ -16,7 +16,8 @@ src/
 ├── __main__.py          Entry point — Click group: serve, bootstrap, promote-corpus,
 │                                      historical-ingest
 ├── app.py               App factory — assembles FastAPI, registers routers
-├── auth.py              Infrastructure — Bearer token validation via auth-service
+├── auth.py              Infrastructure — x-ocn-caller header extraction (set by the API
+│                                         gateway)
 ├── db.py                Infrastructure — thin adapter: _new_connection() (env vars),
 │                                         init_db(), db_utils.configure(); public API
 │                                         (get_db, transaction, DuplicateError) re-exported
