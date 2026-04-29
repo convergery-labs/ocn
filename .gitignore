@@ -30,4 +30,5 @@ qdrant_storage/
 *.tfstate
 *.tfstate.backup
 infra/staging/terraform.tfvars
-infra/production/terraform.tfvars
+infra/production/terraform.tfvars.claude/worktrees/
+.claude/

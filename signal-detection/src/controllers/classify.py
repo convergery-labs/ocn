@@ -1,8 +1,10 @@
 """Orchestration for classification job submission and execution."""
+import asyncio
 import json
 import logging
 import os
 import uuid
+from functools import partial
 
 import httpx
 from datasketch import MinHash, MinHashLSH
@@ -113,7 +115,7 @@ async def run_classification_stub(
     Labels and scores are placeholders (CON-138 will update them).
     """
     try:
-        _run_feature_extraction(job_id, articles)
+        await _run_feature_extraction(job_id, articles)
         update_job_status(job_id, "completed", set_completed_at=True)
     except Exception:
         logger.exception("Feature extraction failed for job %d", job_id)
@@ -130,11 +132,83 @@ async def run_classification_stub(
         _fire_callback(callback_url, job_id, "completed")
 
 
-def _run_feature_extraction(
+async def _embed_and_store(
+    *,
+    job_id: int,
+    classification_id: int,
+    article_url: str,
+    claims: list[str],
+    oai: OpenAI,
+    claim_embedding_model: str,
+    qdrant: QdrantClient,
+    loop: asyncio.AbstractEventLoop,
+    trace: object,
+) -> None:
+    """Embed claims for one article and persist them to Qdrant and Postgres.
+
+    Args:
+        job_id: Classification job identifier for log messages.
+        classification_id: DB row id for the article's classification.
+        article_url: Source URL of the article.
+        claims: List of factual claim strings to embed and store.
+        oai: OpenAI-compatible client.
+        claim_embedding_model: Model identifier for claim embeddings.
+        qdrant: Qdrant client.
+        loop: Running event loop used to offload blocking calls.
+        trace: Langfuse trace object, or None if tracing is disabled.
+    """
+    if not claims:
+        return
+    article_qdrant_id = _url_to_point_id(article_url)
+    claim_embeddings = await loop.run_in_executor(
+        None,
+        partial(_embed_texts, oai, claim_embedding_model, claims),
+    )
+    if trace:
+        trace.span(
+            name="claim-embedding",
+            input={
+                "claim_count": len(claims),
+                "url": article_url,
+            },
+        )
+    claim_points = [
+        PointStruct(
+            id=_url_to_point_id(claim_text),
+            vector=claim_emb,
+            payload={
+                "article_qdrant_id": article_qdrant_id,
+                "article_url": article_url,
+                "claim_text": claim_text,
+            },
+        )
+        for claim_text, claim_emb in zip(claims, claim_embeddings)
+    ]
+    qdrant.upsert(collection_name="claims", points=claim_points)
+    for claim_text, claim_point in zip(claims, claim_points):
+        insert_claim(
+            classification_id=classification_id,
+            claim_text=claim_text,
+            claim_embedding_id=str(claim_point.id),
+            embedding_model=claim_embedding_model,
+        )
+    logger.info(
+        "Job %d: stored %d claims for %s",
+        job_id, len(claims), article_url,
+    )
+
+
+async def _run_feature_extraction(
     job_id: int,
     articles: list[dict],
 ) -> None:
-    """Execute dedup → lang-filter → embed → claim extract → store."""
+    """Execute dedup → lang-filter → embed → claim extract → store.
+
+    Claim extraction for all articles is performed concurrently via
+    asyncio.gather, then claim embeddings are gathered concurrently as
+    well, reducing total LLM round-trips from O(N×2) to O(2 batched
+    async rounds).
+    """
     if not articles:
         return
 
@@ -194,13 +268,14 @@ def _run_feature_extraction(
             input={"char_count": total_chars, "article_count": len(english)},
         )
 
+    loop = asyncio.get_running_loop()
     all_embeddings: list[list[float]] = []
     for i in range(0, len(english), _EMBED_BATCH_SIZE):
         batch_bodies = bodies[i: i + _EMBED_BATCH_SIZE]
         batch_embeddings = _embed_texts(oai, embedding_model, batch_bodies)
         all_embeddings.extend(batch_embeddings)
 
-    # Step 4–7 — Per-article: upsert to Qdrant, insert DB rows, extract claims
+    # Step 4 — Upsert article vectors to Qdrant and insert DB rows
     article_points = [
         PointStruct(
             id=_url_to_point_id(a["url"]),
@@ -219,10 +294,12 @@ def _run_feature_extraction(
         "Job %d: upserted %d articles to Qdrant", job_id, len(article_points)
     )
 
+    # Step 5 — Insert classification rows and collect per-article metadata
+    classification_ids: list[int] = []
+    article_urls: list[str] = []
+    article_bodies: list[str] = []
     for article, embedding in zip(english, all_embeddings):
         article_url = article.get("url", "")
-        article_qdrant_id = _url_to_point_id(article_url)
-
         classification_id = insert_classification(
             job_id=job_id,
             article_url=article_url,
@@ -230,58 +307,54 @@ def _run_feature_extraction(
             model_embedding=embedding_model,
             model_llm=llm_model,
         )
+        classification_ids.append(classification_id)
+        article_urls.append(article_url)
+        article_bodies.append(article.get("body", ""))
 
-        body = article.get("body", "")
-        claims = _extract_claims(oai, llm_model, body)
-
-        if trace and claims is not None:
-            trace.span(
-                name="claim-extraction",
-                input={"url": article_url, "body_preview": body[:500]},
-                output={"claims": claims},
+    # Step 6 — Extract claims for all articles concurrently
+    all_claims: list[list[str]] = await asyncio.gather(
+        *[
+            loop.run_in_executor(
+                None,
+                partial(_extract_claims, oai, llm_model, body),
             )
-
-        if not claims:
-            continue
-
-        claim_embeddings = _embed_texts(
-            oai, claim_embedding_model, claims
-        )
-        if trace:
-            trace.span(
-                name="claim-embedding",
-                input={
-                    "claim_count": len(claims),
-                    "url": article_url,
-                },
-            )
-
-        claim_points = [
-            PointStruct(
-                id=_url_to_point_id(claim_text),
-                vector=claim_emb,
-                payload={
-                    "article_qdrant_id": article_qdrant_id,
-                    "article_url": article_url,
-                    "claim_text": claim_text,
-                },
-            )
-            for claim_text, claim_emb in zip(claims, claim_embeddings)
+            for body in article_bodies
         ]
-        qdrant.upsert(collection_name="claims", points=claim_points)
+    )
 
-        for claim_text, claim_point in zip(claims, claim_points):
-            insert_claim(
-                classification_id=classification_id,
-                claim_text=claim_text,
-                claim_embedding_id=str(claim_point.id),
-                embedding_model=claim_embedding_model,
+    if trace:
+        for article_url, body, claims in zip(
+            article_urls, article_bodies, all_claims
+        ):
+            if claims:
+                trace.span(
+                    name="claim-extraction",
+                    input={
+                        "url": article_url,
+                        "body_preview": body[:500],
+                    },
+                    output={"claims": claims},
+                )
+
+    # Step 7 — Embed claims for all articles concurrently, then store
+    await asyncio.gather(
+        *[
+            _embed_and_store(
+                job_id=job_id,
+                classification_id=cid,
+                article_url=url,
+                claims=claims,
+                oai=oai,
+                claim_embedding_model=claim_embedding_model,
+                qdrant=qdrant,
+                loop=loop,
+                trace=trace,
             )
-
-        logger.info(
-            "Job %d: stored %d claims for %s",
-            job_id, len(claims), article_url,
-        )
+            for cid, url, claims in zip(
+                classification_ids, article_urls, all_claims
+            )
+        ]
+    )
 
     if lf:
         lf.flush()

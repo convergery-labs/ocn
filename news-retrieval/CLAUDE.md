@@ -51,7 +51,7 @@ news-retrieval/
     ├── app.py            # FastAPI app factory
     ├── auth.py           # require_auth / require_admin FastAPI dependencies
     ├── pipeline.py       # Fetch + relevance filter pipeline (fetch → LLM title filter)
-    ├── db.py             # PostgreSQL connection, _Connection wrapper, DuplicateError, schema init
+    ├── db.py             # Thin adapter: _new_connection() (POSTGRES_* env vars), init_db(), db_utils.configure(); re-exports get_db/transaction/DuplicateError from shared/src/db_utils.py
     ├── seed.py           # Idempotent seed for run_statuses, frequencies, domains, sources
     ├── models/           # DB query functions (repository layer)
     │   ├── api_key_domains.py

@@ -1,9 +1,8 @@
 """DB query functions for pipeline run records."""
-import base64
-import json
 from datetime import date, datetime
 from typing import Optional, TypedDict
 
+from cursor_utils import decode_cursor, encode_cursor
 from db import get_db
 
 
@@ -27,19 +26,13 @@ class RunRow(TypedDict):
 
 def _encode_run_cursor(started_at: datetime, run_id: int) -> str:
     """Encode a run keyset position as an opaque cursor string."""
-    payload = json.dumps(
-        {"ts": started_at.isoformat(), "id": run_id}
-    )
-    return base64.b64encode(payload.encode()).decode()
+    return encode_cursor({"ts": started_at.isoformat(), "id": run_id})
 
 
 def _decode_run_cursor(cursor: str) -> tuple[datetime, int]:
     """Decode a run cursor; raises ValueError if malformed."""
-    try:
-        payload = json.loads(base64.b64decode(cursor).decode())
-        return datetime.fromisoformat(payload["ts"]), int(payload["id"])
-    except Exception as exc:
-        raise ValueError("Invalid cursor") from exc
+    payload = decode_cursor(cursor)
+    return datetime.fromisoformat(payload["ts"]), int(payload["id"])
 
 
 def create_run(

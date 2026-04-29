@@ -1,12 +1,14 @@
 """Orchestration for the nightly deferred corpus promotion job."""
 import logging
 import os
-from typing import Any
 
 import numpy as np
 
 from db import transaction
-from models.clusters import get_corpus_centroid, update_centroid_ewma
+from models.clusters import (
+    get_corpus_centroids_bulk,
+    update_centroid_ewma,
+)
 from models.jobs import get_pending_promotions, mark_promotion_done
 
 logger = logging.getLogger(__name__)
@@ -50,6 +52,13 @@ def promote_deferred_corpus() -> dict[str, int]:
     pending = get_pending_promotions()
     threshold = _signal_threshold()
 
+    unique_cluster_ids: list[int] = list({
+        row["cluster_id"]
+        for row in pending
+        if row["cluster_id"] is not None
+    })
+    centroids_by_cluster = get_corpus_centroids_bulk(unique_cluster_ids)
+
     promoted = 0
     discarded = 0
     skipped = 0
@@ -67,7 +76,7 @@ def promote_deferred_corpus() -> dict[str, int]:
             skipped += 1
             continue
 
-        centroid_row = get_corpus_centroid(cluster_id)
+        centroid_row = centroids_by_cluster.get(cluster_id)
         if centroid_row is None or centroid_row.get("centroid_vector") is None:
             logger.warning(
                 "Skipping promotion %d: no centroid for cluster %d",

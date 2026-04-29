@@ -46,7 +46,9 @@ signal-detection/
 │   │                                     historical-ingest)
 │   ├── app.py               FastAPI factory
 │   ├── auth.py              Bearer token validation
-│   ├── db.py                DB infrastructure (psycopg2, init_db)
+│   ├── db.py                DB adapter — _new_connection(), init_db(); delegates
+│   │                        connection pooling, get_db(), transaction(), and
+│   │                        DuplicateError to shared/src/db_utils.py
 │   ├── seed.py              Seed classification_statuses
 │   ├── controllers/
 │   │   ├── classify.py      Classification job orchestration

@@ -11,7 +11,6 @@ from pydantic import BaseModel
 from auth import require_admin
 from models.api_key_domains import (
     grant_domains,
-    list_granted_domains,
     revoke_domain,
 )
 

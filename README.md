@@ -17,6 +17,7 @@ Monorepo for the OCN platform: auth, news retrieval, and signal detection.
 - **Vector store**: Qdrant (signal-detection)
 - **LLM**: Configurable via OpenRouter (news-retrieval)
 - **Infrastructure**: Docker Compose
+- **Shared utilities**: `shared/src/` — PostgreSQL connection helpers and keyset-pagination cursor utilities, copied into each service image at build time
 
 ## Quick start
 
@@ -26,6 +27,8 @@ cp .env.example .env
 
 docker compose up
 ```
+
+> **Note:** All service Docker images are built with the repo root as the build context so that `shared/src/` can be copied in. Always run `docker compose` (or `docker build`) from the repo root.
 
 All three services start automatically with their PostgreSQL sidecars.
 Qdrant starts alongside `signal-detection`.

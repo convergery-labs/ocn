@@ -1,24 +1,18 @@
 """DB query functions for article records."""
-import base64
-import json
 from typing import Optional
 
+from cursor_utils import decode_cursor, encode_cursor
 from db import get_db
 
 
 def _encode_article_cursor(article_id: int) -> str:
     """Encode an article keyset position as an opaque cursor string."""
-    payload = json.dumps({"id": article_id})
-    return base64.b64encode(payload.encode()).decode()
+    return encode_cursor({"id": article_id})
 
 
 def _decode_article_cursor(cursor: str) -> int:
     """Decode an article cursor; raises ValueError if malformed."""
-    try:
-        payload = json.loads(base64.b64decode(cursor).decode())
-        return int(payload["id"])
-    except Exception as exc:
-        raise ValueError("Invalid cursor") from exc
+    return decode_cursor(cursor)["id"]
 
 
 def create_articles(articles: list[dict]) -> None:

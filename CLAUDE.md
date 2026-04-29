@@ -39,6 +39,10 @@ ocn/
 ├── docker-compose.yml        # all services + sidecars
 ├── docker-compose.dev.yml    # dev overrides (hot reload, volume mounts)
 ├── .env.example              # all env vars, grouped by service
+├── shared/                   # shared Python utilities (copied into each service image)
+│   └── src/
+│       ├── db_utils.py       # PostgreSQL connection wrapper, DuplicateError, get_db(), transaction(), configure()
+│       └── cursor_utils.py   # encode_cursor() / decode_cursor() for keyset pagination
 ├── auth-service/             # see auth-service/STRUCTURE.md
 │   ├── CLAUDE.md
 │   ├── STRUCTURE.md

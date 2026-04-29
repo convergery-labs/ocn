@@ -11,7 +11,7 @@ TODO: List runtime stack (framework, database, etc.)
 ## Quick Start
 
 ```bash
-# From the repo root
+# From the repo root (build context must be the repo root)
 docker compose up postgres-auth auth-service
 ```
 

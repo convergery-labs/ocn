@@ -17,7 +17,7 @@ See [STRUCTURE.md](STRUCTURE.md) for descriptions.
 
 ```
 auth-service/
-├── Dockerfile
+├── Dockerfile            # build context: repo root (.); COPY paths prefixed auth-service/ and shared/
 ├── requirements.txt
 ├── requirements-test.txt
 ├── pyproject.toml
@@ -28,7 +28,7 @@ auth-service/
 │   ├── __main__.py       # Entry point: init_db → seed_admin_key → uvicorn
 │   ├── app.py            # FastAPI app factory
 │   ├── auth.py           # require_auth / require_admin dependencies
-│   ├── db.py             # psycopg2 connection, DuplicateError, init_db
+│   ├── db.py             # thin adapter: _new_connection, init_db; re-exports get_db/DuplicateError from shared/src/db_utils.py
 │   ├── seed.py           # seed_admin_key() from AUTH_ADMIN_API_KEY
 │   ├── models/
 │   │   └── api_keys.py   # ApiKeyRow, generate_key, hash_key, CRUD

@@ -1,79 +1,16 @@
 """Database access layer for auth-service."""
-import contextvars
 import os
-import re
-from contextlib import contextmanager
-from typing import Generator
 
 import psycopg2
-import psycopg2.errors
-import psycopg2.extensions
 import psycopg2.extras
 
-_NAMED_PARAM_RE = re.compile(r"(?<!:):(\w+)")
+import db_utils
+from db_utils import DuplicateError, get_db  # noqa: F401
+
+__all__ = ["DuplicateError", "get_db", "init_db"]
 
 
-class DuplicateError(Exception):
-    """Raised when an INSERT violates a UNIQUE constraint."""
-
-
-class _Connection:
-    """Thin psycopg2 wrapper that exposes a sqlite3-style execute().
-
-    Converts ``psycopg2.errors.UniqueViolation`` to ``DuplicateError``
-    so callers never need to import psycopg2 directly.
-    """
-
-    def __init__(self, conn: psycopg2.extensions.connection) -> None:
-        """Wrap a raw psycopg2 connection."""
-        self._conn = conn
-
-    def execute(
-        self,
-        sql: str,
-        params: tuple | dict | None = None,
-    ) -> psycopg2.extensions.cursor:
-        """Execute *sql* with *params* and return the cursor.
-
-        Accepts portable placeholder styles and converts them to the
-        psycopg2 format before execution:
-        - ``?``     (positional) → ``%s``
-        - ``:name`` (named)      → ``%(name)s``
-
-        Raises:
-            DuplicateError: if the statement violates a UNIQUE
-                constraint.
-        """
-        if isinstance(params, dict):
-            sql = _NAMED_PARAM_RE.sub(r"%(\1)s", sql)
-        else:
-            sql = sql.replace("?", "%s")
-        cur = self._conn.cursor()
-        try:
-            cur.execute(sql, params)
-        except psycopg2.errors.UniqueViolation as exc:
-            raise DuplicateError(str(exc)) from exc
-        return cur
-
-    def commit(self) -> None:
-        """Commit the current transaction."""
-        self._conn.commit()
-
-    def rollback(self) -> None:
-        """Roll back the current transaction."""
-        self._conn.rollback()
-
-    def close(self) -> None:
-        """Close the underlying connection."""
-        self._conn.close()
-
-
-_ambient_conn: contextvars.ContextVar[
-    _Connection | None
-] = contextvars.ContextVar("ambient_conn", default=None)
-
-
-def _new_connection() -> _Connection:
+def _new_connection() -> db_utils._Connection:
     """Open a new PostgreSQL connection using AUTH_POSTGRES_* env vars."""
     raw = psycopg2.connect(
         host=os.environ.get("AUTH_POSTGRES_HOST", "localhost"),
@@ -84,29 +21,10 @@ def _new_connection() -> _Connection:
         sslmode=os.environ.get("PGSSLMODE", "prefer"),
     )
     raw.cursor_factory = psycopg2.extras.RealDictCursor
-    return _Connection(raw)
+    return db_utils._Connection(raw)
 
 
-@contextmanager
-def get_db() -> Generator[_Connection, None, None]:
-    """Yield a database connection.
-
-    Reuses the ambient connection if called inside a ``transaction()``
-    block; otherwise opens, commits, and closes a fresh connection.
-    """
-    ambient = _ambient_conn.get()
-    if ambient is not None:
-        yield ambient
-        return
-    conn = _new_connection()
-    try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+db_utils.configure(_new_connection)
 
 
 def init_db() -> None:

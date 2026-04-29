@@ -24,6 +24,11 @@ docker compose run --rm signal-detection python -m src bootstrap \
     --domain ai_news --days-back 180 --k 8
 ```
 
+> **Docker build context**: the Dockerfile must be built from the repo root so
+> that `shared/src/` is available. `docker compose` handles this automatically
+> via the `context: .` setting in `docker-compose.yml`. When building manually,
+> run `docker build -f signal-detection/Dockerfile .` from the repo root.
+
 ## Environment Variables
 
 | Variable | Required | Default | Description |
