@@ -1,8 +1,16 @@
 """Tests for authentication and authorisation enforcement."""
-from unittest.mock import AsyncMock, MagicMock, patch
+import base64
+import json
 
-import httpx
 import pytest
+
+
+def _ocn_caller(sub: int, role: str, domains: list = None) -> str:
+    """Build a valid x-ocn-caller header value."""
+    payload = json.dumps(
+        {"sub": sub, "role": role, "domains": domains or []}
+    )
+    return base64.b64encode(payload.encode()).decode()
 
 
 async def test_missing_auth_header_returns_422(client) -> None:
@@ -43,65 +51,35 @@ async def test_user_key_on_admin_endpoint_returns_403(
 
 
 # ---------------------------------------------------------------------------
-# Delegated auth path (AUTH_SERVICE_URL set)
+# Real require_auth path (x-ocn-caller header)
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
-def with_auth_service_url(monkeypatch):
-    """Set AUTH_SERVICE_URL for the duration of a test."""
-    monkeypatch.setenv("AUTH_SERVICE_URL", "http://auth-service:8001")
-    yield
-    monkeypatch.delenv("AUTH_SERVICE_URL", raising=False)
-
-
-async def test_delegated_valid_key_returns_200(
-    real_auth_client, with_auth_service_url
+async def test_valid_caller_header_returns_200(
+    real_auth_client,
 ) -> None:
-    """A valid key accepted by auth-service allows the request through."""
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.json.return_value = {
-        "valid": True, "role": "admin", "key_id": 1
-    }
-
-    with patch(
-        "httpx.AsyncClient.post",
-        new_callable=AsyncMock,
-        return_value=mock_resp,
-    ):
-        resp = await real_auth_client.get(
-            "/domains",
-            headers={"Authorization": "Bearer csec_somekey"},
-        )
+    """A well-formed x-ocn-caller header allows the request through."""
+    resp = await real_auth_client.get(
+        "/domains",
+        headers={"x-ocn-caller": _ocn_caller(1, "admin")},
+    )
     assert resp.status_code == 200
 
 
-async def test_delegated_invalid_key_returns_401(
-    real_auth_client, with_auth_service_url
+async def test_missing_caller_header_returns_401(
+    real_auth_client,
 ) -> None:
-    """A key rejected by auth-service (401) propagates as 401."""
-    mock_resp = MagicMock()
-    mock_resp.status_code = 401
-
-    with patch(
-        "httpx.AsyncClient.post",
-        new_callable=AsyncMock,
-        return_value=mock_resp,
-    ):
-        resp = await real_auth_client.get(
-            "/domains",
-            headers={"Authorization": "Bearer csec_badkey"},
-        )
+    """Absent x-ocn-caller header returns 401."""
+    resp = await real_auth_client.get("/domains")
     assert resp.status_code == 401
 
 
-async def test_no_auth_service_url_returns_503(
+async def test_malformed_caller_header_returns_401(
     real_auth_client,
 ) -> None:
-    """When AUTH_SERVICE_URL is not configured, returns 503."""
+    """Garbage in x-ocn-caller returns 401."""
     resp = await real_auth_client.get(
         "/domains",
-        headers={"Authorization": "Bearer any_token"},
+        headers={"x-ocn-caller": "not-valid-base64!!!"},
     )
-    assert resp.status_code == 503
+    assert resp.status_code == 401
