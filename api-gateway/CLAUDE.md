@@ -20,7 +20,7 @@ See [STRUCTURE.md](STRUCTURE.md) for descriptions.
 
 ```
 api-gateway/
-├── Dockerfile
+├── Dockerfile            # build context: repo root (.); COPY paths prefixed api-gateway/
 ├── requirements.txt
 ├── requirements-test.txt
 ├── pyproject.toml

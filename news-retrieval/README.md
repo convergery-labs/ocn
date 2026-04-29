@@ -19,6 +19,8 @@ cp .env.example .env
 docker compose up
 ```
 
+> **Note:** The `news-retrieval` Docker image must be built from the **repo root** (not from `news-retrieval/`), because the Dockerfile copies from both `news-retrieval/` and the repo-level `shared/` package. `docker compose` handles this automatically via the `context: .` setting in `docker-compose.yml`.
+
 The API is available at `http://localhost:8000`. Interactive docs at `/docs`.
 
 ## Environment variables

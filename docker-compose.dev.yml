@@ -2,24 +2,30 @@ services:
 
   auth-service:
     build:
-      context: auth-service/
+      context: .
+      dockerfile: auth-service/Dockerfile
       target: dev
     volumes:
-      - ./auth-service/src:/app/src
+      - ./auth-service/src:/app
+      - ./shared/src:/app/shared
     command: uvicorn src.__main__:app --host 0.0.0.0 --port 8001 --reload
 
   news-retrieval:
     build:
-      context: news-retrieval/
+      context: .
+      dockerfile: news-retrieval/Dockerfile
       target: dev
     volumes:
-      - ./news-retrieval/src:/app/src
+      - ./news-retrieval/src:/app
+      - ./shared/src:/app/shared
     command: uvicorn src.__main__:app --host 0.0.0.0 --port 8000 --reload
 
   signal-detection:
     build:
-      context: signal-detection/
+      context: .
+      dockerfile: signal-detection/Dockerfile
       target: dev
     volumes:
       - ./signal-detection/src:/app/src
+      - ./shared/src:/app/shared
     command: uvicorn src.__main__:app --host 0.0.0.0 --port 8002 --reload

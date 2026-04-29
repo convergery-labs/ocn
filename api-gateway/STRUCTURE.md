@@ -4,7 +4,7 @@
 
 | File | Purpose |
 |------|---------|
-| `Dockerfile` | Multi-stage build: `base` runs uvicorn on port 8004; `test` adds pytest |
+| `Dockerfile` | Multi-stage build (`base`, `dev`); build context is repo root (`docker build .`); copies `api-gateway/requirements.txt` and `api-gateway/src/` into `/app`; runs uvicorn on port 8004 |
 | `requirements.txt` | Production dependencies (fastapi, uvicorn, httpx, click) |
 | `requirements-test.txt` | Test-only dependencies (pytest, pytest-asyncio, httpx) |
 | `pyproject.toml` | Pytest config (`asyncio_mode=auto`, `testpaths=["tests"]`) |

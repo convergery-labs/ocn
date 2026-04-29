@@ -5,7 +5,8 @@ services:
   # ---------------------------------------------------------------------------
   auth-service:
     build:
-      context: auth-service/
+      context: .
+      dockerfile: auth-service/Dockerfile
       target: base
     ports:
       - "8001:8001"
@@ -37,7 +38,8 @@ services:
   # ---------------------------------------------------------------------------
   news-retrieval:
     build:
-      context: news-retrieval/
+      context: .
+      dockerfile: news-retrieval/Dockerfile
       target: base
     ports:
       - "8000:8000"
@@ -78,7 +80,8 @@ services:
   # ---------------------------------------------------------------------------
   api-gateway:
     build:
-      context: api-gateway/
+      context: .
+      dockerfile: api-gateway/Dockerfile
       target: base
     ports:
       - "8004:8004"
@@ -135,7 +138,8 @@ services:
   # ---------------------------------------------------------------------------
   signal-detection:
     build:
-      context: signal-detection/
+      context: .
+      dockerfile: signal-detection/Dockerfile
       target: base
     ports:
       - "8002:8002"

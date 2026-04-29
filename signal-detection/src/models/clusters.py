@@ -1,7 +1,7 @@
 """Repository functions for topic_clusters and corpus_centroids."""
 from typing import Any
 
-from db import get_db, transaction
+from db import get_db
 
 
 def upsert_topic_cluster(
@@ -46,6 +46,31 @@ def get_corpus_centroid(cluster_id: int) -> dict[str, Any] | None:
             {"cluster_id": cluster_id},
         ).fetchone()
     return dict(row) if row else None
+
+
+def get_corpus_centroids_bulk(
+    cluster_ids: list[int],
+) -> dict[int, dict[str, Any]]:
+    """Return a {cluster_id: row} mapping for all given cluster_ids.
+
+    Fetches all matching corpus_centroids rows (with alpha) in a single
+    query using an IN clause.  Missing cluster_ids are simply absent from
+    the returned dict.
+    """
+    if not cluster_ids:
+        return {}
+    placeholders = ", ".join(["%s"] * len(cluster_ids))
+    with get_db() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT cc.*, tc.alpha
+            FROM corpus_centroids cc
+            JOIN topic_clusters tc ON tc.id = cc.cluster_id
+            WHERE cc.cluster_id IN ({placeholders})
+            """,
+            cluster_ids,
+        ).fetchall()
+    return {dict(row)["cluster_id"]: dict(row) for row in rows}
 
 
 def update_centroid_ewma(

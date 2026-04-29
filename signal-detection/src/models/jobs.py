@@ -1,9 +1,8 @@
 """Repository functions for classification_jobs and classifications."""
-import base64
-import json
 from datetime import datetime
 from typing import Any
 
+from cursor_utils import decode_cursor, encode_cursor
 from db import get_db
 
 
@@ -17,18 +16,12 @@ class ClassificationRow(dict):
 
 def _encode_cursor(row_id: int) -> str:
     """Encode a keyset cursor as an opaque base64 string."""
-    return base64.b64encode(
-        json.dumps({"id": row_id}).encode()
-    ).decode()
+    return encode_cursor({"id": row_id})
 
 
 def _decode_cursor(cursor: str) -> int:
     """Decode a keyset cursor; raises ValueError if malformed."""
-    try:
-        payload = json.loads(base64.b64decode(cursor).decode())
-        return int(payload["id"])
-    except Exception as exc:
-        raise ValueError("Invalid cursor") from exc
+    return decode_cursor(cursor)["id"]
 
 
 def create_job(

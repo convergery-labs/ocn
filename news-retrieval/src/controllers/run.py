@@ -15,8 +15,8 @@ from models.api_key_domains import has_domain_access
 from models.articles import create_articles, fetch_all_articles_for_run
 from models.atomic import atomic
 from models.domains import (
+    DomainConfig,
     get_domain_by_slug,
-    get_domain_config,
     lock_domain_row,
 )
 from models.runs import (
@@ -59,6 +59,7 @@ class RunCreateResult(TypedDict):
     run_id: int
     cache_hit: bool
     cached_run: Optional[RunRow]
+    domain_config: Optional[DomainConfig]
 
 
 class RunConflictError(Exception):
@@ -156,6 +157,7 @@ def _create_subset_run(
     request: RunRequest,
     resolved_model: str,
     covering: RunRow,
+    domain_config: DomainConfig,
 ) -> RunCreateResult:
     """Create a completed run populated from a covering run's articles.
 
@@ -183,6 +185,7 @@ def _create_subset_run(
         run_id=subset_id,
         cache_hit=True,
         cached_run=get_run(subset_id),
+        domain_config=domain_config,
     )
 
 
@@ -215,6 +218,10 @@ def create_run_record(
                         "You do not own this domain."
                     )
         resolved_model = request.model or os.environ["OPENROUTER_MODEL"]
+        domain_config: DomainConfig = {
+            "name": domain["name"],
+            "description": domain.get("description"),
+        }
         if not request.force:
             cached = get_cached_run_today(
                 request.domain,
@@ -227,6 +234,7 @@ def create_run_record(
                     run_id=cached["id"],
                     cache_hit=True,
                     cached_run=cached,
+                    domain_config=domain_config,
                 )
             covering = get_covering_run_today(
                 request.domain,
@@ -236,7 +244,7 @@ def create_run_record(
             )
             if covering is not None:
                 return _create_subset_run(
-                    request, resolved_model, covering
+                    request, resolved_model, covering, domain_config
                 )
             existing_id = get_running_run_for_domain(request.domain)
             if existing_id is not None:
@@ -252,7 +260,10 @@ def create_run_record(
             callback_url=request.callback_url,
         )
         return RunCreateResult(
-            run_id=run_id, cache_hit=False, cached_run=None
+            run_id=run_id,
+            cache_hit=False,
+            cached_run=None,
+            domain_config=domain_config,
         )
 
 
@@ -264,16 +275,19 @@ def _fire_webhook(url: str, payload: dict) -> None:
         logger.warning("Webhook delivery failed for %s: %s", url, exc)
 
 
-def run_pipeline(run_id: int, request: RunRequest) -> None:
+def run_pipeline(
+    run_id: int,
+    request: RunRequest,
+    domain_config: DomainConfig,
+) -> None:
     """Execute the pipeline in the background and update the run record."""
-    config = get_domain_config(request.domain)
     max_articles = request.max_articles or 0
     resolved_model = request.model or os.environ["OPENROUTER_MODEL"]
     try:
         result = pl.run(
             domain_slug=request.domain,
-            domain_name=config["name"],
-            domain_description=config["description"],
+            domain_name=domain_config["name"],
+            domain_description=domain_config["description"],
             days_back=request.days_back,
             max_articles=max_articles,
             focus=request.focus,

@@ -44,6 +44,6 @@ async def run(
         response.status_code = 200
         return {**result["cached_run"], "cache_hit": True}
     background_tasks.add_task(
-        run_pipeline, result["run_id"], request
+        run_pipeline, result["run_id"], request, result["domain_config"]
     )
     return {"run_id": result["run_id"], "status": "running"}

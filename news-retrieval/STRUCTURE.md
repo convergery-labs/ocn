@@ -14,7 +14,7 @@
 | `src/__main__.py` | CLI entry point — `click` + `uvicorn.run` |
 | `src/app.py` | FastAPI app factory and lifespan hook |
 | `src/pipeline.py` | Fetch and relevance-filter pipeline (fetch → Pass 1 LLM relevance filter); returns list of relevant articles |
-| `src/db.py` | PostgreSQL connection (`psycopg2`), `_Connection` wrapper with portable placeholder normalisation and `execute_values` for batch inserts, `DuplicateError`, ambient transaction via `ContextVar`, schema init + migrations |
+| `src/db.py` | Thin adapter: `_new_connection()` (reads `POSTGRES_*` env vars), `init_db()`, and `db_utils.configure()`; re-exports `get_db`, `transaction`, and `DuplicateError` from `shared/src/db_utils.py` so all other imports are unaffected |
 | `src/auth.py` | FastAPI dependency functions: `require_auth` (validate Bearer token), `require_admin` (role gate) |
 | `src/seed.py` | Idempotent batch seed for `run_statuses`, `frequencies`, `domains`, `sources`, and admin API key |
 | `src/models/` | Pydantic request models + SQL query functions per entity |
@@ -30,9 +30,9 @@ The application is a single FastAPI process. `POST /run` uses FastAPI `Backgroun
 | **App factory** | `src/app.py` | Creates `FastAPI` instance, registers routers, runs lifespan (`init_db` + `seed`) |
 | **Routes** | `src/routes/` | Thin HTTP adapters: one `APIRouter` per resource, maps domain exceptions to status codes |
 | **Controllers** | `src/controllers/` | Business logic and multi-step orchestration; owns transaction boundaries for composite operations |
-| **Repository** | `src/models/` | SQL query functions + Pydantic input models; no HTTP concepts |
+| **Repository** | `src/models/` | SQL query functions + Pydantic input models; no HTTP concepts; cursor encode/decode delegated to `shared/src/cursor_utils.py` (`encode_cursor` / `decode_cursor`) |
 | **Pipeline** | `src/pipeline.py` | Stateless pipeline: parallel RSS fetch, title-based relevance filter (Pass 1 LLM); returns list of relevant article dicts |
-| **Database** | `src/db.py` | PostgreSQL connection (`psycopg2`), `_Connection` wrapper, `DuplicateError`, ambient transaction via `ContextVar`, schema init + migrations |
+| **Database** | `src/db.py` + `shared/src/db_utils.py` | `db.py` is a thin adapter: supplies `_new_connection()` and calls `db_utils.configure()`; the `_Connection` wrapper, `DuplicateError`, `get_db()`, and `transaction()` live in the repo-level `shared/src/db_utils.py` and are re-exported from `db.py` for backward compatibility |
 | **Auth** | `src/auth.py` | `require_auth` / `require_admin` FastAPI dependencies; delegates all token validation to `POST {AUTH_SERVICE_URL}/validate`; returns 503 if unconfigured |
 | **Seed data** | `src/seed.py` | Idempotent batch seed for `run_statuses`, `frequencies`, `domains`, and `sources` |
 
@@ -127,7 +127,6 @@ pytest news-retrieval/tests/
 | `pydantic` | Data validation and request/response models |
 | `openai` | OpenAI-compatible SDK, pointed at Ollama |
 | `feedparser` | RSS/Atom feed parsing |
-| `numpy` | Vector arithmetic for embedding normalisation and cluster centroid updates |
 | `httpx` | HTTP/1.1 client used inside the OpenAI SDK |
 | `click` | CLI entry point (`--host`, `--port` flags) |
 | `psycopg2-binary` | PostgreSQL database driver |

@@ -4,7 +4,7 @@
 
 | File | Purpose |
 |------|---------|
-| `Dockerfile` | Build image: copies `src/` flat into `/app`, runs on port 8001 |
+| `Dockerfile` | Multi-stage build (`base`, `dev`); build context is repo root (`docker build .`); copies `auth-service/src/` and `shared/src/` into `/app`; sets `PYTHONPATH=/app/shared`; runs on port 8001 |
 | `requirements.txt` | Production dependencies (fastapi, uvicorn, psycopg2-binary, pydantic, click) |
 | `requirements-test.txt` | Test-only dependencies (pytest, pytest-asyncio, httpx) |
 | `pyproject.toml` | Pytest config (`asyncio_mode=auto`, `testpaths=["tests"]`) |
@@ -20,7 +20,7 @@
 | Routes | `src/routes/validate.py` | `POST /validate` — HTTP only, delegates to models |
 | Auth | `src/auth.py` | `require_auth`, `require_admin` FastAPI dependencies |
 | Models | `src/models/api_keys.py` | `ApiKeyRow`, `generate_key`, `hash_key`, CRUD functions |
-| Infrastructure | `src/db.py` | psycopg2 connection (`AUTH_POSTGRES_*`), `_Connection` wrapper, `init_db` |
+| Infrastructure | `src/db.py` | Thin adapter: `_new_connection` (reads `AUTH_POSTGRES_*`), `init_db`, `db_utils.configure()`; re-exports `get_db` and `DuplicateError` from `shared/src/db_utils.py` |
 | Seed | `src/seed.py` | `seed_admin_key()` — idempotent, called from entry point only |
 
 ## HTTP API

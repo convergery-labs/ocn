@@ -4,7 +4,7 @@
 
 | File | Purpose |
 |------|---------|
-| `Dockerfile` | Multi-stage build: `base` (production), `dev` (hot-reload), `test` (pytest) |
+| `Dockerfile` | Multi-stage build: `base` (production), `dev` (hot-reload), `test` (pytest). Build context is the repo root (`docker build -f signal-detection/Dockerfile .`); copies `signal-detection/src/`, `signal-detection/requirements.txt`, and `shared/src/` into the image. |
 | `requirements.txt` | Production dependencies |
 | `requirements-test.txt` | Test-only dependencies (pytest, httpx) |
 | `pyproject.toml` | pytest configuration |
@@ -17,7 +17,10 @@ src/
 │                                      historical-ingest
 ├── app.py               App factory — assembles FastAPI, registers routers
 ├── auth.py              Infrastructure — Bearer token validation via auth-service
-├── db.py                Infrastructure — psycopg2 wrapper, init_db(), transaction()
+├── db.py                Infrastructure — thin adapter: _new_connection() (env vars),
+│                                         init_db(), db_utils.configure(); public API
+│                                         (get_db, transaction, DuplicateError) re-exported
+│                                         from shared/src/db_utils.py
 ├── seed.py              Entry point helper — seeds classification_statuses on startup
 ├── routes/
 │   ├── health.py        Route — GET /health
@@ -27,9 +30,11 @@ src/
 │   ├── bootstrap.py     Controller — corpus bootstrap pipeline orchestration
 │   └── promote.py       Controller — nightly deferred corpus promotion job
 ├── models/
-│   ├── jobs.py           Repository — classification_jobs, classifications, deferred_promotions
+│   ├── jobs.py           Repository — classification_jobs, classifications, deferred_promotions;
+│   │                                  cursor encode/decode delegated to shared/src/cursor_utils.py
 │   ├── claims.py         Repository — claims
-│   └── clusters.py       Repository — topic_clusters, corpus_centroids (incl. EWMA update)
+│   └── clusters.py       Repository — topic_clusters, corpus_centroids (incl. EWMA update,
+│                                       get_corpus_centroids_bulk)
 └── historical_ingestion/
     ├── schema.py         HistoricalDocument dataclass — common shape for all adapters
     ├── pipeline.py       Orchestrator — fetch, deduplicate, embed, upsert to Qdrant
@@ -40,6 +45,8 @@ src/
 ```
 
 Dependencies flow one way: `__main__` → `app` → `routes` → `controllers` → `models` → `db`.
+`db.py` delegates its public API to `shared/src/db_utils.py`; cursor utilities in
+`models/jobs.py` come from `shared/src/cursor_utils.py`.
 `historical_ingestion` is a self-contained package; `pipeline.py` imports only adapters,
 schema, and infrastructure (openai, qdrant-client) — no Postgres dependency.
 

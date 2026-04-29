@@ -15,7 +15,7 @@ service based on the URL prefix.
 ## Quick Start
 
 ```bash
-# From the repo root
+# From the repo root (build context must be the repo root)
 docker compose up api-gateway
 ```
 
