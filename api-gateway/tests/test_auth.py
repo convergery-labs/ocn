@@ -1,4 +1,6 @@
 """Tests for authentication and authorisation enforcement."""
+import base64
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.responses import Response
@@ -96,3 +98,46 @@ async def test_valid_admin_token_returns_200(client) -> None:
             headers={"Authorization": "Bearer csec_admintoken"},
         )
     assert resp.status_code == 200
+
+
+async def test_caller_header_is_propagated_downstream(client) -> None:
+    """x-ocn-caller must be sent to upstream with correct base64 JSON."""
+    auth_mock = MagicMock()
+    auth_mock.status_code = 200
+    auth_mock.json.return_value = {
+        "valid": True, "role": "admin", "key_id": 1,
+    }
+
+    upstream_mock = MagicMock()
+    upstream_mock.status_code = 200
+    upstream_mock.content = b""
+    upstream_mock.headers = {}
+
+    captured: dict = {}
+
+    async def capture_request(**kwargs: object) -> MagicMock:
+        captured["headers"] = kwargs.get("headers", {})
+        return upstream_mock
+
+    with (
+        patch(
+            "httpx.AsyncClient.post",
+            new_callable=AsyncMock,
+            return_value=auth_mock,
+        ),
+        patch(
+            "proxy._client.request",
+            new=AsyncMock(side_effect=capture_request),
+        ),
+    ):
+        resp = await client.get(
+            "/news/articles",
+            headers={"Authorization": "Bearer csec_admintoken"},
+        )
+
+    assert resp.status_code == 200
+    assert "x-ocn-caller" in captured["headers"]
+    payload = json.loads(
+        base64.b64decode(captured["headers"]["x-ocn-caller"])
+    )
+    assert payload == {"sub": 1, "role": "admin", "domains": []}

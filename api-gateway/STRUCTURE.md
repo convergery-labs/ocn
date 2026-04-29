@@ -58,7 +58,8 @@ A `502` is returned if the upstream is unreachable (`httpx.RequestError`).
 
 Auth is enforced at the gateway via Bearer token validation against
 `POST {GATEWAY_AUTH_URL}/validate`. Validated caller identity is
-propagated downstream via `X-Caller-Id` and `X-Caller-Role` headers.
+propagated downstream via an `x-ocn-caller` header (base64-encoded JSON
+containing `sub`, `role`, and `domains`).
 
 ## Testing
 
@@ -82,4 +83,4 @@ docker compose run --rm --build api-gateway pytest tests/ -v
 |------|--------|
 | `tests/conftest.py` | ASGI `client` fixture with all `GATEWAY_*` vars pre-set |
 | `tests/test_health.py` | `/health` — 200 when all vars set, 503 when one is missing |
-| `tests/test_auth.py` | missing token → 401; unknown → 401; wrong role → 403; valid admin → 200 |
+| `tests/test_auth.py` | missing token → 401; unknown → 401; wrong role → 403; valid admin → 200; `x-ocn-caller` header propagated downstream |
