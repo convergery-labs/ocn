@@ -9,7 +9,7 @@ async def test_valid_run_returns_202(
     resp = await client.post(
         "/run",
         json={"domain": "ai_news"},
-        headers={"Authorization": f"Bearer {admin_key}"},
+        headers={"x-ocn-caller": admin_key},
     )
     assert resp.status_code == 202
     body = resp.json()
@@ -24,7 +24,7 @@ async def test_valid_run_creates_db_record(
     resp = await client.post(
         "/run",
         json={"domain": "ai_news"},
-        headers={"Authorization": f"Bearer {admin_key}"},
+        headers={"x-ocn-caller": admin_key},
     )
     run_id = resp.json()["run_id"]
     with get_db() as conn:
@@ -42,7 +42,7 @@ async def test_unknown_domain_returns_404(
     resp = await client.post(
         "/run",
         json={"domain": "no_such_domain"},
-        headers={"Authorization": f"Bearer {admin_key}"},
+        headers={"x-ocn-caller": admin_key},
     )
     assert resp.status_code == 404
 
@@ -55,6 +55,6 @@ async def test_run_on_other_users_domain_returns_403(
     resp = await client.post(
         "/run",
         json={"domain": "test-domain"},
-        headers={"Authorization": f"Bearer {key}"},
+        headers={"x-ocn-caller": key},
     )
     assert resp.status_code == 403

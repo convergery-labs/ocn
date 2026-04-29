@@ -13,7 +13,7 @@ async def test_webhook_fires_on_completion(
         resp = await client.post(
             "/run",
             json={"domain": "ai_news", "callback_url": cb},
-            headers={"Authorization": f"Bearer {admin_key}"},
+            headers={"x-ocn-caller": admin_key},
         )
 
     assert resp.status_code == 202
@@ -42,7 +42,7 @@ async def test_webhook_fires_on_failure(
         resp = await client.post(
             "/run",
             json={"domain": "ai_news", "callback_url": cb},
-            headers={"Authorization": f"Bearer {admin_key}"},
+            headers={"x-ocn-caller": admin_key},
         )
 
     assert resp.status_code == 202

@@ -74,7 +74,7 @@ async def test_wider_run_covers_narrower_request(
     resp = await client.post(
         "/run",
         json={"domain": "ai_news", "days_back": 7},
-        headers={"Authorization": f"Bearer {admin_key}"},
+        headers={"x-ocn-caller": admin_key},
     )
 
     assert resp.status_code == 200
@@ -93,7 +93,7 @@ async def test_subset_run_id_differs_from_covering_run_id(
     resp = await client.post(
         "/run",
         json={"domain": "ai_news", "days_back": 7},
-        headers={"Authorization": f"Bearer {admin_key}"},
+        headers={"x-ocn-caller": admin_key},
     )
 
     body = resp.json()
@@ -110,7 +110,7 @@ async def test_different_model_does_not_cover(
     resp = await client.post(
         "/run",
         json={"domain": "ai_news", "days_back": 7},
-        headers={"Authorization": f"Bearer {admin_key}"},
+        headers={"x-ocn-caller": admin_key},
     )
 
     assert resp.status_code == 202
@@ -125,7 +125,7 @@ async def test_narrower_existing_does_not_cover(
     resp = await client.post(
         "/run",
         json={"domain": "ai_news", "days_back": 7},
-        headers={"Authorization": f"Bearer {admin_key}"},
+        headers={"x-ocn-caller": admin_key},
     )
 
     assert resp.status_code == 202
@@ -140,7 +140,7 @@ async def test_force_bypasses_subset_guard(
     resp = await client.post(
         "/run",
         json={"domain": "ai_news", "days_back": 7, "force": True},
-        headers={"Authorization": f"Bearer {admin_key}"},
+        headers={"x-ocn-caller": admin_key},
     )
 
     assert resp.status_code == 202
@@ -160,7 +160,7 @@ async def test_yesterday_wider_run_does_not_cover(
     resp = await client.post(
         "/run",
         json={"domain": "ai_news", "days_back": 7},
-        headers={"Authorization": f"Bearer {admin_key}"},
+        headers={"x-ocn-caller": admin_key},
     )
 
     assert resp.status_code == 202
@@ -195,7 +195,7 @@ async def test_subset_with_naive_iso_published_dates(
     resp = await client.post(
         "/run",
         json={"domain": "ai_news", "days_back": 7},
-        headers={"Authorization": f"Bearer {admin_key}"},
+        headers={"x-ocn-caller": admin_key},
     )
 
     assert resp.status_code == 200

@@ -1,4 +1,6 @@
 """Shared pytest fixtures for the news-retrieval test suite."""
+import base64
+import json
 import os
 import sys
 from unittest.mock import patch
@@ -6,7 +8,6 @@ from unittest.mock import patch
 import psycopg2
 import psycopg2.errors
 import pytest
-from fastapi import Header, HTTPException
 from httpx import ASGITransport, AsyncClient
 
 sys.path.insert(
@@ -23,11 +24,16 @@ os.environ.setdefault("POSTGRES_PASSWORD", "news-retrieval")
 os.environ["OPENROUTER_MODEL"] = "test-model"
 
 from app import create_app  # noqa: E402
-from auth import require_auth  # noqa: E402
 from db import get_db, init_db  # noqa: E402
 from models.api_key_domains import grant_domains  # noqa: E402
 from models.domains import insert_domain  # noqa: E402
 from seed import seed  # noqa: E402
+
+
+def _ocn_caller(sub: int, role: str) -> str:
+    """Build a valid x-ocn-caller header value."""
+    payload = json.dumps({"sub": sub, "role": role, "domains": []})
+    return base64.b64encode(payload.encode()).decode()
 
 _FAKE_ARTICLES = [
     {
@@ -39,35 +45,6 @@ _FAKE_ARTICLES = [
     }
     for i in range(3)
 ]
-
-# ---------------------------------------------------------------------------
-# Synthetic caller registry — populated by key fixtures, read by auth mock
-# ---------------------------------------------------------------------------
-
-_CALLERS: dict[str, dict] = {}
-
-
-async def _auth_override(
-    authorization: str = Header(...),
-) -> dict:
-    """Auth dependency override for tests.
-
-    Maps a Bearer token to a synthetic caller dict without hitting
-    the auth-service. Unknown tokens return 401; malformed
-    Authorization headers return 401.
-    """
-    if not authorization.startswith("Bearer "):
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid Authorization header.",
-        )
-    token = authorization[len("Bearer "):]
-    if token not in _CALLERS:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid or unknown API key.",
-        )
-    return _CALLERS[token]
 
 
 def _create_test_db() -> None:
@@ -119,28 +96,22 @@ def db_setup() -> None:
 
 @pytest.fixture(scope="session")
 def admin_key(db_setup: None) -> str:
-    """Return a Bearer token that authenticates as admin in tests."""
-    token = "test-admin-token"
-    _CALLERS[token] = {"id": 1, "role": "admin"}
-    return token
+    """Return an x-ocn-caller header value for an admin caller."""
+    return _ocn_caller(1, "admin")
 
 
 @pytest.fixture(scope="session")
 def user_key(db_setup: None) -> tuple[str, int]:
-    """Return (token, caller_id) for a regular-user caller."""
-    token = "test-user-token"
+    """Return (x-ocn-caller header value, caller_id) for a regular-user."""
     caller_id = 2
-    _CALLERS[token] = {"id": caller_id, "role": "user"}
-    return token, caller_id
+    return _ocn_caller(caller_id, "user"), caller_id
 
 
 @pytest.fixture(scope="session")
 def other_user_key(db_setup: None) -> tuple[str, int]:
-    """Return (token, caller_id) for a second user caller."""
-    token = "test-other-user-token"
+    """Return (x-ocn-caller header value, caller_id) for a second user."""
     caller_id = 3
-    _CALLERS[token] = {"id": caller_id, "role": "user"}
-    return token, caller_id
+    return _ocn_caller(caller_id, "user"), caller_id
 
 
 @pytest.fixture(scope="session")
@@ -166,23 +137,7 @@ def daily_frequency_id(db_setup: None) -> int:
 
 @pytest.fixture
 async def client() -> AsyncClient:
-    """Return an async HTTP test client with auth mocked out."""
-    app = create_app()
-    app.dependency_overrides[require_auth] = _auth_override
-    async with AsyncClient(
-        transport=ASGITransport(app=app),
-        base_url="http://test",
-    ) as c:
-        yield c
-
-
-@pytest.fixture
-async def real_auth_client() -> AsyncClient:
-    """Return an async HTTP test client using real auth logic.
-
-    Use this only in tests that specifically exercise the auth flow
-    (e.g. mocking auth-service HTTP calls).
-    """
+    """Return an async HTTP test client with real auth logic."""
     app = create_app()
     async with AsyncClient(
         transport=ASGITransport(app=app),

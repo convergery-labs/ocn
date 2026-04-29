@@ -35,7 +35,7 @@ async def test_cache_hit_returns_200_with_existing_run_id(
     resp = await client.post(
         "/run",
         json={"domain": "ai_news"},
-        headers={"Authorization": f"Bearer {admin_key}"},
+        headers={"x-ocn-caller": admin_key},
     )
 
     assert resp.status_code == 200
@@ -53,7 +53,7 @@ async def test_cache_hit_response_includes_run_fields(
     resp = await client.post(
         "/run",
         json={"domain": "ai_news"},
-        headers={"Authorization": f"Bearer {admin_key}"},
+        headers={"x-ocn-caller": admin_key},
     )
 
     body = resp.json()
@@ -75,7 +75,7 @@ async def test_different_model_is_separate_cache_entry(
             "model": "other-model",
             "openrouter_api_key": "dummy-key",
         },
-        headers={"Authorization": f"Bearer {admin_key}"},
+        headers={"x-ocn-caller": admin_key},
     )
 
     assert resp.status_code == 202
@@ -90,7 +90,7 @@ async def test_different_days_back_is_not_a_cache_hit(
     resp = await client.post(
         "/run",
         json={"domain": "ai_news", "days_back": 14},
-        headers={"Authorization": f"Bearer {admin_key}"},
+        headers={"x-ocn-caller": admin_key},
     )
 
     assert resp.status_code == 202
@@ -105,7 +105,7 @@ async def test_different_focus_is_not_a_cache_hit(
     resp = await client.post(
         "/run",
         json={"domain": "ai_news", "focus": "robotics only"},
-        headers={"Authorization": f"Bearer {admin_key}"},
+        headers={"x-ocn-caller": admin_key},
     )
 
     assert resp.status_code == 202
@@ -120,7 +120,7 @@ async def test_force_bypasses_cache(
     resp = await client.post(
         "/run",
         json={"domain": "ai_news", "force": True},
-        headers={"Authorization": f"Bearer {admin_key}"},
+        headers={"x-ocn-caller": admin_key},
     )
 
     assert resp.status_code == 202
@@ -135,7 +135,7 @@ async def test_cache_miss_proceeds_to_new_run(
     resp = await client.post(
         "/run",
         json={"domain": "ai_news"},
-        headers={"Authorization": f"Bearer {admin_key}"},
+        headers={"x-ocn-caller": admin_key},
     )
 
     assert resp.status_code == 202
@@ -154,7 +154,7 @@ async def test_run_from_yesterday_is_not_a_cache_hit(
     resp = await client.post(
         "/run",
         json={"domain": "ai_news"},
-        headers={"Authorization": f"Bearer {admin_key}"},
+        headers={"x-ocn-caller": admin_key},
     )
 
     assert resp.status_code == 202
