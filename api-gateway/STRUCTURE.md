@@ -54,13 +54,18 @@ A `502` is returned if the upstream is unreachable (`httpx.RequestError`).
 | `GET` | `/health` | none | 200 if all `GATEWAY_*` URLs are set; 503 otherwise |
 | `GET` | `/auth/jwks` | none | Proxied to auth-service `/jwks`; public |
 | `*` | `/auth/{path}` | `require_auth` | Proxied to `GATEWAY_AUTH_URL/{path}` |
+| `POST` | `/news/run` | `require_auth` + domain scope | Proxied to `GATEWAY_NEWS_URL/run`; JWT callers checked against token `domains` |
 | `*` | `/news/{path}` | `require_auth` | Proxied to `GATEWAY_NEWS_URL/{path}` |
 | `*` | `/signal/{path}` | `require_admin` | Proxied to `GATEWAY_SIGNAL_URL/{path}` (admin only) |
 
-Auth is enforced at the gateway via Bearer token validation against
-`POST {GATEWAY_AUTH_URL}/validate`. Validated caller identity is
-propagated downstream via an `x-ocn-caller` header (base64-encoded JSON
-containing `sub`, `role`, and `domains`).
+Auth is enforced at the gateway via Bearer token inspection. JWTs (three
+dot-separated segments) are verified locally against the RS256 public key
+fetched from `GET {GATEWAY_AUTH_URL}/jwks` and cached for the process
+lifetime. API keys are validated via `POST {GATEWAY_AUTH_URL}/validate`.
+In both cases the caller identity is propagated downstream via an
+`x-ocn-caller` header (base64-encoded JSON containing `sub`, `role`, and
+`domains`). JWT callers hitting `POST /news/run` have their domain claim
+checked at the gateway before proxying; admin callers bypass this check.
 
 ## Testing
 
@@ -85,3 +90,4 @@ docker compose run --rm --build api-gateway pytest tests/ -v
 | `tests/conftest.py` | ASGI `client` fixture with all `GATEWAY_*` vars pre-set |
 | `tests/test_health.py` | `/health` — 200 when all vars set, 503 when one is missing |
 | `tests/test_auth.py` | missing token → 401; unknown → 401; wrong role → 403; valid admin → 200; `x-ocn-caller` header propagated downstream |
+| `tests/test_jwt_auth.py` | valid JWT → 200; expired → 401; tampered → 401; domain mismatch → 403; admin bypass; `x-ocn-caller` from JWT claims |
