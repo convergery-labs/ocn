@@ -75,6 +75,7 @@ jobs:
           AUTH_POSTGRES_PORT:     5434
           AUTH_POSTGRES_USER:     auth_user
           AUTH_POSTGRES_PASSWORD: test_password
+          PYTHONPATH:             ${{ github.workspace }}/shared/src
 
 
       - name: Test news-retrieval
@@ -91,6 +92,7 @@ jobs:
           POSTGRES_PASSWORD: test_password
           OPENROUTER_API_KEY: mock-key
           OPENROUTER_MODEL:   mock-model
+          PYTHONPATH:        ${{ github.workspace }}/shared/src
 
 
       - name: Test signal-detection
@@ -109,6 +111,7 @@ jobs:
           NEWS_RETRIEVAL_URL: http://localhost:8000
           OPENROUTER_API_KEY: mock-key
           OPENROUTER_MODEL:   mock-model
+          PYTHONPATH:         ${{ github.workspace }}/shared/src
 
 
   deploy-auth:
