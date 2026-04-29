@@ -1,5 +1,5 @@
-output "news_retrieval_tg_arn" {
-  value = aws_lb_target_group.news_retrieval.arn
+output "api_gateway_tg_arn" {
+  value = aws_lb_target_group.api_gateway.arn
 }
 
 

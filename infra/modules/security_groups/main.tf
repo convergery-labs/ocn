@@ -16,14 +16,35 @@ resource "aws_security_group" "alb" {
 }
 
 
+resource "aws_security_group" "api_gateway" {
+  name   = "${var.env}-api-gateway"
+  vpc_id = var.vpc_id
+  ingress {
+    from_port       = 8004
+    to_port         = 8004
+    protocol        = "tcp"
+    security_groups = [aws_security_group.alb.id]
+  }
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+
 resource "aws_security_group" "news_retrieval" {
   name   = "${var.env}-news-retrieval"
   vpc_id = var.vpc_id
   ingress {
-    from_port       = 8000
-    to_port         = 8000
-    protocol        = "tcp"
-    security_groups = [aws_security_group.alb.id]
+    from_port = 8000
+    to_port   = 8000
+    protocol  = "tcp"
+    security_groups = [
+      aws_security_group.api_gateway.id,
+      aws_security_group.signal_detection.id,
+    ]
   }
   egress {
     from_port   = 0
@@ -41,7 +62,7 @@ resource "aws_security_group" "signal_detection" {
     from_port       = 8002
     to_port         = 8002
     protocol        = "tcp"
-    security_groups = [aws_security_group.alb.id]
+    security_groups = [aws_security_group.api_gateway.id]
   }
   egress {
     from_port   = 0
@@ -60,6 +81,7 @@ resource "aws_security_group" "auth_service" {
     to_port   = 8001
     protocol  = "tcp"
     security_groups = [
+      aws_security_group.api_gateway.id,
       aws_security_group.news_retrieval.id,
       aws_security_group.signal_detection.id,
     ]

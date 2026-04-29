@@ -366,9 +366,14 @@ async def _run_feature_extraction(
 
 def _qdrant_client() -> QdrantClient:
     """Return a configured Qdrant client."""
+    host = os.environ.get("QDRANT_HOST", "qdrant")
+    api_key = os.environ.get("QDRANT_API_KEY")
+    if host.startswith("http"):
+        return QdrantClient(url=host, api_key=api_key)
     return QdrantClient(
-        host=os.environ.get("QDRANT_HOST", "qdrant"),
+        host=host,
         port=int(os.environ.get("QDRANT_PORT", "6333")),
+        api_key=api_key,
     )
 
 

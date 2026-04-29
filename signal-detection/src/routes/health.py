@@ -14,11 +14,15 @@ async def _check_qdrant() -> bool:
     """Return True if the Qdrant health endpoint responds with HTTP 200."""
     qdrant_host = os.environ.get("QDRANT_HOST", "qdrant")
     qdrant_port = os.environ.get("QDRANT_PORT", "6333")
+    api_key = os.environ.get("QDRANT_API_KEY")
+    if qdrant_host.startswith("http"):
+        url = f"{qdrant_host.rstrip('/')}/healthz"
+    else:
+        url = f"http://{qdrant_host}:{qdrant_port}/healthz"
+    headers = {"api-key": api_key} if api_key else {}
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
-            resp = await client.get(
-                f"http://{qdrant_host}:{qdrant_port}/healthz"
-            )
+            resp = await client.get(url, headers=headers)
         return resp.status_code == 200
     except httpx.HTTPError:
         return False

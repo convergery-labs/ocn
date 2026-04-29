@@ -3,6 +3,11 @@ output "alb_sg_id" {
 }
 
 
+output "gateway_sg_id" {
+  value = aws_security_group.api_gateway.id
+}
+
+
 output "news_sg_id" {
   value = aws_security_group.news_retrieval.id
 }

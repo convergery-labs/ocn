@@ -7,9 +7,9 @@ resource "aws_lb" "main" {
 }
 
 
-resource "aws_lb_target_group" "news_retrieval" {
-  name        = "${var.env}-news-retrieval"
-  port        = 8000
+resource "aws_lb_target_group" "api_gateway" {
+  name        = "${var.env}-api-gateway"
+  port        = 8004
   protocol    = "HTTP"
   vpc_id      = var.vpc_id
   target_type = "ip"
@@ -28,6 +28,6 @@ resource "aws_lb_listener" "http" {
   protocol          = "HTTP"
   default_action {
     type             = "forward"
-    target_group_arn = aws_lb_target_group.news_retrieval.arn
+    target_group_arn = aws_lb_target_group.api_gateway.arn
   }
 }
