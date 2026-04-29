@@ -45,15 +45,17 @@ module "ecs_cluster" {
   source                = "../modules/ecs_cluster"
   env                   = "staging"
   vpc_id                = module.vpc.vpc_id
+  public_subnet_ids     = module.vpc.public_subnet_ids
   private_subnet_ids    = module.vpc.private_subnet_ids
   rds_endpoint          = module.rds.endpoint
   ecr_registry          = var.ecr_registry
   aws_region            = "eu-north-1"
   aws_account_id        = var.aws_account_id
+  gateway_sg_id         = module.security_groups.gateway_sg_id
   auth_sg_id            = module.security_groups.auth_sg_id
   news_sg_id            = module.security_groups.news_sg_id
   signal_sg_id          = module.security_groups.signal_sg_id
-  news_retrieval_tg_arn = module.alb.news_retrieval_tg_arn
+  api_gateway_tg_arn    = module.alb.api_gateway_tg_arn
   qdrant_host           = var.qdrant_host
 }
 
@@ -63,4 +65,13 @@ module "alb" {
   vpc_id            = module.vpc.vpc_id
   public_subnet_ids = module.vpc.public_subnet_ids
   alb_sg_id         = module.security_groups.alb_sg_id
+}
+
+resource "aws_ecr_repository" "api_gateway" {
+  name                 = "ocn/api-gateway"
+  image_tag_mutability = "MUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
 }

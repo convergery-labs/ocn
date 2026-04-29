@@ -20,12 +20,12 @@ Run once per AWS account to provision remote state storage before any environmen
 
 ### alb
 
-Application Load Balancer. Exposes `news-retrieval` publicly on port 80.
+Application Load Balancer. Exposes `api-gateway` publicly on port 80.
 
 | File | Purpose |
 |------|---------|
-| `main.tf` | ALB, `news-retrieval` target group (health check `/health`), HTTP listener |
-| `outputs.tf` | `news_retrieval_tg_arn` |
+| `main.tf` | ALB, `api-gateway` target group (port 8004, health check `/health`), HTTP listener |
+| `outputs.tf` | `api_gateway_tg_arn`, `alb_dns_name` |
 | `variables.tf` | `env`, `vpc_id`, `public_subnet_ids`, `alb_sg_id` |
 
 ### ecs_cluster
@@ -35,10 +35,10 @@ ECS Fargate cluster, task definitions, services, service discovery, IAM, logs, a
 | File | Purpose |
 |------|---------|
 | `main.tf` | ECS cluster (Container Insights on) + private DNS namespace (`{env}.ocn.internal`) |
-| `services.tf` | Task definitions and ECS services for all three services; nightly `promote-corpus` scheduled task |
+| `services.tf` | Task definitions and ECS services for all four services; nightly `promote-corpus` scheduled task |
 | `iam.tf` | Task execution role (ECR + Secrets Manager read); GitHub Actions OIDC role (ECR push + ECS deploy) |
 | `logs.tf` | CloudWatch log groups for each service (30-day retention) |
-| `variables.tf` | `env`, `vpc_id`, `private_subnet_ids`, `rds_endpoint`, `ecr_registry`, `image_tag`, `aws_region`, `aws_account_id`, `{auth,news,signal}_sg_id`, `news_retrieval_tg_arn`, `qdrant_host` |
+| `variables.tf` | `env`, `vpc_id`, `public_subnet_ids`, `private_subnet_ids`, `rds_endpoint`, `ecr_registry`, `image_tag`, `aws_region`, `aws_account_id`, `gateway_sg_id`, `{auth,news,signal}_sg_id`, `api_gateway_tg_arn`, `qdrant_host` |
 
 ### rds
 
@@ -56,8 +56,8 @@ One security group per service. Ingress rules enforce least-privilege service-to
 
 | File | Purpose |
 |------|---------|
-| `main.tf` | `alb` (80 public), `news-retrieval` (8000 from ALB), `signal-detection` (8002 from ALB), `auth-service` (8001 from news + signal), `rds` (5432 from all three services) |
-| `outputs.tf` | `{alb,auth,news,signal,rds}_sg_id` |
+| `main.tf` | `alb` (80 public), `api-gateway` (8004 from ALB), `news-retrieval` (8000 from gateway), `signal-detection` (8002 from gateway), `auth-service` (8001 from gateway + news + signal), `rds` (5432 from auth + news + signal) |
+| `outputs.tf` | `{alb,gateway,auth,news,signal,rds}_sg_id` |
 | `variables.tf` | `env`, `vpc_id` |
 
 ### vpc
@@ -74,6 +74,6 @@ VPC with two public and two private subnets across two AZs. Private subnets rout
 
 | File | Purpose |
 |------|---------|
-| `main.tf` | Wires all modules together for the staging environment (`eu-north-1`) |
+| `main.tf` | Wires all modules together for the staging environment (`eu-north-1`); includes `aws_ecr_repository.api_gateway` |
 | `variables.tf` | `db_master_password` (sensitive), `ecr_registry`, `aws_account_id`, `qdrant_host` |
 | `terraform.tfvars` | Staging variable values — not committed |

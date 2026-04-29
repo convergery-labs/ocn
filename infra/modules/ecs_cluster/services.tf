@@ -29,6 +29,22 @@ resource "aws_ecs_task_definition" "auth_service" {
         {
           name      = "AUTH_ADMIN_API_KEY"
           valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:ocn/${var.env}/auth-service:ADMIN_API_KEY::"
+        },
+        {
+          name      = "AUTH_JWT_PRIVATE_KEY"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:ocn/${var.env}/auth-service:JWT_PRIVATE_KEY::"
+        },
+        {
+          name      = "ADMIN_USERNAME"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:ocn/${var.env}/auth-service:ADMIN_USERNAME::"
+        },
+        {
+          name      = "ADMIN_EMAIL"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:ocn/${var.env}/auth-service:ADMIN_EMAIL::"
+        },
+        {
+          name      = "ADMIN_PASSWORD"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:ocn/${var.env}/auth-service:ADMIN_PASSWORD::"
         }
       ]
       logConfiguration = {
@@ -148,13 +164,6 @@ resource "aws_ecs_service" "news_retrieval" {
     subnets          = var.private_subnet_ids
     security_groups  = [var.news_sg_id]
     assign_public_ip = false
-  }
-
-
-  load_balancer {
-    target_group_arn = var.news_retrieval_tg_arn
-    container_name   = "news-retrieval"
-    container_port   = 8000
   }
 
 
@@ -322,4 +331,78 @@ resource "aws_cloudwatch_event_target" "promote_corpus" {
       }
     ]
   })
+}
+
+
+resource "aws_ecs_task_definition" "api_gateway" {
+  family                   = "${var.env}-api-gateway"
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = "256"
+  memory                   = "512"
+  execution_role_arn       = aws_iam_role.ecs_task_execution.arn
+
+
+  container_definitions = jsonencode([
+    {
+      name  = "api-gateway"
+      image = "${var.ecr_registry}/ocn/api-gateway:${var.image_tag}"
+      portMappings = [
+        { containerPort = 8004 }
+      ]
+      environment = [
+        { name = "GATEWAY_AUTH_URL",    value = "http://auth-service.${var.env}.ocn.internal:8001" },
+        { name = "GATEWAY_NEWS_URL",    value = "http://news-retrieval.${var.env}.ocn.internal:8000" },
+        { name = "GATEWAY_SIGNAL_URL",  value = "http://signal-detection.${var.env}.ocn.internal:8002" }
+      ]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = "/ecs/${var.env}/api-gateway"
+          "awslogs-region"        = var.aws_region
+          "awslogs-stream-prefix" = "ecs"
+        }
+      }
+    }
+  ])
+}
+
+
+resource "aws_service_discovery_service" "api_gateway" {
+  name = "api-gateway"
+  dns_config {
+    namespace_id = aws_service_discovery_private_dns_namespace.main.id
+    dns_records {
+      ttl  = 10
+      type = "A"
+    }
+  }
+}
+
+
+resource "aws_ecs_service" "api_gateway" {
+  name            = "${var.env}-api-gateway"
+  cluster         = aws_ecs_cluster.main.id
+  task_definition = aws_ecs_task_definition.api_gateway.arn
+  desired_count   = 1
+  launch_type     = "FARGATE"
+
+
+  network_configuration {
+    subnets          = var.public_subnet_ids
+    security_groups  = [var.gateway_sg_id]
+    assign_public_ip = true
+  }
+
+
+  load_balancer {
+    target_group_arn = var.api_gateway_tg_arn
+    container_name   = "api-gateway"
+    container_port   = 8004
+  }
+
+
+  service_registries {
+    registry_arn = aws_service_discovery_service.api_gateway.arn
+  }
 }

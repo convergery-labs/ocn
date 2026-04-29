@@ -48,6 +48,10 @@ infra/
 | `AUTH_POSTGRES_USER` | hardcoded | `auth_user` |
 | `AUTH_POSTGRES_PASSWORD` | Secrets Manager | `ocn/{env}/auth-service:POSTGRES_PASSWORD` |
 | `AUTH_ADMIN_API_KEY` | Secrets Manager | `ocn/{env}/auth-service:ADMIN_API_KEY` |
+| `AUTH_JWT_PRIVATE_KEY` | Secrets Manager | `ocn/{env}/auth-service:JWT_PRIVATE_KEY` — PEM-encoded RS256 private key |
+| `ADMIN_USERNAME` | Secrets Manager | `ocn/{env}/auth-service:ADMIN_USERNAME` — seed admin user |
+| `ADMIN_EMAIL` | Secrets Manager | `ocn/{env}/auth-service:ADMIN_EMAIL` — seed admin user |
+| `ADMIN_PASSWORD` | Secrets Manager | `ocn/{env}/auth-service:ADMIN_PASSWORD` — seed admin user |
 
 ### news-retrieval
 | Variable | Source | Notes |
@@ -85,6 +89,13 @@ infra/
 - Use the Jira board (project key `CON`) to track and reference cards
 - All secrets must exist in Secrets Manager before `terraform apply` — ECS task launch fails at runtime if a `valueFrom` ARN cannot be resolved
 - When adding a new service, add its security group in `modules/security_groups`, its task definition and ECS service in `modules/ecs_cluster/services.tf`, and its log group in `modules/ecs_cluster/logs.tf`
+
+### api-gateway
+| Variable | Source | Notes |
+|----------|--------|-------|
+| `GATEWAY_AUTH_URL` | hardcoded | `http://auth-service.{env}.ocn.internal:8001` |
+| `GATEWAY_NEWS_URL` | hardcoded | `http://news-retrieval.{env}.ocn.internal:8000` |
+| `GATEWAY_SIGNAL_URL` | hardcoded | `http://signal-detection.{env}.ocn.internal:8002` |
 
 ## Maintenance
 

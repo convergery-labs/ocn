@@ -7,6 +7,10 @@ variable "vpc_id" {
   type = string
 }
 
+variable "public_subnet_ids" {
+  type = list(string)
+}
+
 variable "private_subnet_ids" {
   type = list(string)
 }
@@ -38,6 +42,11 @@ variable "aws_account_id" {
 }
 
 
+variable "gateway_sg_id" {
+  type = string
+}
+
+
 variable "auth_sg_id" {
   type = string
 }
@@ -53,7 +62,7 @@ variable "signal_sg_id" {
 }
 
 
-variable "news_retrieval_tg_arn" {
+variable "api_gateway_tg_arn" {
   type = string
 }
 
@@ -61,4 +70,3 @@ variable "news_retrieval_tg_arn" {
 variable "qdrant_host" {
   type = string
 }
-
