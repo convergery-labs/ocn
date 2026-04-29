@@ -5,6 +5,12 @@ import sys
 import psycopg2
 import psycopg2.errors
 import pytest
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.serialization import (
+    Encoding,
+    NoEncryption,
+    PrivateFormat,
+)
 from httpx import ASGITransport, AsyncClient
 
 sys.path.insert(
@@ -18,9 +24,19 @@ os.environ["AUTH_POSTGRES_DB"] = "auth-service-test"
 os.environ.setdefault("AUTH_POSTGRES_USER", "auth-service")
 os.environ.setdefault("AUTH_POSTGRES_PASSWORD", "auth-service")
 
+# Generate a test RSA key pair and expose the private key via env var
+# before any module that uses jwt_utils is imported.
+_test_private_key = rsa.generate_private_key(
+    public_exponent=65537, key_size=2048
+)
+os.environ["AUTH_JWT_PRIVATE_KEY"] = _test_private_key.private_bytes(
+    Encoding.PEM, PrivateFormat.TraditionalOpenSSL, NoEncryption()
+).decode()
+
 from app import create_app  # noqa: E402
 from db import init_db  # noqa: E402
 from models.api_keys import create_api_key, generate_key  # noqa: E402
+from models.domains import get_domains_by_slugs  # noqa: E402
 
 
 def _create_test_db() -> None:
@@ -92,3 +108,29 @@ async def client() -> AsyncClient:
         base_url="http://test",
     ) as c:
         yield c
+
+
+@pytest.fixture(scope="session")
+def seed_domains(db_setup: None) -> list[str]:
+    """Insert test domains and return their slugs."""
+    slugs = ["ai_news", "robotics"]
+    import psycopg2
+    import psycopg2.extras
+    host = os.environ.get("AUTH_POSTGRES_HOST", "localhost")
+    port = int(os.environ.get("AUTH_POSTGRES_PORT", "5432"))
+    user = os.environ.get("AUTH_POSTGRES_USER", "auth-service")
+    pw = os.environ.get("AUTH_POSTGRES_PASSWORD", "auth-service")
+    conn = psycopg2.connect(
+        host=host, port=port,
+        dbname="auth-service-test", user=user, password=pw,
+    )
+    conn.autocommit = True
+    cur = conn.cursor()
+    for slug in slugs:
+        cur.execute(
+            "INSERT INTO domains (slug) VALUES (%s)"
+            " ON CONFLICT (slug) DO NOTHING",
+            (slug,),
+        )
+    conn.close()
+    return slugs
