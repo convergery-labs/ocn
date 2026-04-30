@@ -22,8 +22,11 @@ Monorepo for the OCN platform: auth, news retrieval, and signal detection.
 ## Quick start
 
 ```bash
-cp .env.example .env
-# Fill in required values in .env
+cp auth-service/.env.example auth-service/.env
+cp news-retrieval/.env.example news-retrieval/.env
+cp signal-detection/.env.example signal-detection/.env
+cp api-gateway/.env.example api-gateway/.env
+# Fill in required values in each .env file
 
 docker compose up
 ```
@@ -74,7 +77,14 @@ Then connect DBeaver (or any Postgres client) to `localhost:5433`.
 
 ## Environment variables
 
-See [.env.example](.env.example) for the full list, grouped by service.
+Each service has its own `.env.example` listing only the variables it needs:
+
+| Service | File |
+|---------|------|
+| auth-service | [auth-service/.env.example](auth-service/.env.example) |
+| news-retrieval | [news-retrieval/.env.example](news-retrieval/.env.example) |
+| signal-detection | [signal-detection/.env.example](signal-detection/.env.example) |
+| api-gateway | [api-gateway/.env.example](api-gateway/.env.example) |
 
 ## Testing
 

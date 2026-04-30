@@ -10,6 +10,10 @@ build/
 
 # Environment
 .env
+auth-service/.env
+news-retrieval/.env
+signal-detection/.env
+api-gateway/.env
 
 # macOS
 .DS_Store
