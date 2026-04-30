@@ -40,11 +40,13 @@ auth-service/
 │       ├── auth.py       # POST /register, POST /login (public)
 │       ├── jwks.py       # GET /jwks (public — RS256 public key in JWKS format)
 │       ├── keys.py       # GET /keys, POST /keys
+│       ├── users.py      # GET /users, GET /users/{id}, PATCH /users/{id}
 │       └── validate.py   # POST /validate
 └── tests/
     ├── conftest.py        # DB setup, RSA key pair, admin_key, user_key, seed_domains, client fixtures
     ├── test_auth.py       # /register, /login endpoint tests
     ├── test_keys.py       # /keys endpoint tests
+    ├── test_users.py      # /users endpoint tests
     └── test_validate.py   # /validate endpoint tests
 ```
 

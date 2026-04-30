@@ -18,12 +18,13 @@
 | Routes | `src/routes/health.py` | `GET /health` — liveness check |
 | Routes | `src/routes/auth.py` | `POST /register`, `POST /login` — public endpoints; no auth required |
 | Routes | `src/routes/keys.py` | `GET /keys`, `POST /keys` — HTTP only, delegates to models |
+| Routes | `src/routes/users.py` | `GET /users`, `GET /users/{id}`, `PATCH /users/{id}` — admin user management |
 | Routes | `src/routes/validate.py` | `POST /validate` — HTTP only, delegates to models |
 | Routes | `src/routes/jwks.py` | `GET /jwks` — unauthenticated; returns RS256 public key in JWKS format |
 | Auth | `src/auth.py` | `require_auth`, `require_admin` FastAPI dependencies |
 | Models | `src/models/api_keys.py` | `ApiKeyRow`, `generate_key`, `hash_key`, CRUD functions |
-| Models | `src/models/users.py` | `UserRow`, `create_user`, `get_user_by_username`, `update_last_login` |
-| Models | `src/models/domains.py` | `DomainRow`, `get_domains_by_slugs`, `get_domain_slugs_for_user`, `attach_domains_to_user` |
+| Models | `src/models/users.py` | `UserRow`, `create_user`, `get_user_by_id`, `get_user_by_username`, `list_users`, `update_last_login`, `update_user_fields` |
+| Models | `src/models/domains.py` | `DomainRow`, `get_domains_by_slugs`, `get_domain_slugs_for_user`, `attach_domains_to_user`, `replace_user_domains` |
 | JWT | `src/jwt_utils.py` | `issue_token()` — RS256 JWT issuance via `AUTH_JWT_PRIVATE_KEY` env var (PEM) |
 | Infrastructure | `src/db.py` | Thin adapter: `_new_connection` (reads `AUTH_POSTGRES_*`), `init_db`, `db_utils.configure()`; re-exports `get_db` and `DuplicateError` from `shared/src/db_utils.py` |
 | Seed | `src/seed.py` | `seed_admin_key()`, `seed_admin_user()` — idempotent, called from entry point only |
@@ -39,6 +40,9 @@
 | `GET` | `/keys` | admin | List all keys (hashes excluded) |
 | `POST` | `/keys` | admin | Create key; returns plaintext once (201) |
 | `POST` | `/validate` | Bearer token in header | Validate a key; returns `{valid, role, key_id}` |
+| `GET` | `/users` | admin | List all users (id, username, role, is_active, created_at, last_login_at, domains) |
+| `GET` | `/users/{id}` | admin | Get a single user record; 404 for unknown id |
+| `PATCH` | `/users/{id}` | admin | Update `is_active`, `role`, and/or `domain_slugs`; unknown domain slugs return 404 |
 
 ## Testing
 
@@ -62,5 +66,6 @@ The test suite creates and wipes `auth-service-test` automatically.
 | `tests/conftest.py` | DB setup, RSA key pair generation, `admin_key`, `user_key`, `seed_domains`, async `client` fixtures |
 | `tests/test_auth.py` | `POST /register`, `POST /login` — happy paths, duplicate/unknown domain, wrong password, inactive account |
 | `tests/test_keys.py` | `GET /keys`, `POST /keys` — auth enforcement, response shape |
+| `tests/test_users.py` | `GET /users`, `GET /users/{id}`, `PATCH /users/{id}` — admin enforcement, CRUD, domain replacement, deactivation |
 | `tests/test_validate.py` | `POST /validate` — valid keys, unknown keys, missing/malformed headers |
 | `tests/test_jwks.py` | `GET /jwks` — response shape, public key verifies issued JWT |
