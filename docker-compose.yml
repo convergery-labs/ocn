@@ -10,7 +10,7 @@ services:
       target: base
     ports:
       - "8001:8001"
-    env_file: .env
+    env_file: auth-service/.env
     depends_on:
       postgres-auth:
         condition: service_healthy
@@ -19,10 +19,7 @@ services:
 
   postgres-auth:
     image: postgres:16
-    environment:
-      POSTGRES_DB: ${AUTH_POSTGRES_DB}
-      POSTGRES_USER: ${AUTH_POSTGRES_USER}
-      POSTGRES_PASSWORD: ${AUTH_POSTGRES_PASSWORD}
+    env_file: auth-service/.env
     volumes:
       - postgres-auth-data:/var/lib/postgresql/data
     healthcheck:
@@ -43,14 +40,7 @@ services:
       target: base
     ports:
       - "8000:8000"
-    env_file: .env
-    environment:
-      POSTGRES_HOST: ${NEWS_POSTGRES_HOST}
-      POSTGRES_PORT: ${NEWS_POSTGRES_PORT}
-      POSTGRES_DB: ${NEWS_POSTGRES_DB}
-      POSTGRES_USER: ${NEWS_POSTGRES_USER}
-      POSTGRES_PASSWORD: ${NEWS_POSTGRES_PASSWORD}
-      AUTH_SERVICE_URL: http://auth-service:8001
+    env_file: news-retrieval/.env
     depends_on:
       postgres-news:
         condition: service_healthy
@@ -61,10 +51,7 @@ services:
 
   postgres-news:
     image: postgres:16
-    environment:
-      POSTGRES_DB: ${NEWS_POSTGRES_DB}
-      POSTGRES_USER: ${NEWS_POSTGRES_USER}
-      POSTGRES_PASSWORD: ${NEWS_POSTGRES_PASSWORD}
+    env_file: news-retrieval/.env
     volumes:
       - postgres-news-data:/var/lib/postgresql/data
     healthcheck:
@@ -85,11 +72,7 @@ services:
       target: base
     ports:
       - "8004:8004"
-    env_file: .env
-    environment:
-      GATEWAY_AUTH_URL: http://auth-service:8001
-      GATEWAY_NEWS_URL: http://news-retrieval:8000
-      GATEWAY_SIGNAL_URL: http://signal-detection:8002
+    env_file: api-gateway/.env
     depends_on:
       auth-service:
         condition: service_started
@@ -104,10 +87,7 @@ services:
     image: postgres:16
     ports:
       - "5434:5432"
-    environment:
-      POSTGRES_DB: ${AUTH_POSTGRES_DB}
-      POSTGRES_USER: ${AUTH_POSTGRES_USER}
-      POSTGRES_PASSWORD: ${AUTH_POSTGRES_PASSWORD}
+    env_file: auth-service/.env
     networks:
       - ocn-internal
 
@@ -115,10 +95,9 @@ services:
     image: postgres:16
     ports:
       - "5433:5432"
+    env_file: news-retrieval/.env
     environment:
-      POSTGRES_DB: ${NEWS_POSTGRES_TEST_DB}
-      POSTGRES_USER: ${NEWS_POSTGRES_USER}
-      POSTGRES_PASSWORD: ${NEWS_POSTGRES_PASSWORD}
+      POSTGRES_DB: news-retrieval-test
     networks:
       - ocn-internal
 
@@ -126,10 +105,7 @@ services:
     image: postgres:16
     ports:
       - "5435:5432"
-    environment:
-      POSTGRES_DB: ${SIGNAL_POSTGRES_DB}
-      POSTGRES_USER: ${SIGNAL_POSTGRES_USER}
-      POSTGRES_PASSWORD: ${SIGNAL_POSTGRES_PASSWORD}
+    env_file: signal-detection/.env
     networks:
       - ocn-internal
 
@@ -143,15 +119,7 @@ services:
       target: base
     ports:
       - "8002:8002"
-    env_file: .env
-    environment:
-      POSTGRES_HOST: ${SIGNAL_POSTGRES_HOST}
-      POSTGRES_PORT: 5432
-      POSTGRES_DB: ${SIGNAL_POSTGRES_DB}
-      POSTGRES_USER: ${SIGNAL_POSTGRES_USER}
-      POSTGRES_PASSWORD: ${SIGNAL_POSTGRES_PASSWORD}
-      AUTH_SERVICE_URL: http://auth-service:8001
-      NEWS_RETRIEVAL_URL: http://news-retrieval:8000
+    env_file: signal-detection/.env
     depends_on:
       postgres-signal:
         condition: service_healthy
@@ -164,10 +132,7 @@ services:
 
   postgres-signal:
     image: postgres:16
-    environment:
-      POSTGRES_DB: ${SIGNAL_POSTGRES_DB}
-      POSTGRES_USER: ${SIGNAL_POSTGRES_USER}
-      POSTGRES_PASSWORD: ${SIGNAL_POSTGRES_PASSWORD}
+    env_file: signal-detection/.env
     volumes:
       - postgres-signal-data:/var/lib/postgresql/data
     healthcheck:
