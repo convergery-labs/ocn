@@ -1,0 +1,72 @@
+name: Test and Deploy API Gateway
+
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'api-gateway/**'
+
+
+permissions:
+  id-token: write
+  contents: read
+
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test api-gateway
+        working-directory: api-gateway
+        run: |
+          pip install -r requirements.txt -r requirements-test.txt
+          pytest tests/ -v
+        env:
+          GATEWAY_AUTH_URL:   http://localhost:8001
+          GATEWAY_NEWS_URL:   http://localhost:8000
+          GATEWAY_SIGNAL_URL: http://localhost:8002
+
+
+  deploy-gateway:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region:     eu-north-1
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: login-ecr
+      - name: Build and push
+        env:
+          IMAGE: ${{ secrets.ECR_REGISTRY }}/ocn/api-gateway
+          TAG:   ${{ github.sha }}
+        run: |
+          docker build --target base -t $IMAGE:$TAG -t $IMAGE:latest \
+            -f api-gateway/Dockerfile .
+          docker push $IMAGE:$TAG
+          docker push $IMAGE:latest
+      - name: Deploy
+        env:
+          IMAGE: ${{ secrets.ECR_REGISTRY }}/ocn/api-gateway
+          TAG:   ${{ github.sha }}
+        run: |
+          TASK_DEF=$(aws ecs describe-task-definition \
+            --task-definition staging-api-gateway \
+            --query taskDefinition)
+          NEW_TASK=$(echo $TASK_DEF | jq \
+            --arg img "$IMAGE:$TAG" \
+            'del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy)
+            | .containerDefinitions[0].image = $img')
+          aws ecs register-task-definition --cli-input-json "$NEW_TASK"
+          aws ecs update-service \
+            --cluster staging-ocn-cluster \
+            --service staging-api-gateway \
+            --task-definition staging-api-gateway \
+            --force-new-deployment
