@@ -1,4 +1,6 @@
 """Shared pytest fixtures for the auth-service test suite."""
+import base64
+import json
 import os
 import sys
 
@@ -37,6 +39,12 @@ from app import create_app  # noqa: E402
 from db import init_db  # noqa: E402
 from models.api_keys import create_api_key, generate_key  # noqa: E402
 from models.domains import get_domains_by_slugs  # noqa: E402
+
+
+def _ocn_caller(sub: int, role: str) -> str:
+    """Build a valid x-ocn-caller header value."""
+    payload = json.dumps({"sub": sub, "role": role, "domains": []})
+    return base64.b64encode(payload.encode()).decode()
 
 
 def _create_test_db() -> None:
@@ -97,6 +105,19 @@ def user_key(db_setup: None) -> tuple[str, int]:
     key = generate_key()
     row = create_api_key(key, "test-user", "user", None)
     return key, row["id"]
+
+
+@pytest.fixture(scope="session")
+def admin_caller(db_setup: None) -> str:
+    """Return an x-ocn-caller header value for an admin caller."""
+    return _ocn_caller(1, "admin")
+
+
+@pytest.fixture(scope="session")
+def user_caller(db_setup: None) -> tuple[str, int]:
+    """Return (x-ocn-caller header value, caller_id) for a user caller."""
+    caller_id = 2
+    return _ocn_caller(caller_id, "user"), caller_id
 
 
 @pytest.fixture
