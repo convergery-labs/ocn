@@ -34,6 +34,7 @@ ocn-agent/
     ├── app.py                # FastAPI app factory; registers routers
     ├── state.py              # AgentState TypedDict
     ├── config.py             # Hardcoded domain config (slugs, descriptions, verticals)
+    ├── pending.py            # Shared asyncio coordination for news-retrieval callbacks
     ├── clients/
     │   └── news_retrieval.py # Async httpx client for internal news-retrieval calls
     ├── graph/

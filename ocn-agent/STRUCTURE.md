@@ -14,6 +14,7 @@
 | `src/app.py` | FastAPI app factory: creates instance and registers routers |
 | `src/state.py` | `AgentState` TypedDict shared across all graph nodes |
 | `src/config.py` | Hardcoded domain config: `DOMAINS` dict keyed by slug (`ai_news`, `smart_money`), each with description and verticals list |
+| `src/pending.py` | Module-level `run_events` and `run_results` dicts that bridge the `call_news_retrieval` node and the `POST /agent/news-retrieval-callback/{id}` webhook handler |
 | `src/clients/news_retrieval.py` | `NewsRetrievalClient` — async `httpx.AsyncClient` targeting `NEWS_RETRIEVAL_URL`; injects `x-ocn-caller: <NEWS_RETRIEVAL_API_KEY>` on every request |
 | `src/graph/__init__.py` | Re-exports the compiled `graph` object |
 | `src/graph/graph.py` | `StateGraph` definition: all nodes and edges; conditional edge from `resolve_domain_and_params` to either the main pipeline or `return_clarification` |
@@ -36,7 +37,8 @@
 
 | Endpoint | Description |
 |----------|-------------|
-| `POST /agent/query` | Submit a natural-language query; returns structured result (stub: 501) |
+| `POST /agent/query` | Submit a natural-language query; returns 202, delivers result to `callback_url` |
+| `POST /agent/news-retrieval-callback/{id}` | Internal webhook receiver for news-retrieval run completion |
 | `POST /agent/categorise` | Categorise a pre-fetched article set (stub: 501) |
 | `GET /health` | Service health check |
 
@@ -96,3 +98,7 @@ Current slugs: `ai_news`, `smart_money`.
 |----------|----------|-------------|
 | `NEWS_RETRIEVAL_URL` | Yes | Base URL of the internal news-retrieval service (e.g. `http://news-retrieval:8000`) |
 | `NEWS_RETRIEVAL_API_KEY` | Yes | API key sent as `x-ocn-caller` header to news-retrieval |
+| `ANTHROPIC_API_KEY` | Yes | Anthropic API key for LLM calls |
+| `AGENT_LLM_MODEL` | Yes | Claude model ID for domain resolution (e.g. `claude-sonnet-4-6`) |
+| `AGENT_BASE_URL` | Yes | Public base URL of this service; used to construct internal callback URLs |
+| `CONFIDENCE_THRESHOLD` | No | Float threshold below which clarification is requested (default: `0.7`) |

@@ -16,3 +16,4 @@ class AgentState(TypedDict):
     summaries: Optional[dict[str, str]]
     roll_up_summary: Optional[str]
     clarification_message: Optional[str]
+    callback_url: Optional[str]
