@@ -1,7 +1,7 @@
 """FastAPI application factory for auth-service."""
 from fastapi import FastAPI
 
-from routes import auth, health, jwks, keys, validate
+from routes import auth, health, jwks, keys, users, validate
 
 
 def create_app() -> FastAPI:
@@ -11,6 +11,7 @@ def create_app() -> FastAPI:
     application.include_router(auth.router)
     application.include_router(jwks.router)
     application.include_router(keys.router)
+    application.include_router(users.router)
     application.include_router(validate.router)
     return application
 

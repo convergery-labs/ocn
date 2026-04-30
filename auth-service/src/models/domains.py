@@ -5,9 +5,10 @@ from db import get_db
 
 __all__ = [
     "DomainRow",
-    "get_domains_by_slugs",
-    "get_domain_slugs_for_user",
     "attach_domains_to_user",
+    "get_domain_slugs_for_user",
+    "get_domains_by_slugs",
+    "replace_user_domains",
 ]
 
 
@@ -50,6 +51,22 @@ def attach_domains_to_user(
     if not domain_ids:
         return
     with get_db() as conn:
+        for domain_id in domain_ids:
+            conn.execute(
+                "INSERT INTO user_domains (user_id, domain_id)"
+                " VALUES (?, ?)",
+                (user_id, domain_id),
+            )
+
+
+def replace_user_domains(
+    user_id: int, domain_ids: list[int]
+) -> None:
+    """Replace all domain associations for *user_id* atomically."""
+    with get_db() as conn:
+        conn.execute(
+            "DELETE FROM user_domains WHERE user_id = ?", (user_id,)
+        )
         for domain_id in domain_ids:
             conn.execute(
                 "INSERT INTO user_domains (user_id, domain_id)"

@@ -5,9 +5,9 @@ import psycopg2
 import psycopg2.extras
 
 import db_utils
-from db_utils import DuplicateError, get_db  # noqa: F401
+from db_utils import DuplicateError, get_db, transaction  # noqa: F401
 
-__all__ = ["DuplicateError", "get_db", "init_db"]
+__all__ = ["DuplicateError", "get_db", "init_db", "transaction"]
 
 
 def _new_connection() -> db_utils._Connection:
