@@ -131,7 +131,8 @@ jobs:
           IMAGE: ${{ secrets.ECR_REGISTRY }}/ocn/auth-service
           TAG:   ${{ github.sha }}
         run: |
-          docker build --target base -t $IMAGE:$TAG -t $IMAGE:latest auth-service/
+          docker build --target base -t $IMAGE:$TAG -t $IMAGE:latest \
+            -f auth-service/Dockerfile .
           docker push $IMAGE:$TAG
           docker push $IMAGE:latest
       - name: Deploy
@@ -171,7 +172,8 @@ jobs:
           IMAGE: ${{ secrets.ECR_REGISTRY }}/ocn/news-retrieval
           TAG:   ${{ github.sha }}
         run: |
-          docker build --target base -t $IMAGE:$TAG -t $IMAGE:latest news-retrieval/
+          docker build --target base -t $IMAGE:$TAG -t $IMAGE:latest \
+            -f news-retrieval/Dockerfile .
           docker push $IMAGE:$TAG
           docker push $IMAGE:latest
       - name: Deploy
@@ -210,7 +212,8 @@ jobs:
           IMAGE: ${{ secrets.ECR_REGISTRY }}/ocn/signal-detection
           TAG:   ${{ github.sha }}
         run: |
-          docker build --target base -t $IMAGE:$TAG -t $IMAGE:latest signal-detection/
+          docker build --target base -t $IMAGE:$TAG -t $IMAGE:latest \
+            -f signal-detection/Dockerfile .
           docker push $IMAGE:$TAG
           docker push $IMAGE:latest
       - name: Deploy
