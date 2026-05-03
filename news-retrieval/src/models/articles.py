@@ -1,4 +1,5 @@
 """DB query functions for article records."""
+from datetime import date
 from typing import Optional
 
 from cursor_utils import decode_cursor, encode_cursor
@@ -90,36 +91,48 @@ def list_articles_for_run(
 
 
 def list_articles(
-    domain: Optional[str] = None,
+    domains: Optional[list[str]] = None,
+    from_date: Optional[date] = None,
+    to_date: Optional[date] = None,
     limit: int = 20,
     cursor: Optional[str] = None,
     include_body: bool = True,
 ) -> tuple[list[dict], Optional[str]]:
-    """Return paginated articles across all runs, ordered by id asc.
+    """Return paginated articles across all runs, newest id first.
 
-    Optionally filtered to a single domain slug. Body fields are
-    omitted unless include_body is True.
+    Optionally filtered to one or more domain slugs and/or a date range
+    on the article published date. Body fields are omitted unless
+    include_body is True.
     """
     params: dict = {"limit": limit + 1}
-    domain_clause = ""
-    after_clause = ""
+    clauses: list[str] = []
 
-    if domain is not None:
-        domain_clause = "AND r.domain = :domain"
-        params["domain"] = domain
+    if domains:
+        clauses.append("r.domain = ANY(:domains)")
+        params["domains"] = domains
+
+    if from_date is not None:
+        clauses.append("a.published >= :from_date")
+        params["from_date"] = from_date
+
+    if to_date is not None:
+        clauses.append("a.published <= :to_date")
+        params["to_date"] = to_date
 
     if cursor is not None:
         after_id = _decode_article_cursor(cursor)
-        after_clause = "AND a.id > :after_id"
+        clauses.append("a.id < :after_id")
         params["after_id"] = after_id
+
+    where = ("AND " + " AND ".join(clauses)) if clauses else ""
 
     with get_db() as conn:
         cur = conn.execute(
             f"""
             SELECT a.*, r.domain FROM articles a
             JOIN runs r ON r.id = a.run_id
-            WHERE TRUE {domain_clause} {after_clause}
-            ORDER BY a.id ASC
+            WHERE TRUE {where}
+            ORDER BY a.id DESC
             LIMIT :limit
             """,
             params,
@@ -135,7 +148,7 @@ def list_articles(
         rows = rows[:limit]
         next_cursor = _encode_article_cursor(rows[-1]["id"])
 
-    return rows, next_cursor
+    return rows, next_cursor  # type: ignore[return-value]
 
 
 def fetch_all_articles_for_run(run_id: int) -> list[dict]:

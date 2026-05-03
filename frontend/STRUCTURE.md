@@ -21,12 +21,17 @@ frontend/
     │   └── AuthContext.tsx    localStorage-backed auth state; exposes user, login(), logout()
     ├── hooks/
     │   ├── useDomains.ts      TanStack Query — GET /news/domains (public)
+    │   ├── useArticles.ts     TanStack useInfiniteQuery — GET /news/articles (domain filter, cursor pagination)
     │   ├── useLoginMutation.ts  TanStack useMutation — POST /auth/login
     │   └── useRegisterMutation.ts  TanStack useMutation — POST /auth/register
+    ├── components/
+    │   ├── ProtectedRoute.tsx Redirects to /login if no token in AuthContext
+    │   ├── ArticleCard.tsx    Article card with 300 ms hover-reveal summary tooltip
+    │   └── ArticleGrid.tsx    Grid layout; renders ArticleCards; empty/error states; Load more
     └── pages/
         ├── LoginPage.tsx
         ├── RegisterPage.tsx
-        └── ArticleGridPage.tsx
+        └── ArticleGridPage.tsx  Article grid: filter bar (domain, date, title) + grid
 ```
 
 ## Layer responsibilities

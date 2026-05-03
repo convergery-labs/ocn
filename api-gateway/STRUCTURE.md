@@ -18,7 +18,7 @@
 | App factory | `src/app.py` | Assembles `FastAPI`, registers routers; no I/O |
 | Routes | `src/routes/health.py` | `GET /health` — validates upstream URL config |
 | Routes | `src/routes/proxy_routes.py` | Catch-all proxy routes per upstream service |
-| Auth | `src/auth.py` | `require_auth` / `require_admin` FastAPI dependencies |
+| Auth | `src/auth.py` | `require_auth` / `require_admin` / `optional_auth` FastAPI dependencies |
 | Infrastructure | `src/proxy.py` | `forward_request()` using a shared `httpx.AsyncClient` |
 
 Dependencies flow one way: `__main__` → `app` → `routes` → `auth` / `proxy`.
@@ -55,7 +55,7 @@ A `502` is returned if the upstream is unreachable (`httpx.RequestError`).
 | `GET` | `/auth/jwks` | none | Proxied to auth-service `/jwks`; public |
 | `*` | `/auth/{path}` | `require_auth` | Proxied to `GATEWAY_AUTH_URL/{path}` |
 | `POST` | `/news/run` | `require_auth` + domain scope | Proxied to `GATEWAY_NEWS_URL/run`; JWT callers checked against token `domains` |
-| `*` | `/news/{path}` | `require_auth` | Proxied to `GATEWAY_NEWS_URL/{path}` |
+| `*` | `/news/{path}` | `optional_auth` | Proxied to `GATEWAY_NEWS_URL/{path}`; token validated if present, forwarded without caller if absent |
 | `*` | `/signal/{path}` | `require_admin` | Proxied to `GATEWAY_SIGNAL_URL/{path}` (admin only) |
 
 Auth is enforced at the gateway via Bearer token inspection. JWTs (three

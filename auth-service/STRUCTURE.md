@@ -13,7 +13,7 @@
 
 | Layer | File | Responsibility |
 |-------|------|---------------|
-| Entry point | `src/__main__.py` | `init_db` → `seed_admin_key` → `seed_admin_user` → `uvicorn.run`; never imports routes |
+| Entry point | `src/__main__.py` | `init_db` → `seed_domains` → `seed_admin_key` → `seed_admin_user` → `uvicorn.run`; never imports routes |
 | App factory | `src/app.py` | Assembles `FastAPI`, registers routers; no DB or seed logic |
 | Routes | `src/routes/health.py` | `GET /health` — liveness check |
 | Routes | `src/routes/auth.py` | `POST /register`, `POST /login` — public endpoints; no auth required |
@@ -27,7 +27,7 @@
 | Models | `src/models/domains.py` | `DomainRow`, `get_domains_by_slugs`, `get_domain_slugs_for_user`, `attach_domains_to_user`, `replace_user_domains` |
 | JWT | `src/jwt_utils.py` | `issue_token()` — RS256 JWT issuance via `AUTH_JWT_PRIVATE_KEY` env var (PEM) |
 | Infrastructure | `src/db.py` | Thin adapter: `_new_connection` (reads `AUTH_POSTGRES_*`), `init_db`, `db_utils.configure()`; re-exports `get_db` and `DuplicateError` from `shared/src/db_utils.py` |
-| Seed | `src/seed.py` | `seed_admin_key()`, `seed_admin_user()` — idempotent, called from entry point only |
+| Seed | `src/seed.py` | `seed_domains()`, `seed_admin_key()`, `seed_admin_user()` — idempotent, called from entry point only |
 
 ## HTTP API
 

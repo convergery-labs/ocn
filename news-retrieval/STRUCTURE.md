@@ -41,12 +41,13 @@ The application is a single FastAPI process. `POST /run` uses FastAPI `Backgroun
 | Endpoint | Description |
 |----------|-------------|
 | `POST /run` | Submit a pipeline run; returns `202` with `run_id` immediately, or `200` with `cache_hit: true` if an identical run completed today UTC; optional `model` + `openrouter_api_key` override the server defaults; optional `callback_url` receives a webhook on completion or failure; `force: true` bypasses both the cache guard and concurrent-run guard |
-| `GET /runs` | List runs, newest-first; filter by `domain`, `status`, `from_date`, `to_date`; cursor-paginated (`limit`, `cursor`); returns `{"runs": [...], "next_cursor": str\|null}` |
+| `GET /runs` | List runs, newest-first; filter by one or more `domain` slugs (repeat param: `?domain=A&domain=B`), `status`, `from_date`, `to_date`; cursor-paginated (`limit`, `cursor`); returns `{"runs": [...], "next_cursor": str\|null}` |
 | `GET /runs/{id}` | Single run record |
 | `GET /runs/{id}/articles` | Articles for a run; cursor-paginated (`limit`, `cursor`); returns `{"articles": [...], "next_cursor": str\|null}` |
 | `GET /articles/{id}` | Single article record |
 | `GET /health` | Service health check |
-| `GET/POST /domains` | Manage domains (all require auth; `GET` scoped to caller's owned + null-owner domains; `POST` records caller as owner; `PATCH /{id}` requires ownership or admin) |
+| `GET /domains` | List all domains — **public**, no auth required |
+| `POST /domains` | Create a domain — requires auth; records caller as owner; `PATCH /{id}` requires ownership or admin |
 | `GET/POST /sources` | Manage sources (`POST` requires auth; users restricted to domains they own) |
 | `GET/POST /frequencies` | Manage frequencies (`POST` admin only) |
 | `POST /grants/{id}/domains` | Grant domain access to a key — admin only; upserts grants, returns updated domain list |

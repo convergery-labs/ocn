@@ -31,7 +31,7 @@ api-gateway/
 ├── src/
 │   ├── __main__.py         # Entry point: uvicorn.run (no DB init)
 │   ├── app.py              # FastAPI app factory
-│   ├── auth.py             # require_auth / require_admin FastAPI deps
+│   ├── auth.py             # require_auth / require_admin / optional_auth FastAPI deps
 │   ├── proxy.py            # Generic async HTTP proxy (httpx.AsyncClient)
 │   └── routes/
 │       ├── health.py       # GET /health

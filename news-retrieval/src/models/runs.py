@@ -100,7 +100,7 @@ def fail_run(run_id: int, summary: str) -> None:
 
 
 def list_runs(
-    domain: Optional[str] = None,
+    domains: Optional[list[str]] = None,
     status: Optional[str] = None,
     from_date: Optional[date] = None,
     to_date: Optional[date] = None,
@@ -115,9 +115,9 @@ def list_runs(
     params: dict = {}
     clauses: list[str] = []
 
-    if domain is not None:
-        clauses.append("domain = :domain")
-        params["domain"] = domain
+    if domains:
+        clauses.append("domain = ANY(:domains)")
+        params["domains"] = domains
 
     if status is not None:
         clauses.append("status = :status")

@@ -21,7 +21,7 @@ sys.path.insert(
 )
 
 os.environ.setdefault("AUTH_POSTGRES_HOST", "localhost")
-os.environ.setdefault("AUTH_POSTGRES_PORT", "5432")
+os.environ.setdefault("AUTH_POSTGRES_PORT", "5434")
 os.environ["AUTH_POSTGRES_DB"] = "auth-service-test"
 os.environ.setdefault("AUTH_POSTGRES_USER", "auth-service")
 os.environ.setdefault("AUTH_POSTGRES_PASSWORD", "auth-service")
