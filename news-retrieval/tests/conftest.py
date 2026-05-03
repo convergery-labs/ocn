@@ -14,6 +14,12 @@ sys.path.insert(
     0,
     os.path.join(os.path.dirname(__file__), "..", "src"),
 )
+sys.path.insert(
+    0,
+    os.path.join(
+        os.path.dirname(__file__), "..", "..", "shared", "src"
+    ),
+)
 
 # Must be set before any src imports so DB connections hit the test DB.
 os.environ.setdefault("POSTGRES_HOST", "localhost")

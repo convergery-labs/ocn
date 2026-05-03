@@ -209,6 +209,27 @@ async def test_get_all_articles_domain_filter(client) -> None:
     assert articles[0]["domain"] == "ai_news"
 
 
+async def test_get_runs_multi_domain_filter(client) -> None:
+    """GET /runs?domain=A&domain=B returns runs for both domains only."""
+    ai_run = _make_run_for_domain("multi-ai-run", "ai_news")
+    sm_run = _make_run_for_domain("multi-sm-run", "smart_money")
+    _make_run_for_domain("multi-other-run", "other_domain")
+
+    resp = await client.get(
+        "/runs?domain=ai_news&domain=smart_money"
+    )
+    assert resp.status_code == 200
+    run_ids = {r["id"] for r in resp.json()["runs"]}
+    assert ai_run in run_ids
+    assert sm_run in run_ids
+
+    resp2 = await client.get("/runs?domain=ai_news")
+    assert resp2.status_code == 200
+    run_ids2 = {r["id"] for r in resp2.json()["runs"]}
+    assert ai_run in run_ids2
+    assert sm_run not in run_ids2
+
+
 async def test_get_all_articles_body_excluded_by_default(
     client,
 ) -> None:

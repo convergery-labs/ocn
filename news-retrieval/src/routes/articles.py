@@ -1,4 +1,5 @@
 """Routes for /articles."""
+from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -10,18 +11,22 @@ router = APIRouter()
 
 @router.get("/articles")
 def get_articles(
-    domain: Optional[str] = None,
+    domain: list[str] = Query(default=[]),
+    from_date: Optional[date] = None,
+    to_date: Optional[date] = None,
     limit: int = Query(default=20, ge=1, le=100),
     cursor: Optional[str] = None,
     include_body: bool = False,
 ) -> dict:
     """Return paginated articles across all runs, newest id first.
 
-    Optionally filtered to a domain slug via ``?domain=``.
+    Optionally filtered by domain slugs and/or published date range.
     """
     try:
         articles, next_cursor = list_articles(
-            domain=domain,
+            domains=domain or None,
+            from_date=from_date,
+            to_date=to_date,
             limit=limit,
             cursor=cursor,
             include_body=include_body,

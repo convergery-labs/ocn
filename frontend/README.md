@@ -13,7 +13,7 @@ npm install
 npm run dev                  # http://localhost:5173
 ```
 
-The dev server proxies `/api` to `VITE_API_BASE_URL` (default `http://localhost:8000`).
+The dev server proxies `/api` to `VITE_API_BASE_URL` (default `http://localhost:8004`), stripping the `/api` prefix before forwarding.
 
 ## Scripts
 

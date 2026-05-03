@@ -12,7 +12,7 @@ router = APIRouter()
 
 @router.get("/runs")
 def get_runs(
-    domain: Optional[str] = None,
+    domain: list[str] = Query(default=[]),
     status: Optional[Literal["running", "completed", "failed"]] = None,
     from_date: Optional[date] = None,
     to_date: Optional[date] = None,
@@ -22,7 +22,7 @@ def get_runs(
     """Return filtered, paginated pipeline runs, newest first."""
     try:
         runs, next_cursor = list_runs(
-            domain=domain,
+            domains=domain or None,
             status=status,
             from_date=from_date,
             to_date=to_date,
