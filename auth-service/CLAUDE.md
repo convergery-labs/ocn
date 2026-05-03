@@ -25,12 +25,12 @@ auth-service/
 ├── STRUCTURE.md
 ├── README.md
 ├── src/
-│   ├── __main__.py       # Entry point: init_db → seed_admin_key → seed_admin_user → uvicorn
+│   ├── __main__.py       # Entry point: init_db → seed_domains → seed_admin_key → seed_admin_user → uvicorn
 │   ├── app.py            # FastAPI app factory
 │   ├── auth.py           # require_auth / require_admin dependencies
 │   ├── db.py             # thin adapter: _new_connection, init_db; re-exports get_db/DuplicateError from shared/src/db_utils.py
 │   ├── jwt_utils.py      # issue_token() — RS256 JWT via AUTH_JWT_PRIVATE_KEY env var
-│   ├── seed.py           # seed_admin_key(), seed_admin_user()
+│   ├── seed.py           # seed_domains(), seed_admin_key(), seed_admin_user()
 │   ├── models/
 │   │   ├── api_keys.py   # ApiKeyRow, generate_key, hash_key, CRUD
 │   │   ├── users.py      # UserRow, create_user, get_user_by_username, update_last_login
