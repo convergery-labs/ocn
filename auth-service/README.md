@@ -44,8 +44,8 @@ docker compose up postgres-auth auth-service
 | `GET` | `/jwks` | none | RS256 public key in JWKS format |
 | `POST` | `/register` | none | Create user; returns `{id, username, email, role, domains}` (201) |
 | `POST` | `/login` | none | Verify credentials; returns `{access_token, token_type}` |
-| `GET` | `/keys` | admin | List all API keys (hashes excluded) |
-| `POST` | `/keys` | admin | Create API key; returns plaintext once (201) |
+| `GET` | `/keys` | `X-OCN-Caller` (admin) | List all API keys (hashes excluded) |
+| `POST` | `/keys` | `X-OCN-Caller` (admin) | Create API key; returns plaintext once (201) |
 | `POST` | `/validate` | Bearer token | Validate an API key; returns `{valid, role, key_id}` |
 
 ## Testing
