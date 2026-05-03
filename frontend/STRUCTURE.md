@@ -3,7 +3,7 @@
 ```
 frontend/
 ├── index.html                 Vite entry point
-├── vite.config.ts             Path alias (@/ → src/), /api proxy
+├── vite.config.ts             Path alias (@/ → src/), /api proxy (rewrites /api → /)
 ├── tsconfig.json              TypeScript config; paths mirror vite alias
 ├── tsconfig.node.json         TypeScript config for vite.config.ts itself
 ├── package.json
@@ -19,7 +19,10 @@ frontend/
     │   └── ProtectedRoute.tsx Redirects to /login if no token in AuthContext
     ├── context/
     │   └── AuthContext.tsx    localStorage-backed auth state; exposes user, login(), logout()
-    ├── hooks/                 TanStack Query hooks per resource (e.g. useArticles, useCategories)
+    ├── hooks/
+    │   ├── useDomains.ts      TanStack Query — GET /news/domains (public)
+    │   ├── useLoginMutation.ts  TanStack useMutation — POST /auth/login
+    │   └── useRegisterMutation.ts  TanStack useMutation — POST /auth/register
     └── pages/
         ├── LoginPage.tsx
         ├── RegisterPage.tsx

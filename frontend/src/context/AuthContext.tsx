@@ -50,7 +50,7 @@ function decodeToken(token: string): User | null {
   }
 }
 
-function authReducer(state: AuthState, action: AuthAction): AuthState {
+function authReducer(_state: AuthState, action: AuthAction): AuthState {
   switch (action.type) {
     case 'LOGIN':
       return { user: action.user, token: action.token };
