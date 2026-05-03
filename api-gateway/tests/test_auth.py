@@ -39,10 +39,26 @@ async def test_public_jwks_route_requires_no_auth(client) -> None:
     assert resp.status_code == 200
 
 
-async def test_missing_auth_header_returns_401(client) -> None:
-    """Absent Authorization header must return 401."""
-    resp = await client.get("/news/articles")
+async def test_missing_auth_header_forwarded_without_caller(client) -> None:
+    """Absent Authorization header must be forwarded; upstream enforces auth."""
+    with patch(
+        "routes.proxy_routes.forward_request",
+        new_callable=AsyncMock,
+        return_value=Response(status_code=401),
+    ):
+        resp = await client.get("/news/articles")
     assert resp.status_code == 401
+
+
+async def test_public_news_domains_requires_no_auth(client) -> None:
+    """GET /news/domains must be reachable without an Authorization header."""
+    with patch(
+        "routes.proxy_routes.forward_request",
+        new_callable=AsyncMock,
+        return_value=Response(status_code=200),
+    ):
+        resp = await client.get("/news/domains")
+    assert resp.status_code == 200
 
 
 async def test_unknown_token_returns_401(client) -> None:

@@ -1,11 +1,11 @@
 """Catch-all proxy routes for each upstream service."""
 import os
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 
-from auth import require_admin, require_auth
+from auth import optional_auth, require_admin, require_auth
 from proxy import forward_request
 
 router = APIRouter()
@@ -76,7 +76,7 @@ async def proxy_news_run(
 async def proxy_news(
     path: str,
     request: Request,
-    caller: dict[str, Any] = Depends(require_auth),
+    caller: Optional[dict[str, Any]] = Depends(optional_auth),
 ) -> Response:
     """Proxy requests under /news/* to news-retrieval."""
     return await forward_request(

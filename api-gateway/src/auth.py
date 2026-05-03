@@ -116,6 +116,28 @@ async def _validate_api_key(token: str) -> dict[str, Any]:
     }
 
 
+_optional_bearer = HTTPBearer(auto_error=False)
+
+
+async def optional_auth(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(
+        _optional_bearer
+    ),
+) -> Optional[dict[str, Any]]:
+    """Return caller identity if a token is provided, or None if absent.
+
+    Raises HTTPException 401 only when a token is present but invalid.
+    Routes that require auth rely on the upstream service to enforce it
+    via the presence/absence of the X-OCN-Caller header.
+    """
+    if credentials is None:
+        return None
+    token = credentials.credentials
+    if token.count(".") == 2:
+        return await _validate_jwt(token)
+    return await _validate_api_key(token)
+
+
 async def require_auth(
     credentials: HTTPAuthorizationCredentials = Depends(_bearer),
 ) -> dict[str, Any]:

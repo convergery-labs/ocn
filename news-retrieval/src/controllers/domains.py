@@ -1,9 +1,7 @@
 """Domain controller."""
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel
-
-from typing import Any
 
 from models import domains as domain_model
 from models.api_key_domains import grant_domains, has_domain_access
@@ -25,15 +23,9 @@ class DomainPatch(BaseModel):
     description: Optional[str] = None
 
 
-def get_all(caller: dict[str, Any]) -> list[dict]:
-    """Return domains visible to *caller*.
-
-    Admins see all domains; regular callers see only their own and
-    null-owner (legacy) domains.
-    """
-    if caller["role"] == "admin":
-        return domain_model.list_domains()
-    return domain_model.list_domains(caller_id=caller["id"])
+def get_all() -> list[dict]:
+    """Return all domains."""
+    return domain_model.list_domains()
 
 
 def create(body: DomainIn, caller: dict[str, Any]) -> dict:
