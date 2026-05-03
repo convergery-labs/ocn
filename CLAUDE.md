@@ -21,7 +21,6 @@ Confluence space: `Projects` — Cloud: `opengrowthventures.atlassian.net`
 | `news-retrieval` | [news-retrieval/](news-retrieval/) | [news-retrieval/CLAUDE.md](news-retrieval/CLAUDE.md) | RSS feed fetching and LLM-based relevance filtering |
 | `signal-detection` | [signal-detection/](signal-detection/) | [signal-detection/CLAUDE.md](signal-detection/CLAUDE.md) | Signal detection and vector-similarity pipelines |
 | `api-gateway` | [api-gateway/](api-gateway/) | [api-gateway/CLAUDE.md](api-gateway/CLAUDE.md) | Async HTTP reverse proxy to OCN upstream services |
-| `ocn-agent` | [ocn-agent/](ocn-agent/) | [ocn-agent/CLAUDE.md](ocn-agent/CLAUDE.md) | LangGraph-driven agent for domain-aware news summarisation (internal only) |
 | `infra` | [infra/](infra/) | [infra/CLAUDE.md](infra/CLAUDE.md) | Terraform infrastructure (VPC, RDS, ECS, ALB, IAM) |
 
 ## Jira Board
@@ -76,13 +75,6 @@ ocn/
 │   ├── requirements.txt
 │   ├── src/
 │   └── tests/
-├── ocn-agent/                # see ocn-agent/STRUCTURE.md
-│   ├── CLAUDE.md
-│   ├── STRUCTURE.md
-│   ├── README.md
-│   ├── Dockerfile
-│   ├── requirements.txt
-│   └── src/
 └── infra/                    # see infra/STRUCTURE.md
     ├── CLAUDE.md
     ├── STRUCTURE.md
