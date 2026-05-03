@@ -13,18 +13,17 @@ def _ocn_caller(sub: int, role: str, domains: list = None) -> str:
     return base64.b64encode(payload.encode()).decode()
 
 
-async def test_missing_caller_header_returns_401(client) -> None:
-    """Absent x-ocn-caller header returns 401."""
+async def test_domains_public_no_auth_required(client) -> None:
+    """GET /domains returns 200 without an x-ocn-caller header."""
     resp = await client.get("/domains")
-    assert resp.status_code == 401
+    assert resp.status_code == 200
 
 
-async def test_malformed_caller_header_returns_401(client) -> None:
-    """Garbage in x-ocn-caller returns 401."""
-    resp = await client.get(
-        "/domains",
-        headers={"x-ocn-caller": "not-valid-base64!!!"},
-    )
+async def test_missing_caller_header_returns_401_on_private_route(
+    client,
+) -> None:
+    """Absent x-ocn-caller header returns 401 on auth-required routes."""
+    resp = await client.post("/domains", json={"name": "x", "slug": "x"})
     assert resp.status_code == 401
 
 

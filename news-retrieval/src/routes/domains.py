@@ -1,6 +1,5 @@
 """Routes for /domains."""
 from fastapi import APIRouter, Depends, HTTPException
-
 from typing import Any
 
 from auth import require_auth
@@ -11,11 +10,9 @@ router = APIRouter()
 
 
 @router.get("/domains")
-async def get_domains(
-    caller: dict[str, Any] = Depends(require_auth),
-) -> list[dict]:
-    """Return domains visible to the caller."""
-    return get_all(caller)
+async def get_domains() -> list[dict]:
+    """Return all domains (public — no auth required)."""
+    return get_all()
 
 
 @router.post("/domains", status_code=201)
