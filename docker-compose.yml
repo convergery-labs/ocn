@@ -83,23 +83,6 @@ services:
     networks:
       - ocn-internal
 
-  # ---------------------------------------------------------------------------
-  # ocn-agent (port 8003)
-  # ---------------------------------------------------------------------------
-  ocn-agent:
-    build:
-      context: .
-      dockerfile: ocn-agent/Dockerfile
-      target: base
-    ports:
-      - "8003:8003"
-    env_file: ocn-agent/.env
-    depends_on:
-      news-retrieval:
-        condition: service_started
-    networks:
-      - ocn-internal
-
   postgres-auth-test:
     image: postgres:16
     ports:
