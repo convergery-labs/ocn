@@ -22,6 +22,7 @@ Confluence space: `Projects` — Cloud: `opengrowthventures.atlassian.net`
 | `signal-detection` | [signal-detection/](signal-detection/) | [signal-detection/CLAUDE.md](signal-detection/CLAUDE.md) | Signal detection and vector-similarity pipelines |
 | `api-gateway` | [api-gateway/](api-gateway/) | [api-gateway/CLAUDE.md](api-gateway/CLAUDE.md) | Async HTTP reverse proxy to OCN upstream services |
 | `infra` | [infra/](infra/) | [infra/CLAUDE.md](infra/CLAUDE.md) | Terraform infrastructure (VPC, RDS, ECS, ALB, IAM) |
+| `frontend` | [frontend/](frontend/) | [frontend/CLAUDE.md](frontend/CLAUDE.md) | React + Vite SPA — article feed UI |
 
 ## Jira Board
 | Board | URL | Project Key |
@@ -75,13 +76,20 @@ ocn/
 │   ├── requirements.txt
 │   ├── src/
 │   └── tests/
-└── infra/                    # see infra/STRUCTURE.md
+├── infra/                    # see infra/STRUCTURE.md
+│   ├── CLAUDE.md
+│   ├── STRUCTURE.md
+│   ├── README.md
+│   ├── bootstrap/
+│   ├── modules/
+│   └── staging/
+└── frontend/                 # see frontend/STRUCTURE.md
     ├── CLAUDE.md
     ├── STRUCTURE.md
     ├── README.md
-    ├── bootstrap/
-    ├── modules/
-    └── staging/
+    ├── package.json
+    ├── vite.config.ts
+    └── src/
 ```
 
 ## Guidance
