@@ -13,6 +13,10 @@ sys.path.insert(
     0,
     os.path.join(os.path.dirname(__file__), "..", "src"),
 )
+sys.path.insert(
+    0,
+    os.path.join(os.path.dirname(__file__), "..", "..", "shared", "src"),
+)
 
 os.environ.setdefault("POSTGRES_HOST", "localhost")
 os.environ.setdefault("POSTGRES_PORT", "5435")
@@ -22,6 +26,7 @@ os.environ.setdefault("POSTGRES_PASSWORD", "signal-detection")
 os.environ.setdefault(
     "NEWS_RETRIEVAL_URL", "http://news-retrieval:8000"
 )
+os.environ.setdefault("OPENROUTER_API_KEY", "test-key")
 
 from app import create_app  # noqa: E402
 from db import get_db, init_db  # noqa: E402

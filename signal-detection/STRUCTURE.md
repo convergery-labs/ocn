@@ -6,7 +6,7 @@
 |------|---------|
 | `Dockerfile` | Multi-stage build: `base` (production), `dev` (hot-reload), `test` (pytest). Build context is the repo root (`docker build -f signal-detection/Dockerfile .`); copies `signal-detection/src/`, `signal-detection/requirements.txt`, and `shared/src/` into the image. |
 | `requirements.txt` | Production dependencies |
-| `requirements-test.txt` | Test-only dependencies (pytest, httpx) |
+| `requirements-test.txt` | Test-only dependencies (pytest, httpx, psycopg2) |
 | `pyproject.toml` | pytest configuration |
 
 ## App Layers
@@ -179,3 +179,4 @@ docker run --rm --network ocn_ocn-internal \
 |--------|----------|
 | `test_smoke.py` | Health endpoint, app startup |
 | `test_classify.py` | POST /classify, GET /classifications/* |
+| `test_feature_extraction.py` | MinHash dedup, language filter, article embedding, claim extraction, claim embedding + Postgres storage, Langfuse tracing |
