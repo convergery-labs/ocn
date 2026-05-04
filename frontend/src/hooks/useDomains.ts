@@ -12,6 +12,6 @@ export function useDomains() {
   return useQuery({
     queryKey: ['domains'],
     queryFn: () =>
-      client.get<Domain[]>('/api/news/domains').then((r) => r.data),
+      client.get<Domain[]>('/news/domains').then((r) => r.data),
   });
 }

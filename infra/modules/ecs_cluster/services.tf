@@ -351,9 +351,10 @@ resource "aws_ecs_task_definition" "api_gateway" {
         { containerPort = 8004 }
       ]
       environment = [
-        { name = "GATEWAY_AUTH_URL",    value = "http://auth-service.${var.env}.ocn.internal:8001" },
-        { name = "GATEWAY_NEWS_URL",    value = "http://news-retrieval.${var.env}.ocn.internal:8000" },
-        { name = "GATEWAY_SIGNAL_URL",  value = "http://signal-detection.${var.env}.ocn.internal:8002" }
+        { name = "GATEWAY_AUTH_URL",      value = "http://auth-service.${var.env}.ocn.internal:8001" },
+        { name = "GATEWAY_NEWS_URL",      value = "http://news-retrieval.${var.env}.ocn.internal:8000" },
+        { name = "GATEWAY_SIGNAL_URL",    value = "http://signal-detection.${var.env}.ocn.internal:8002" },
+        { name = "GATEWAY_CORS_ORIGINS",  value = var.gateway_cors_origins }
       ]
       logConfiguration = {
         logDriver = "awslogs"

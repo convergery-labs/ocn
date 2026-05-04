@@ -57,6 +57,7 @@ module "ecs_cluster" {
   signal_sg_id          = module.security_groups.signal_sg_id
   api_gateway_tg_arn    = module.alb.api_gateway_tg_arn
   qdrant_host           = var.qdrant_host
+  gateway_cors_origins  = "https://${aws_cloudfront_distribution.frontend.domain_name}"
 }
 
 module "alb" {

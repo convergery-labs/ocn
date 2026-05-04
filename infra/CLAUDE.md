@@ -96,6 +96,7 @@ infra/
 | `GATEWAY_AUTH_URL` | hardcoded | `http://auth-service.{env}.ocn.internal:8001` |
 | `GATEWAY_NEWS_URL` | hardcoded | `http://news-retrieval.{env}.ocn.internal:8000` |
 | `GATEWAY_SIGNAL_URL` | hardcoded | `http://signal-detection.{env}.ocn.internal:8002` |
+| `GATEWAY_CORS_ORIGINS` | Terraform (`gateway_cors_origins` var) | Comma-separated list of allowed CORS origins; set to CloudFront URL in staging |
 
 ## Maintenance
 
