@@ -9,7 +9,7 @@ from auth import require_auth
 from controllers.classify import (
     DuplicateJobError,
     RunNotFoundError,
-    run_classification_stub,
+    run_agent_loop,
     submit_classify_job,
 )
 from models.jobs import _decode_cursor, get_job, get_job_stats, list_job_results
@@ -86,7 +86,7 @@ async def post_classify(
         raise HTTPException(status_code=409, detail=str(exc))
 
     background_tasks.add_task(
-        run_classification_stub,
+        run_agent_loop,
         job["id"],
         articles,
         body.callback_url,
@@ -161,11 +161,9 @@ def get_classification_results(
     return {
         "results": [
             {
-                **r,
-                "created_at": (
-                    r["created_at"].isoformat()
-                    if r.get("created_at") else None
-                ),
+                k: (v.isoformat() if k == "created_at" and v else v)
+                for k, v in r.items()
+                if k != "article_embedding"
             }
             for r in results
         ],

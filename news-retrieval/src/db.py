@@ -98,7 +98,7 @@ def init_db() -> None:
                 summary       TEXT,
                 callback_url  TEXT,
                 model         TEXT        NOT NULL
-                              DEFAULT 'inclusionai/ling-2.6-flash:free'
+                              DEFAULT 'openai/gpt-4o-mini'
             )
         """)
         conn.execute("""
@@ -153,7 +153,7 @@ def init_db() -> None:
         conn.execute(
             "ALTER TABLE runs"
             " ADD COLUMN IF NOT EXISTS model TEXT NOT NULL"
-            " DEFAULT 'inclusionai/ling-2.6-flash:free'"
+            " DEFAULT 'openai/gpt-4o-mini'"
         )
         conn.execute(
             "ALTER TABLE articles"

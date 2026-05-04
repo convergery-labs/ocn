@@ -273,6 +273,7 @@ def run_bootstrap(
                 points=points[j: j + _SCROLL_PAGE_SIZE],
             )
 
+        centroid_vector = kmeans.cluster_centers_[cluster_i].tolist()
         slug = f"{domain}-{cluster_i}"
         cluster_id = upsert_topic_cluster(
             name=f"{domain} cluster {cluster_i}",
@@ -283,6 +284,7 @@ def run_bootstrap(
             cluster_id=cluster_id,
             embedding_model=model,
             document_count=doc_count,
+            centroid_vector=centroid_vector,
         )
         logger.info(
             "Cluster %s: %d documents → collection %s",
