@@ -70,3 +70,9 @@ variable "api_gateway_tg_arn" {
 variable "qdrant_host" {
   type = string
 }
+
+
+variable "gateway_cors_origins" {
+  type    = string
+  default = "*"
+}

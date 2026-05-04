@@ -11,6 +11,6 @@ interface RegisterPayload {
 export function useRegisterMutation() {
   return useMutation({
     mutationFn: (payload: RegisterPayload) =>
-      client.post('/api/auth/register', payload).then((r) => r.data),
+      client.post('/auth/register', payload).then((r) => r.data),
   });
 }

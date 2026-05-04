@@ -28,7 +28,7 @@ export function useArticles({ domains, fromDate, toDate }: Params) {
     queryKey: ['articles', { domains, fromDate, toDate }],
     queryFn: ({ pageParam }) =>
       client
-        .get<ArticlesPage>('/api/news/articles', {
+        .get<ArticlesPage>('/news/articles', {
           params: {
             limit: 20,
             ...(domains.length > 0 && { domain: domains }),

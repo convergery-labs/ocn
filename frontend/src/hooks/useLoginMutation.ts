@@ -15,7 +15,7 @@ export function useLoginMutation() {
   return useMutation({
     mutationFn: (creds: LoginCredentials) =>
       client
-        .post<LoginResponse>('/api/auth/login', creds)
+        .post<LoginResponse>('/auth/login', creds)
         .then((r) => r.data),
   });
 }

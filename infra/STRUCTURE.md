@@ -75,5 +75,6 @@ VPC with two public and two private subnets across two AZs. Private subnets rout
 | File | Purpose |
 |------|---------|
 | `main.tf` | Wires all modules together for the staging environment (`eu-north-1`); includes `aws_ecr_repository.api_gateway` |
+| `frontend.tf` | S3 bucket + CloudFront distribution for frontend SPA; GitHub Actions IAM extension; outputs `frontend_url` |
 | `variables.tf` | `db_master_password` (sensitive), `ecr_registry`, `aws_account_id`, `qdrant_host` |
 | `terraform.tfvars` | Staging variable values — not committed |
