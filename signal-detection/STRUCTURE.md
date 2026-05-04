@@ -6,7 +6,7 @@
 |------|---------|
 | `Dockerfile` | Multi-stage build: `base` (production), `dev` (hot-reload), `test` (pytest). Build context is the repo root (`docker build -f signal-detection/Dockerfile .`); copies `signal-detection/src/`, `signal-detection/requirements.txt`, and `shared/src/` into the image. |
 | `requirements.txt` | Production dependencies |
-| `requirements-test.txt` | Test-only dependencies (pytest, httpx) |
+| `requirements-test.txt` | Test-only dependencies (pytest, httpx, psycopg2) |
 | `pyproject.toml` | pytest configuration |
 
 ## App Layers
@@ -35,7 +35,7 @@ src/
 │   │                                  cursor encode/decode delegated to shared/src/cursor_utils.py
 │   ├── claims.py         Repository — claims
 │   └── clusters.py       Repository — topic_clusters, corpus_centroids (incl. EWMA update,
-│                                       get_corpus_centroids_bulk)
+│                                       get_corpus_centroids_bulk, get_clusters_for_domain)
 └── historical_ingestion/
     ├── schema.py         HistoricalDocument dataclass — common shape for all adapters
     ├── pipeline.py       Orchestrator — fetch, deduplicate, embed, upsert to Qdrant
@@ -60,21 +60,33 @@ Invoked via `python -m src bootstrap --domain <slug> [--days-back 180] [--k 8]`.
 3. **Cluster** — all vectors scrolled from Qdrant; `MiniBatchKMeans(n_clusters=k)` run locally.
 4. **Persist** — one Qdrant collection per cluster (`corpus_{domain}_{i}`); `topic_clusters` and `corpus_centroids` rows upserted to Postgres.
 
-## Feature Extraction Pipeline
+## Agent Loop (Classification Pipeline)
 
-Runs as the background task for each `/classify` job (`run_classification_stub()` in `controllers/classify.py`).
+Runs as the background task for each `/classify` job (`run_agent_loop()` in `controllers/classify.py`). Two phases run in sequence:
 
-For each article in the job:
+### Phase 1 — Feature Extraction (`_run_feature_extraction`)
 
 1. **MinHash LSH dedup** — tokenises the body, builds a `MinHashLSH` index (threshold = 0.85, 128 permutations); near-duplicate articles are skipped and logged.
 2. **Language filter** — `langdetect.detect()`; non-English articles are skipped and logged with their detected language code.
 3. **Article embedding** — batch of 50 bodies sent to OpenRouter (`EMBEDDING_MODEL`, default `text-embedding-3-large`, 3072 dims); upserted to Qdrant `articles` collection with payload `{url, domain, published_date, label: null}`.
-4. **Placeholder classification row** — `classifications` row inserted with `label='Noise'` and `composite_score=0.0`; CON-138 will UPDATE these with actual scores.
+4. **Placeholder classification row** — `classifications` row inserted with `label='Noise'` and `composite_score=0.0`; updated by Phase 2.
 5. **Claim extraction** — LLM prompt (model: `OPENROUTER_MODEL`) returns 3–5 factual claims as a JSON array; malformed JSON falls back to no claims with a warning log.
 6. **Claim embedding** — each claim embedded with `CLAIM_EMBEDDING_MODEL` (default `openai/text-embedding-3-small`, 1536 dims); upserted to Qdrant `claims` collection.
 7. **Claim storage** — `claims` Postgres rows inserted with `claim_text`, `claim_embedding_id` (Qdrant UUID), and `embedding_model`.
 
 All steps emit Langfuse spans when `LANGFUSE_PUBLIC_KEY` is set; tracing is silently disabled if absent.
+
+### Phase 2 — Scoring (`_run_scoring_phase`)
+
+For each article classified in Phase 1:
+
+1. **Cluster assignment** (`_assign_cluster`) — cosine similarity between the article embedding and each cluster centroid in `corpus_centroids`; nearest cluster wins. Low-confidence flag raised when similarity < `MIN_CLUSTER_SIMILARITY` (default 0.3). Cold-start default score used when no centroid vectors exist.
+2. **Sub-score A — trajectory deviation** — `1 - cosine_similarity`, normalised to [0, 1].
+3. **Sub-score C — claim novelty** (`_compute_claim_novelty`) — for each extracted claim, Qdrant `search` against the `claims` collection (k=10) excluding the article's own claims; score = mean cosine distance. `COLD_START_CLAIM_SCORE` (default 0.5) used when the claim store is empty.
+4. **Composite score** (`_compute_composite`) — `0.40 * trajectory + 0.60 * claim_novelty`. Weights are env-configurable (`W_TRAJECTORY`, `W_CLAIM_NOVELTY`).
+5. **Label** (`_assign_label`) — High Signal ≥ 0.70, Weak Signal 0.40–0.70, Noise < 0.40. Thresholds env-configurable (`SIGNAL_THRESHOLD`, `WEAK_SIGNAL_THRESHOLD`).
+6. **DB update** — `classifications` row updated with label, scores, and `cluster_id`.
+7. **Deferred promotion** — Signal articles inserted into `deferred_promotions` with `promote_at = now() + 30 days`.
 
 ## EWMA Centroid Update
 
@@ -141,7 +153,7 @@ collection with no Postgres involvement. Used to widen corpus coverage beyond wh
 | `topic_clusters` | `id`, `slug`, `centroid_qdrant_collection`, `alpha` |
 | `corpus_centroids` | `cluster_id`, `centroid_vector REAL[]`, `document_count`, `embedding_model` |
 | `classification_jobs` | `id`, `run_id`, `status`, `article_count`, `callback_url` |
-| `classifications` | `id`, `job_id`, `article_url`, `label`, `composite_score`, `article_embedding REAL[]`, `cluster_id` |
+| `classifications` | `id`, `job_id`, `article_url`, `source`, `label`, `composite_score`, `trajectory_score`, `claim_novelty_score`, `article_embedding REAL[]`, `cluster_id` |
 | `deferred_promotions` | `id`, `classification_id`, `promote_at`, `promoted_at`, `final_label` |
 | `claims` | `id`, `classification_id`, `claim_text`, `claim_embedding_id`, `embedding_model` |
 
@@ -179,3 +191,5 @@ docker run --rm --network ocn_ocn-internal \
 |--------|----------|
 | `test_smoke.py` | Health endpoint, app startup |
 | `test_classify.py` | POST /classify, GET /classifications/* |
+| `test_feature_extraction.py` | MinHash dedup, language filter, article embedding, claim extraction, claim embedding + Postgres storage, Langfuse tracing |
+| `test_scoring.py` | `_assign_cluster`, `_compute_claim_novelty`, `_compute_composite`, `_assign_label`, `_cosine_similarity` |

@@ -4,21 +4,33 @@ import json
 import logging
 import os
 import uuid
+from datetime import datetime, timedelta, timezone
 from functools import partial
 
 import httpx
+import numpy as np
 from datasketch import MinHash, MinHashLSH
 from langdetect import DetectorFactory, detect
 from openai import OpenAI
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, PointStruct, VectorParams
+from qdrant_client.models import (
+    Distance,
+    FieldCondition,
+    Filter,
+    MatchValue,
+    PointStruct,
+    VectorParams,
+)
 
 from models.claims import insert_claim
+from models.clusters import get_clusters_for_domain
 from models.jobs import (
     JobRow,
     create_job,
     find_processing_job,
     insert_classification,
+    insert_deferred_promotion,
+    update_classification_scores,
     update_job_status,
 )
 
@@ -31,6 +43,22 @@ _MINHASH_THRESHOLD = 0.85
 _EMBED_BATCH_SIZE = 50
 _ARTICLE_VECTOR_SIZE = 3072
 _CLAIM_VECTOR_SIZE = 1536
+
+# Scoring hyper-parameters — all overridable via environment variables
+_MIN_CLUSTER_SIMILARITY = float(
+    os.environ.get("MIN_CLUSTER_SIMILARITY", "0.3")
+)
+_COLD_START_CLAIM_SCORE = float(
+    os.environ.get("COLD_START_CLAIM_SCORE", "0.5")
+)
+_W_TRAJECTORY = float(os.environ.get("W_TRAJECTORY", "0.40"))
+_W_CLAIM_NOVELTY = float(os.environ.get("W_CLAIM_NOVELTY", "0.60"))
+_SIGNAL_THRESHOLD = float(os.environ.get("SIGNAL_THRESHOLD", "0.70"))
+_WEAK_SIGNAL_THRESHOLD = float(
+    os.environ.get("WEAK_SIGNAL_THRESHOLD", "0.40")
+)
+_CLAIM_NOVELTY_K = 10
+_DEFERRAL_DAYS = 30
 
 
 class RunNotFoundError(Exception):
@@ -103,33 +131,123 @@ async def submit_classify_job(
     return job
 
 
-async def run_classification_stub(
+async def run_agent_loop(
     job_id: int,
     articles: list[dict],
     callback_url: str | None,
 ) -> None:
-    """Feature extraction background task for a classification job.
+    """Agent loop: feature extraction → scoring → label assignment.
 
-    For each article: MinHash dedup, language filter, body embedding,
-    LLM claim extraction, claim embedding, and Postgres claim storage.
-    Labels and scores are placeholders (CON-138 will update them).
+    Steps: preprocessing → topic cluster assignment → trajectory
+    deviation → claim novelty → composite score → label. Each named
+    sub-step is a standalone function.
     """
+    status = "completed"
     try:
+        qdrant = _qdrant_client()
         await _run_feature_extraction(job_id, articles)
+        await _run_scoring_phase(job_id, qdrant)
         update_job_status(job_id, "completed", set_completed_at=True)
     except Exception:
-        logger.exception("Feature extraction failed for job %d", job_id)
+        logger.exception("Agent loop failed for job %d", job_id)
+        status = "failed"
         try:
             update_job_status(job_id, "failed", set_completed_at=True)
         except Exception:
             logger.exception(
                 "Failed to mark job %d failed", job_id
             )
-        if callback_url:
-            _fire_callback(callback_url, job_id, "failed")
-        return
     if callback_url:
-        _fire_callback(callback_url, job_id, "completed")
+        _fire_callback(callback_url, job_id, status)
+
+
+async def _run_scoring_phase(
+    job_id: int,
+    qdrant: QdrantClient,
+) -> None:
+    """Score every classification in job_id and write results to DB.
+
+    Reads article embeddings and claim IDs from Postgres, then runs
+    the named scoring steps for each article.
+    """
+    from db import get_db
+
+    loop = asyncio.get_running_loop()
+
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT c.id,
+                   c.article_url,
+                   c.source,
+                   c.article_embedding,
+                   array_agg(
+                       cl.claim_embedding_id::text
+                   ) FILTER (WHERE cl.id IS NOT NULL) AS claim_ids
+            FROM classifications c
+            LEFT JOIN claims cl ON cl.classification_id = c.id
+            WHERE c.job_id = :job_id
+            GROUP BY c.id, c.article_url, c.source, c.article_embedding
+            """,
+            {"job_id": job_id},
+        ).fetchall()
+
+    for row in rows:
+        row = dict(row)
+        classification_id = row["id"]
+        article_url = row["article_url"]
+        source = row["source"] or ""
+        embedding = row["article_embedding"] or []
+        claim_ids = row["claim_ids"] or []
+        article_qdrant_id = _url_to_point_id(article_url)
+
+        clusters = get_clusters_for_domain(source)
+        cluster_id, traj_score, low_conf = _assign_cluster(
+            embedding, clusters
+        )
+        if low_conf:
+            logger.info(
+                "Job %d: low-confidence cluster assignment for %s",
+                job_id, article_url,
+            )
+
+        claim_novelty = await loop.run_in_executor(
+            None,
+            partial(
+                _compute_claim_novelty,
+                claim_ids,
+                article_qdrant_id,
+                qdrant,
+            ),
+        )
+
+        composite = _compute_composite(traj_score, claim_novelty)
+        label = _assign_label(composite)
+
+        update_classification_scores(
+            classification_id=classification_id,
+            label=label,
+            composite_score=composite,
+            trajectory_score=traj_score,
+            claim_novelty_score=claim_novelty,
+            cluster_id=cluster_id,
+        )
+
+        if label == "Signal":
+            promote_at = datetime.now(tz=timezone.utc) + timedelta(
+                days=_DEFERRAL_DAYS
+            )
+            insert_deferred_promotion(
+                classification_id=classification_id,
+                promote_at=promote_at,
+            )
+
+        logger.info(
+            "Job %d: %s → label=%s composite=%.3f"
+            " traj=%.3f novelty=%.3f",
+            job_id, article_url, label,
+            composite, traj_score, claim_novelty,
+        )
 
 
 async def _embed_and_store(
@@ -306,6 +424,7 @@ async def _run_feature_extraction(
             article_embedding=embedding,
             model_embedding=embedding_model,
             model_llm=llm_model,
+            source=article.get("source"),
         )
         classification_ids.append(classification_id)
         article_urls.append(article_url)
@@ -361,6 +480,127 @@ async def _run_feature_extraction(
 
 
 # ---------------------------------------------------------------------------
+# Scoring helpers (each is a named, independently testable step)
+# ---------------------------------------------------------------------------
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Return cosine similarity between two vectors."""
+    a_arr = np.array(a, dtype=np.float32)
+    b_arr = np.array(b, dtype=np.float32)
+    norm = float(np.linalg.norm(a_arr) * np.linalg.norm(b_arr))
+    if norm == 0.0:
+        return 0.0
+    return float(np.dot(a_arr, b_arr) / norm)
+
+
+def _assign_cluster(
+    embedding: list[float],
+    clusters: list[dict],
+) -> tuple[int | None, float, bool]:
+    """Assign article to the nearest topic cluster by centroid similarity.
+
+    Returns (cluster_id, trajectory_score, low_confidence).
+    trajectory_score = 1 - cosine_similarity, normalised to [0, 1].
+    low_confidence is True when similarity < _MIN_CLUSTER_SIMILARITY,
+    or when no valid centroid vectors are available (cold start).
+    """
+    valid = [
+        c for c in clusters if c.get("centroid_vector") is not None
+    ]
+    if not valid:
+        return None, _COLD_START_CLAIM_SCORE, True
+
+    best_id: int | None = None
+    best_sim = -1.0
+    for cluster in valid:
+        sim = _cosine_similarity(embedding, cluster["centroid_vector"])
+        if sim > best_sim:
+            best_sim = sim
+            best_id = cluster["cluster_id"]
+
+    low_confidence = best_sim < _MIN_CLUSTER_SIMILARITY
+    traj_score = max(0.0, min(1.0, 1.0 - best_sim))
+    return best_id, traj_score, low_confidence
+
+
+def _compute_claim_novelty(
+    claim_ids: list[str],
+    article_qdrant_id: str,
+    qdrant: QdrantClient,
+) -> float:
+    """Score claim novelty as mean cosine distance to k nearest neighbours.
+
+    Excludes the article's own claims from the search results using a
+    Qdrant filter. Returns _COLD_START_CLAIM_SCORE when the claims
+    collection is empty or all NN searches return no results.
+    """
+    if not claim_ids:
+        return _COLD_START_CLAIM_SCORE
+
+    try:
+        points = qdrant.retrieve(
+            collection_name="claims",
+            ids=claim_ids,
+            with_vectors=True,
+        )
+    except Exception:
+        logger.warning(
+            "Claim novelty: Qdrant retrieve failed", exc_info=True
+        )
+        return _COLD_START_CLAIM_SCORE
+
+    if not points:
+        return _COLD_START_CLAIM_SCORE
+
+    exclude_own = Filter(
+        must_not=[
+            FieldCondition(
+                key="article_qdrant_id",
+                match=MatchValue(value=article_qdrant_id),
+            )
+        ]
+    )
+
+    distances: list[float] = []
+    for point in points:
+        try:
+            response = qdrant.query_points(
+                collection_name="claims",
+                query=point.vector,
+                query_filter=exclude_own,
+                limit=_CLAIM_NOVELTY_K,
+            )
+            distances.extend(1.0 - r.score for r in response.points)
+        except Exception:
+            logger.warning(
+                "Claim novelty: search failed for claim %s",
+                point.id, exc_info=True,
+            )
+
+    if not distances:
+        return _COLD_START_CLAIM_SCORE
+
+    return sum(distances) / len(distances)
+
+
+def _compute_composite(
+    trajectory_score: float,
+    claim_novelty: float,
+) -> float:
+    """Return the v1 composite score (weighted sum of sub-scores)."""
+    return _W_TRAJECTORY * trajectory_score + _W_CLAIM_NOVELTY * claim_novelty
+
+
+def _assign_label(composite: float) -> str:
+    """Map a composite score to Signal / Weak Signal / Noise."""
+    if composite >= _SIGNAL_THRESHOLD:
+        return "Signal"
+    if composite >= _WEAK_SIGNAL_THRESHOLD:
+        return "Weak Signal"
+    return "Noise"
+
+
+# ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
@@ -401,7 +641,7 @@ def _claim_embedding_model() -> str:
 
 def _llm_model() -> str:
     """Return the configured LLM model for claim extraction."""
-    return os.environ.get("OPENROUTER_MODEL", "inclusionai/ling-2.6-flash:free")
+    return os.environ.get("OPENROUTER_MODEL", "openai/gpt-4o-mini")
 
 
 def _langfuse_client():

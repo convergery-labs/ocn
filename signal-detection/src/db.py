@@ -138,3 +138,7 @@ def init_db() -> None:
             " ADD COLUMN IF NOT EXISTS embedding_model TEXT NOT NULL"
             " DEFAULT 'openai/text-embedding-3-small'"
         )
+        conn.execute(
+            "ALTER TABLE classifications"
+            " ADD COLUMN IF NOT EXISTS source TEXT"
+        )
