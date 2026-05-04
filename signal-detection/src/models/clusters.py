@@ -118,22 +118,45 @@ def upsert_corpus_centroid(
     cluster_id: int,
     embedding_model: str,
     document_count: int,
+    centroid_vector: list[float] | None = None,
 ) -> None:
     """Insert or update a corpus_centroids row for a cluster."""
     with get_db() as conn:
         conn.execute(
             """
             INSERT INTO corpus_centroids
-                (cluster_id, embedding_model, document_count)
-            VALUES (:cluster_id, :embedding_model, :document_count)
+                (cluster_id, embedding_model, document_count, centroid_vector)
+            VALUES
+                (:cluster_id, :embedding_model, :document_count,
+                 :centroid_vector)
             ON CONFLICT (cluster_id) DO UPDATE SET
                 embedding_model = EXCLUDED.embedding_model,
                 document_count = EXCLUDED.document_count,
+                centroid_vector = EXCLUDED.centroid_vector,
                 last_updated_at = NOW()
             """,
             {
                 "cluster_id": cluster_id,
                 "embedding_model": embedding_model,
                 "document_count": document_count,
+                "centroid_vector": centroid_vector,
             },
         )
+
+
+def get_clusters_for_domain(domain: str) -> list[dict]:
+    """Return topic_clusters with centroid_vectors for a domain prefix.
+
+    Returns an empty list if no bootstrap has been run for the domain.
+    """
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT tc.id AS cluster_id, tc.slug, cc.centroid_vector
+            FROM topic_clusters tc
+            JOIN corpus_centroids cc ON cc.cluster_id = tc.id
+            WHERE tc.slug LIKE :prefix
+            """,
+            {"prefix": f"{domain}-%"},
+        ).fetchall()
+    return [dict(r) for r in rows]

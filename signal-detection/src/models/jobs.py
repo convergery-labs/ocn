@@ -65,21 +65,23 @@ def insert_classification(
     article_embedding: list[float],
     model_embedding: str,
     model_llm: str,
+    source: str | None = None,
 ) -> int:
     """Insert a placeholder classification row and return its id.
 
-    label='Noise' and composite_score=0.0 are placeholders;
-    CON-138 will UPDATE these with actual scores and labels.
+    label='Noise' and composite_score=0.0 are placeholders updated
+    by the scoring phase.
     """
     with get_db() as conn:
         row = conn.execute(
             """
             INSERT INTO classifications
                 (job_id, article_url, label, composite_score,
-                 model_embedding, model_llm, article_embedding)
+                 model_embedding, model_llm, article_embedding, source)
             VALUES
                 (:job_id, :article_url, 'Noise', 0.0,
-                 :model_embedding, :model_llm, :article_embedding)
+                 :model_embedding, :model_llm, :article_embedding,
+                 :source)
             RETURNING id
             """,
             {
@@ -88,9 +90,41 @@ def insert_classification(
                 "model_embedding": model_embedding,
                 "model_llm": model_llm,
                 "article_embedding": article_embedding,
+                "source": source,
             },
         ).fetchone()
     return row["id"]
+
+
+def update_classification_scores(
+    classification_id: int,
+    label: str,
+    composite_score: float,
+    trajectory_score: float,
+    claim_novelty_score: float,
+    cluster_id: int | None,
+) -> None:
+    """Update label, scores, and cluster assignment on a classification row."""
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE classifications
+            SET label               = :label,
+                composite_score     = :composite_score,
+                trajectory_score    = :trajectory_score,
+                claim_novelty_score = :claim_novelty_score,
+                cluster_id          = :cluster_id
+            WHERE id = :id
+            """,
+            {
+                "id": classification_id,
+                "label": label,
+                "composite_score": composite_score,
+                "trajectory_score": trajectory_score,
+                "claim_novelty_score": claim_novelty_score,
+                "cluster_id": cluster_id,
+            },
+        )
 
 
 def get_job_stats(job_id: int) -> dict[str, int]:
@@ -120,7 +154,11 @@ def list_job_results(
     with get_db() as conn:
         rows = conn.execute(
             """
-            SELECT * FROM classifications
+            SELECT id, job_id, article_url, source, label,
+                   composite_score, trajectory_score, bridge_score,
+                   claim_novelty_score, plausibility_score,
+                   model_embedding, model_llm, cluster_id, created_at
+            FROM classifications
             WHERE job_id = :job_id AND id > :after_id
             ORDER BY id ASC
             LIMIT :fetch
