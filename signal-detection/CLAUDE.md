@@ -71,7 +71,8 @@ signal-detection/
 └── tests/
     ├── conftest.py
     ├── test_smoke.py
-    └── test_classify.py
+    ├── test_classify.py
+    └── test_feature_extraction.py
 ```
 
 ## Guidance
