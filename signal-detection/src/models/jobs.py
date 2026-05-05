@@ -296,7 +296,8 @@ def get_pending_promotions() -> list[dict[str, Any]]:
                 dp.promote_at,
                 c.article_embedding,
                 c.cluster_id,
-                c.label          AS original_label
+                c.label          AS original_label,
+                c.concepts
             FROM deferred_promotions dp
             JOIN classifications c ON c.id = dp.classification_id
             WHERE dp.promote_at <= NOW()

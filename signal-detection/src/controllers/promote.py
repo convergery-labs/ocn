@@ -1,14 +1,18 @@
 """Orchestration for the nightly deferred corpus promotion job."""
+import json
 import logging
 import os
 
 import numpy as np
+from qdrant_client import QdrantClient
 
 from db import transaction
+from models.claims import get_claims_for_classification
 from models.clusters import (
     get_corpus_centroids_bulk,
     update_centroid_ewma,
 )
+from models.cooccurrences import upsert_cooccurrences
 from models.jobs import get_pending_promotions, mark_promotion_done
 
 logger = logging.getLogger(__name__)
@@ -28,9 +32,63 @@ def _cosine_similarity(
     return float(np.dot(va, vb) / (norm_a * norm_b))
 
 
+def _qdrant_client() -> QdrantClient:
+    """Return a configured Qdrant client."""
+    host = os.environ.get("QDRANT_HOST", "qdrant")
+    api_key = os.environ.get("QDRANT_API_KEY")
+    if host.startswith("http"):
+        return QdrantClient(url=host, api_key=api_key)
+    return QdrantClient(
+        host=host,
+        port=int(os.environ.get("QDRANT_PORT", "6333")),
+        api_key=api_key,
+    )
+
+
 def _signal_threshold() -> float:
     """Return the cosine similarity threshold above which a doc is Signal."""
     return float(os.environ.get("SIGNAL_THRESHOLD", "0.5"))
+
+
+def _undefer_claims_in_qdrant(
+    qdrant: QdrantClient,
+    claim_ids: list[str],
+    promotion_id: int,
+) -> None:
+    """Remove the deferred flag from confirmed-Signal claims in Qdrant."""
+    if not claim_ids:
+        return
+    try:
+        qdrant.delete_payload(
+            collection_name="claims",
+            keys=["deferred"],
+            points=claim_ids,
+        )
+    except Exception:
+        logger.warning(
+            "Failed to un-defer claims for promotion %d",
+            promotion_id, exc_info=True,
+        )
+
+
+def _delete_claims_from_qdrant(
+    qdrant: QdrantClient,
+    claim_ids: list[str],
+    promotion_id: int,
+) -> None:
+    """Permanently remove Noise-demoted claim vectors from Qdrant."""
+    if not claim_ids:
+        return
+    try:
+        qdrant.delete(
+            collection_name="claims",
+            points_selector=claim_ids,
+        )
+    except Exception:
+        logger.warning(
+            "Failed to delete claims for promotion %d",
+            promotion_id, exc_info=True,
+        )
 
 
 def promote_deferred_corpus() -> dict[str, int]:
@@ -51,6 +109,7 @@ def promote_deferred_corpus() -> dict[str, int]:
     """
     pending = get_pending_promotions()
     threshold = _signal_threshold()
+    qdrant = _qdrant_client()
 
     unique_cluster_ids: list[int] = list({
         row["cluster_id"]
@@ -90,6 +149,11 @@ def promote_deferred_corpus() -> dict[str, int]:
         alpha: float = centroid_row["alpha"]
         sim = _cosine_similarity(embedding, centroid_vec)
 
+        classification_id: int = row["classification_id"]
+        concepts: list[str] = json.loads(row.get("concepts") or "[]")
+        claims = get_claims_for_classification(classification_id)
+        claim_ids = [c["claim_embedding_id"] for c in claims]
+
         try:
             with transaction():
                 if sim > threshold:
@@ -110,6 +174,14 @@ def promote_deferred_corpus() -> dict[str, int]:
                 "Failed to process promotion %d", promotion_id
             )
             skipped += 1
+            continue
+
+        # Corpus mutations outside the DB transaction — best-effort.
+        if sim > threshold:
+            upsert_cooccurrences(concepts)
+            _undefer_claims_in_qdrant(qdrant, claim_ids, promotion_id)
+        else:
+            _delete_claims_from_qdrant(qdrant, claim_ids, promotion_id)
 
     return {
         "processed": len(pending),
