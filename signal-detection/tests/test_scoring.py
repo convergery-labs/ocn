@@ -373,7 +373,7 @@ class TestCallPlausibilityLlm:
         }
         oai = self._make_oai_mock(json.dumps(payload))
         result = _call_plausibility_llm(
-            oai, "test-model", "Title", "Body", 0.60, None
+            oai, "test-model", "Title", "Body", 0.60
         )
         assert result is not None
         assert result["plausibility_score"] == pytest.approx(0.75)
@@ -384,7 +384,7 @@ class TestCallPlausibilityLlm:
         """Malformed JSON response → returns None without raising."""
         oai = self._make_oai_mock("NOT JSON AT ALL")
         result = _call_plausibility_llm(
-            oai, "test-model", "Title", "Body", 0.60, None
+            oai, "test-model", "Title", "Body", 0.60
         )
         assert result is None
 
@@ -393,7 +393,7 @@ class TestCallPlausibilityLlm:
         oai = MagicMock()
         oai.chat.completions.create.side_effect = RuntimeError("api down")
         result = _call_plausibility_llm(
-            oai, "test-model", "Title", "Body", 0.60, None
+            oai, "test-model", "Title", "Body", 0.60
         )
         assert result is None
 
@@ -406,7 +406,7 @@ class TestCallPlausibilityLlm:
         }
         oai = self._make_oai_mock(json.dumps(payload))
         result = _call_plausibility_llm(
-            oai, "test-model", "Title", "Body", 0.65, None
+            oai, "test-model", "Title", "Body", 0.65
         )
         assert result is not None
         assert "conspiracy_framing" in result["flags"]
