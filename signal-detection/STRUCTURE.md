@@ -22,7 +22,8 @@ src/
 │                                         init_db(), db_utils.configure(); public API
 │                                         (get_db, transaction, DuplicateError) re-exported
 │                                         from shared/src/db_utils.py
-├── seed.py              Entry point helper — seeds classification_statuses on startup
+├── seed.py              Entry point helper — seeds classification_statuses and
+│                                         concept_taxonomy on startup
 ├── routes/
 │   ├── health.py        Route — GET /health
 │   └── classify.py      Route — POST /classify, GET /classifications/*
@@ -36,6 +37,12 @@ src/
 │   ├── claims.py         Repository — claims
 │   └── clusters.py       Repository — topic_clusters, corpus_centroids (incl. EWMA update,
 │                                       get_corpus_centroids_bulk, get_clusters_for_domain)
+├── taxonomy_mappings.json  Config — keyword → concept-slug mappings; human-editable
+│                                   without code changes (≥150 entries, covers all 40 slugs)
+├── pipeline/
+│   └── ner.py            Infrastructure — spaCy en_core_web_lg NER pipeline;
+│                                          extract_concepts(text) → sorted list of concept
+│                                          slugs; singleton model load; safe (never raises)
 └── historical_ingestion/
     ├── schema.py         HistoricalDocument dataclass — common shape for all adapters
     ├── pipeline.py       Orchestrator — fetch, deduplicate, embed, upsert to Qdrant
@@ -73,6 +80,7 @@ Runs as the background task for each `/classify` job (`run_agent_loop()` in `con
 5. **Claim extraction** — LLM prompt (model: `OPENROUTER_MODEL`) returns 3–5 factual claims as a JSON array; malformed JSON falls back to no claims with a warning log.
 6. **Claim embedding** — each claim embedded with `CLAIM_EMBEDDING_MODEL` (default `openai/text-embedding-3-small`, 1536 dims); upserted to Qdrant `claims` collection.
 7. **Claim storage** — `claims` Postgres rows inserted with `claim_text`, `claim_embedding_id` (Qdrant UUID), and `embedding_model`.
+8. **NER concept extraction** — spaCy `en_core_web_lg` extracts named entities and noun chunks from `title + body`; matched against `taxonomy_mappings.json` keyword patterns; deduplicated concept slugs written to `classifications.concepts` (JSONB). Articles with no matches log a warning and store an empty array.
 
 All steps emit Langfuse spans when `LANGFUSE_PUBLIC_KEY` is set; tracing is silently disabled if absent.
 
@@ -153,9 +161,10 @@ collection with no Postgres involvement. Used to widen corpus coverage beyond wh
 | `topic_clusters` | `id`, `slug`, `centroid_qdrant_collection`, `alpha` |
 | `corpus_centroids` | `cluster_id`, `centroid_vector REAL[]`, `document_count`, `embedding_model` |
 | `classification_jobs` | `id`, `run_id`, `status`, `article_count`, `callback_url` |
-| `classifications` | `id`, `job_id`, `article_url`, `source`, `label`, `composite_score`, `trajectory_score`, `claim_novelty_score`, `article_embedding REAL[]`, `cluster_id` |
+| `classifications` | `id`, `job_id`, `article_url`, `source`, `label`, `composite_score`, `trajectory_score`, `claim_novelty_score`, `article_embedding REAL[]`, `cluster_id`, `concepts JSONB` |
 | `deferred_promotions` | `id`, `classification_id`, `promote_at`, `promoted_at`, `final_label` |
 | `claims` | `id`, `classification_id`, `claim_text`, `claim_embedding_id`, `embedding_model` |
+| `concept_taxonomy` | `id`, `slug`, `display_name`, `domain_group` — 40 v1 entries seeded at startup |
 
 ## HTTP API
 
@@ -193,3 +202,4 @@ docker run --rm --network ocn_ocn-internal \
 | `test_classify.py` | POST /classify, GET /classifications/* |
 | `test_feature_extraction.py` | MinHash dedup, language filter, article embedding, claim extraction, claim embedding + Postgres storage, Langfuse tracing |
 | `test_scoring.py` | `_assign_cluster`, `_compute_claim_novelty`, `_compute_composite`, `_assign_label`, `_cosine_similarity` |
+| `test_ner.py` | `extract_concepts` — multi-concept match, zero-match, deduplication |

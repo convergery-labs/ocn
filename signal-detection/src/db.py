@@ -142,3 +142,16 @@ def init_db() -> None:
             "ALTER TABLE classifications"
             " ADD COLUMN IF NOT EXISTS source TEXT"
         )
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS concept_taxonomy (
+                id SERIAL PRIMARY KEY,
+                slug TEXT NOT NULL UNIQUE,
+                display_name TEXT NOT NULL,
+                domain_group TEXT NOT NULL
+            )
+        """)
+        conn.execute(
+            "ALTER TABLE classifications"
+            " ADD COLUMN IF NOT EXISTS"
+            " concepts JSONB NOT NULL DEFAULT '[]'::jsonb"
+        )

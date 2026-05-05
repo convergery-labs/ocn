@@ -1,4 +1,5 @@
 """Repository functions for classification_jobs and classifications."""
+import json
 from datetime import datetime
 from typing import Any
 
@@ -123,6 +124,23 @@ def update_classification_scores(
                 "trajectory_score": trajectory_score,
                 "claim_novelty_score": claim_novelty_score,
                 "cluster_id": cluster_id,
+            },
+        )
+
+
+def update_classification_concepts(
+    classification_id: int,
+    concepts: list[str],
+) -> None:
+    """Persist the NER-extracted concept slugs on a classification row."""
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE classifications"
+            " SET concepts = :concepts"
+            " WHERE id = :id",
+            {
+                "id": classification_id,
+                "concepts": json.dumps(concepts),
             },
         )
 

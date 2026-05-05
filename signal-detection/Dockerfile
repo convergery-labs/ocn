@@ -3,7 +3,8 @@ FROM python:3.12-slim AS base
 WORKDIR /app
 
 COPY signal-detection/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt && \
+    python -m spacy download en_core_web_lg
 
 COPY shared/src/ /app/shared/
 COPY signal-detection/src/ src/
