@@ -95,6 +95,11 @@ resource "aws_security_group" "auth_service" {
 }
 
 
+data "aws_security_group" "bastion" {
+  name   = "${var.env}-bastion"
+  vpc_id = var.vpc_id
+}
+
 resource "aws_security_group" "rds" {
   name   = "${var.env}-rds"
   vpc_id = var.vpc_id
@@ -106,6 +111,7 @@ resource "aws_security_group" "rds" {
       aws_security_group.auth_service.id,
       aws_security_group.news_retrieval.id,
       aws_security_group.signal_detection.id,
+      data.aws_security_group.bastion.id,
     ]
   }
 }
