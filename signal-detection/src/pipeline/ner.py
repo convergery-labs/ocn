@@ -6,6 +6,7 @@ noun chunks to concept taxonomy slugs using taxonomy_mappings.json.
 import json
 import logging
 import os
+import re
 from pathlib import Path
 
 import spacy
@@ -60,8 +61,11 @@ def extract_concepts(text: str) -> list[str]:
 
         matched: set[str] = set()
         for pattern, slug in _MAPPINGS.items():
+            regex = re.compile(
+                r"\b" + re.escape(pattern) + r"\b"
+            )
             for token in tokens:
-                if pattern in token:
+                if regex.search(token):
                     matched.add(slug)
                     break
 

@@ -3,7 +3,6 @@
 No DB, no network, no mocks — tests call extract_concepts() directly.
 Requires en_core_web_lg to be installed: python -m spacy download en_core_web_lg
 """
-import pytest
 
 from pipeline.ner import extract_concepts
 
