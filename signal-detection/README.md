@@ -151,6 +151,50 @@ Returns `{"job_id": 1, "status": "processing"}`. On completion, POSTs
 Supports cursor-based pagination via `limit` (1–100, default 20) and `cursor`
 query parameters.
 
+## Plausibility Filter
+
+After scoring, articles with `composite_score > PLAUSIBILITY_THRESHOLD` (default 0.40) are passed
+through an LLM plausibility filter before the final label is stored. This guards against false
+positives: conspiracy theories, speculative extrapolation, and low-credibility sources can score
+high on novelty metrics without being genuinely signal-worthy.
+
+**LLM call:** A single Claude Sonnet call via OpenRouter (`PLAUSIBILITY_MODEL`) receives the article
+title, body (truncated to ~2,000 tokens), and composite score context. It returns structured JSON:
+
+```json
+{
+  "plausibility_score": 0.0–1.0,
+  "flags": ["conspiracy_framing", "no_credible_mechanism",
+            "low_credibility_source", "speculative_extrapolation"],
+  "reasoning": "brief explanation"
+}
+```
+
+**Downgrade logic:**
+- `plausibility_score < 0.30` AND label is `Signal` → downgrade to `Weak Signal`;
+  set `flagged_for_review = true`
+- `plausibility_score < 0.30` AND label is `Weak Signal` → label unchanged;
+  set `flagged_for_review = true`
+- All other cases → label and flag unchanged
+- `Noise` articles skip the filter entirely (all plausibility fields remain `null`)
+
+**Stored fields** on the `classifications` row:
+`plausibility_score`, `plausibility_flags` (JSONB), `plausibility_reasoning` (text),
+`flagged_for_review` (boolean, default `false`)
+
+**Cost guard:** Each call logs token count to Langfuse in a `plausibility` span. A warning is
+emitted if a single call exceeds `PLAUSIBILITY_TOKEN_WARN_THRESHOLD` tokens (default 4096).
+
+**On LLM failure:** JSON parse errors or API exceptions are logged; the filter is skipped and the
+label is not downgraded (plausibility fields remain `null`, `flagged_for_review` remains `false`).
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PLAUSIBILITY_THRESHOLD` | `0.40` | Minimum composite score to trigger filter |
+| `PLAUSIBILITY_DOWNGRADE_THRESHOLD` | `0.30` | Plausibility score below which downgrade applies |
+| `PLAUSIBILITY_MODEL` | `anthropic/claude-sonnet-4-5` | OpenRouter model for plausibility call |
+| `PLAUSIBILITY_TOKEN_WARN_THRESHOLD` | `4096` | Warn if token count per call exceeds this |
+
 ## Concept Taxonomy & NER Pipeline
 
 Each classified article has its text processed by a spaCy `en_core_web_lg` NER

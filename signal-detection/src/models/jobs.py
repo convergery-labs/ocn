@@ -97,6 +97,38 @@ def insert_classification(
     return row["id"]
 
 
+def update_classification_plausibility(
+    classification_id: int,
+    plausibility_score: float | None,
+    plausibility_flags: list[str] | None,
+    plausibility_reasoning: str | None,
+    flagged_for_review: bool,
+) -> None:
+    """Update plausibility filter results on a classification row."""
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE classifications
+            SET plausibility_score     = :plausibility_score,
+                plausibility_flags     = :plausibility_flags,
+                plausibility_reasoning = :plausibility_reasoning,
+                flagged_for_review     = :flagged_for_review
+            WHERE id = :id
+            """,
+            {
+                "id": classification_id,
+                "plausibility_score": plausibility_score,
+                "plausibility_flags": (
+                    json.dumps(plausibility_flags)
+                    if plausibility_flags is not None
+                    else None
+                ),
+                "plausibility_reasoning": plausibility_reasoning,
+                "flagged_for_review": flagged_for_review,
+            },
+        )
+
+
 def update_classification_scores(
     classification_id: int,
     label: str,
@@ -178,6 +210,8 @@ def list_job_results(
             SELECT id, job_id, article_url, source, label,
                    composite_score, trajectory_score, bridge_score,
                    claim_novelty_score, plausibility_score,
+                   plausibility_flags, plausibility_reasoning,
+                   flagged_for_review,
                    model_embedding, model_llm, cluster_id, created_at
             FROM classifications
             WHERE job_id = :job_id AND id > :after_id

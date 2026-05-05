@@ -14,6 +14,8 @@ After each classification, the article embedding incrementally updates the EWMA 
 
 The composite score uses Phase 4 weights (`0.25 * A + 0.30 * B + 0.45 * C`) when a bridge score is available (≥ 2 concepts extracted), and falls back to Phase 3 (`0.40 * A + 0.60 * C`) otherwise. Co-occurrence counts are maintained in the `concept_cooccurrences` Postgres table and updated after each article is classified.
 
+After scoring, articles with `composite_score > PLAUSIBILITY_THRESHOLD` (default 0.40) pass through a plausibility filter — a single Claude Sonnet LLM call (via OpenRouter) that returns a `plausibility_score` (0–1), `flags`, and `reasoning`. Articles scoring below 0.30 plausibility are flagged (`flagged_for_review = true`); Signal articles are additionally downgraded to Weak Signal. Results are stored on the `classifications` row (`plausibility_score`, `plausibility_flags`, `plausibility_reasoning`, `flagged_for_review`). Noise articles skip the filter entirely. On LLM failure the filter is skipped and the label is unchanged.
+
 ## Documentation Index
 | Doc | Read when | Page ID |
 |-----|-----------|---------|
