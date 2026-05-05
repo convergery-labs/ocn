@@ -376,8 +376,8 @@ class TestRunFeatureExtraction:
         ):
             await _run_feature_extraction(job["id"], [_ARTICLE_EN])
 
-        mock_lf_instance.trace.assert_called_once()
-        call_kwargs = mock_lf_instance.trace.call_args
+        mock_lf_instance.start_as_current_observation.assert_called_once()
+        call_kwargs = mock_lf_instance.start_as_current_observation.call_args
         assert call_kwargs.kwargs.get("name") == "feature-extraction"
 
     @pytest.mark.asyncio

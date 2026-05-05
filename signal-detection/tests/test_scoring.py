@@ -14,6 +14,7 @@ from controllers.classify import (
     _compute_claim_novelty,
     _compute_composite,
     _cosine_similarity,
+    _defer_claims_in_qdrant,
 )
 
 # ---------------------------------------------------------------------------
@@ -158,8 +159,8 @@ class TestComputeClaimNovelty:
         assert score == pytest.approx(0.3, abs=1e-5)
 
     def test_own_article_excluded_from_search(self) -> None:
-        """Qdrant search is called with a filter excluding the article."""
-        from qdrant_client.models import Filter
+        """Qdrant search filter excludes own article and deferred claims."""
+        from qdrant_client.models import FieldCondition, Filter
 
         qdrant = MagicMock()
         point = MagicMock()
@@ -171,8 +172,15 @@ class TestComputeClaimNovelty:
 
         _, kwargs = qdrant.query_points.call_args
         q_filter = kwargs.get("query_filter")
-        assert q_filter is not None
         assert isinstance(q_filter, Filter)
+        assert q_filter.must_not is not None
+        keys = {
+            c.key
+            for c in q_filter.must_not
+            if isinstance(c, FieldCondition)
+        }
+        assert "article_qdrant_id" in keys
+        assert "deferred" in keys
 
 
 # ---------------------------------------------------------------------------
@@ -410,3 +418,34 @@ class TestCallPlausibilityLlm:
         )
         assert result is not None
         assert "conspiracy_framing" in result["flags"]
+
+
+# ---------------------------------------------------------------------------
+# _defer_claims_in_qdrant
+# ---------------------------------------------------------------------------
+
+
+class TestDeferClaimsInQdrant:
+    """_defer_claims_in_qdrant marks claim vectors deferred in Qdrant."""
+
+    def test_empty_ids_no_qdrant_call(self) -> None:
+        """Empty claim list makes no Qdrant call."""
+        qdrant = MagicMock()
+        _defer_claims_in_qdrant(qdrant, [])
+        qdrant.set_payload.assert_not_called()
+
+    def test_sets_deferred_true_on_given_ids(self) -> None:
+        """set_payload called with deferred=True for all provided IDs."""
+        qdrant = MagicMock()
+        _defer_claims_in_qdrant(qdrant, ["id-1", "id-2"])
+        qdrant.set_payload.assert_called_once_with(
+            collection_name="claims",
+            payload={"deferred": True},
+            points=["id-1", "id-2"],
+        )
+
+    def test_qdrant_failure_does_not_raise(self) -> None:
+        """Qdrant error is swallowed; no exception propagates."""
+        qdrant = MagicMock()
+        qdrant.set_payload.side_effect = RuntimeError("qdrant down")
+        _defer_claims_in_qdrant(qdrant, ["id-1"])  # must not raise

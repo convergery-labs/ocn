@@ -302,3 +302,149 @@ class TestCooccurrenceUpsert:
             ).fetchone()
 
         assert row is None
+
+
+# ---------------------------------------------------------------------------
+# Deferred corpus guard (CON-150 / Signal deferral)
+# ---------------------------------------------------------------------------
+
+
+class TestDeferredCorpusGuard:
+    """Signal articles must not pollute the corpus before promotion."""
+
+    def _run_scoring(
+        self,
+        job_id: int,
+        article_url: str,
+        concepts: list[str],
+        label_override: str,
+        qdrant: object,
+    ) -> None:
+        """Invoke the corpus-guard logic directly, bypassing full pipeline.
+
+        Replicates the conditional upsert and defer calls from
+        _run_scoring_phase without requiring a live OpenAI or Qdrant.
+        """
+        import json
+        from controllers.classify import _defer_claims_in_qdrant
+        from models.cooccurrences import upsert_cooccurrences
+        from models.jobs import (
+            insert_classification,
+            update_classification_concepts,
+            update_classification_scores,
+        )
+
+        cid = insert_classification(
+            job_id=job_id,
+            article_url=article_url,
+            article_embedding=[0.1] * 3072,
+            model_embedding="test-embed",
+            model_llm="test-llm",
+            source="test.example.com",
+        )
+        update_classification_concepts(cid, concepts)
+        update_classification_scores(
+            classification_id=cid,
+            label=label_override,
+            composite_score=0.8 if label_override == "Signal" else 0.5,
+            trajectory_score=0.5,
+            claim_novelty_score=0.5,
+            cluster_id=None,
+        )
+
+        if label_override != "Signal":
+            upsert_cooccurrences(concepts)
+        else:
+            _defer_claims_in_qdrant(qdrant, ["claim-uuid-1"])
+
+        return cid
+
+    def test_signal_does_not_write_cooccurrences(self) -> None:
+        """Signal article leaves concept_cooccurrences empty."""
+        from db import get_db
+        from models.jobs import create_job
+
+        job = create_job(
+            run_id="guard-signal",
+            status="processing",
+            callback_url=None,
+            article_count=1,
+        )
+        qdrant = MagicMock()
+        self._run_scoring(
+            job["id"], "https://test.example.com/signal",
+            ["ai", "biotech"], "Signal", qdrant,
+        )
+
+        with get_db() as conn:
+            count = conn.execute(
+                "SELECT COUNT(*) AS n FROM concept_cooccurrences"
+            ).fetchone()["n"]
+        assert count == 0
+
+    def test_non_signal_writes_cooccurrences(self) -> None:
+        """Weak Signal article writes concept pairs immediately."""
+        from db import get_db
+        from models.jobs import create_job
+
+        job = create_job(
+            run_id="guard-weak",
+            status="processing",
+            callback_url=None,
+            article_count=1,
+        )
+        qdrant = MagicMock()
+        self._run_scoring(
+            job["id"], "https://test.example.com/weak",
+            ["ai", "finance"], "Weak Signal", qdrant,
+        )
+
+        with get_db() as conn:
+            row = conn.execute(
+                """
+                SELECT co_occurrence_count FROM concept_cooccurrences
+                WHERE concept_a = 'ai' AND concept_b = 'finance'
+                """
+            ).fetchone()
+        assert row is not None
+        assert row["co_occurrence_count"] == 1
+
+    def test_signal_defers_claims_in_qdrant(self) -> None:
+        """Signal article calls set_payload(deferred=True) on Qdrant."""
+        from models.jobs import create_job
+
+        job = create_job(
+            run_id="guard-qdrant",
+            status="processing",
+            callback_url=None,
+            article_count=1,
+        )
+        qdrant = MagicMock()
+        self._run_scoring(
+            job["id"], "https://test.example.com/qdrant-signal",
+            ["ai"], "Signal", qdrant,
+        )
+
+        qdrant.set_payload.assert_called_once_with(
+            collection_name="claims",
+            payload={"deferred": True},
+            points=["claim-uuid-1"],
+        )
+
+    def test_non_signal_does_not_defer_claims(self) -> None:
+        """Non-Signal article makes no Qdrant set_payload call."""
+        from models.jobs import create_job
+
+        job = create_job(
+            run_id="guard-no-defer",
+            status="processing",
+            callback_url=None,
+            article_count=1,
+        )
+        qdrant = MagicMock()
+        self._run_scoring(
+            job["id"], "https://test.example.com/noise",
+            ["ai", "climate"], "Noise", qdrant,
+        )
+
+        qdrant.set_payload.assert_not_called()

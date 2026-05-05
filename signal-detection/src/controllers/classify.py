@@ -265,7 +265,6 @@ async def _run_scoring_phase(
             pairs = list(combinations(sorted(concepts), 2))
             counts = get_cooccurrence_counts(pairs)
             bridge = _compute_bridge_score(concepts, counts)
-            upsert_cooccurrences(concepts)
             if bridge is None:
                 logger.info(
                     "Job %d: bridge_score_unavailable for %s",
@@ -320,6 +319,12 @@ async def _run_scoring_phase(
                             job_id, article_url, plausibility_score,
                         )
 
+            # Only write corpus mutations for non-Signal articles.
+            # Signal articles are deferred: co-occurrences and claim
+            # vectors are withheld until promotion confirms the label.
+            if label != "Signal":
+                upsert_cooccurrences(concepts)
+
             update_classification_scores(
                 classification_id=classification_id,
                 label=label,
@@ -345,6 +350,7 @@ async def _run_scoring_phase(
                     classification_id=classification_id,
                     promote_at=promote_at,
                 )
+                _defer_claims_in_qdrant(qdrant, claim_ids)
 
             bridge_str = f"{bridge:.3f}" if bridge is not None else "null"
             p_str = (
@@ -692,7 +698,11 @@ def _compute_claim_novelty(
             FieldCondition(
                 key="article_qdrant_id",
                 match=MatchValue(value=article_qdrant_id),
-            )
+            ),
+            FieldCondition(
+                key="deferred",
+                match=MatchValue(value=True),
+            ),
         ]
     )
 
@@ -766,6 +776,31 @@ def _assign_label(composite: float) -> str:
     if composite >= _WEAK_SIGNAL_THRESHOLD:
         return "Weak Signal"
     return "Noise"
+
+
+def _defer_claims_in_qdrant(
+    qdrant: QdrantClient,
+    claim_ids: list[str],
+) -> None:
+    """Mark claim vectors as deferred for a Signal article pending promotion.
+
+    Sets ``deferred=True`` in the Qdrant payload so these claims are
+    excluded from novelty searches until the article is promoted. Errors
+    are logged and swallowed so a Qdrant hiccup does not fail the job.
+    """
+    if not claim_ids:
+        return
+    try:
+        qdrant.set_payload(
+            collection_name="claims",
+            payload={"deferred": True},
+            points=claim_ids,
+        )
+    except Exception:
+        logger.warning(
+            "Failed to defer %d claims in Qdrant", len(claim_ids),
+            exc_info=True,
+        )
 
 
 def _apply_plausibility_downgrade(
