@@ -1,5 +1,6 @@
 """Orchestration for classification job submission and execution."""
 import asyncio
+import contextlib
 import json
 import logging
 import math
@@ -201,11 +202,7 @@ async def _run_scoring_phase(
     loop = asyncio.get_running_loop()
     oai = _openai_client()
     article_lookup = {a.get("url", ""): a for a in articles}
-
     lf = _langfuse_client()
-    trace = (
-        lf.trace(name="scoring", session_id=str(job_id)) if lf else None
-    )
 
     with get_db() as conn:
         rows = conn.execute(
@@ -227,121 +224,144 @@ async def _run_scoring_phase(
             {"job_id": job_id},
         ).fetchall()
 
-    for row in rows:
-        row = dict(row)
-        classification_id = row["id"]
-        article_url = row["article_url"]
-        source = row["source"] or ""
-        embedding = row["article_embedding"] or []
-        claim_ids = row["claim_ids"] or []
-        article_qdrant_id = _url_to_point_id(article_url)
-
-        clusters = get_clusters_for_domain(source)
-        cluster_id, traj_score, low_conf = _assign_cluster(
-            embedding, clusters
+    span_ctx = (
+        lf.start_as_current_observation(
+            name="scoring",
+            input={"job_id": job_id, "article_count": len(rows)},
         )
-        if low_conf:
-            logger.info(
-                "Job %d: low-confidence cluster assignment for %s",
-                job_id, article_url,
+        if lf else contextlib.nullcontext()
+    )
+    with span_ctx as span:
+        for row in rows:
+            row = dict(row)
+            classification_id = row["id"]
+            article_url = row["article_url"]
+            source = row["source"] or ""
+            embedding = row["article_embedding"] or []
+            claim_ids = row["claim_ids"] or []
+            article_qdrant_id = _url_to_point_id(article_url)
+
+            clusters = get_clusters_for_domain(source)
+            cluster_id, traj_score, low_conf = _assign_cluster(
+                embedding, clusters
             )
+            if low_conf:
+                logger.info(
+                    "Job %d: low-confidence cluster assignment for %s",
+                    job_id, article_url,
+                )
 
-        claim_novelty = await loop.run_in_executor(
-            None,
-            partial(
-                _compute_claim_novelty,
-                claim_ids,
-                article_qdrant_id,
-                qdrant,
-            ),
-        )
-
-        concepts = row.get("concepts") or []
-        pairs = list(combinations(sorted(concepts), 2))
-        counts = get_cooccurrence_counts(pairs)
-        bridge = _compute_bridge_score(concepts, counts)
-        upsert_cooccurrences(concepts)
-        if bridge is None:
-            logger.info(
-                "Job %d: bridge_score_unavailable for %s",
-                job_id, article_url,
-            )
-
-        composite = _compute_composite(traj_score, claim_novelty, bridge)
-        label = _assign_label(composite)
-
-        plausibility_score = None
-        plausibility_flags = None
-        plausibility_reasoning = None
-        flagged_for_review = False
-
-        if composite > _PLAUSIBILITY_THRESHOLD:
-            article = article_lookup.get(article_url, {})
-            result = await loop.run_in_executor(
+            claim_novelty = await loop.run_in_executor(
                 None,
                 partial(
-                    _call_plausibility_llm,
-                    oai,
-                    _plausibility_model(),
-                    article.get("title", ""),
-                    article.get("body", ""),
-                    composite,
-                    trace,
+                    _compute_claim_novelty,
+                    claim_ids,
+                    article_qdrant_id,
+                    qdrant,
                 ),
             )
-            if result is not None:
-                plausibility_score = result["plausibility_score"]
-                plausibility_flags = result.get("flags", [])
-                plausibility_reasoning = result.get("reasoning", "")
-                label, flagged_for_review = _apply_plausibility_downgrade(
-                    label, plausibility_score
+
+            concepts = row.get("concepts") or []
+            pairs = list(combinations(sorted(concepts), 2))
+            counts = get_cooccurrence_counts(pairs)
+            bridge = _compute_bridge_score(concepts, counts)
+            upsert_cooccurrences(concepts)
+            if bridge is None:
+                logger.info(
+                    "Job %d: bridge_score_unavailable for %s",
+                    job_id, article_url,
                 )
-                if flagged_for_review:
-                    logger.info(
-                        "Job %d: flagged for review — %s"
-                        " (plausibility=%.3f)",
-                        job_id, article_url, plausibility_score,
+
+            composite = _compute_composite(traj_score, claim_novelty, bridge)
+            label = _assign_label(composite)
+
+            plausibility_score = None
+            plausibility_flags = None
+            plausibility_reasoning = None
+            flagged_for_review = False
+
+            if composite > _PLAUSIBILITY_THRESHOLD:
+                article = article_lookup.get(article_url, {})
+                result = await loop.run_in_executor(
+                    None,
+                    partial(
+                        _call_plausibility_llm,
+                        oai,
+                        _plausibility_model(),
+                        article.get("title", ""),
+                        article.get("body", ""),
+                        composite,
+                    ),
+                )
+                if result is not None:
+                    plausibility_score = result["plausibility_score"]
+                    plausibility_flags = result.get("flags", [])
+                    plausibility_reasoning = result.get("reasoning", "")
+                    label, flagged_for_review = _apply_plausibility_downgrade(
+                        label, plausibility_score
                     )
+                    if span:
+                        span.start_observation(
+                            name="plausibility",
+                            input={
+                                "url": article_url,
+                                "composite": composite,
+                            },
+                            output={
+                                "plausibility_score": plausibility_score,
+                                "flags": plausibility_flags,
+                                "total_tokens": result.get("total_tokens", 0),
+                            },
+                        ).end()
+                    if flagged_for_review:
+                        logger.info(
+                            "Job %d: flagged for review — %s"
+                            " (plausibility=%.3f)",
+                            job_id, article_url, plausibility_score,
+                        )
 
-        update_classification_scores(
-            classification_id=classification_id,
-            label=label,
-            composite_score=composite,
-            trajectory_score=traj_score,
-            claim_novelty_score=claim_novelty,
-            bridge_score=bridge,
-            cluster_id=cluster_id,
-        )
-        update_classification_plausibility(
-            classification_id=classification_id,
-            plausibility_score=plausibility_score,
-            plausibility_flags=plausibility_flags,
-            plausibility_reasoning=plausibility_reasoning,
-            flagged_for_review=flagged_for_review,
-        )
-
-        if label == "Signal":
-            promote_at = datetime.now(tz=timezone.utc) + timedelta(
-                days=_DEFERRAL_DAYS
-            )
-            insert_deferred_promotion(
+            update_classification_scores(
                 classification_id=classification_id,
-                promote_at=promote_at,
+                label=label,
+                composite_score=composite,
+                trajectory_score=traj_score,
+                claim_novelty_score=claim_novelty,
+                bridge_score=bridge,
+                cluster_id=cluster_id,
+            )
+            update_classification_plausibility(
+                classification_id=classification_id,
+                plausibility_score=plausibility_score,
+                plausibility_flags=plausibility_flags,
+                plausibility_reasoning=plausibility_reasoning,
+                flagged_for_review=flagged_for_review,
             )
 
-        bridge_str = f"{bridge:.3f}" if bridge is not None else "null"
-        p_str = (
-            f"{plausibility_score:.3f}"
-            if plausibility_score is not None else "null"
-        )
-        logger.info(
-            "Job %d: %s → label=%s composite=%.3f"
-            " traj=%.3f bridge=%s novelty=%.3f plausibility=%s"
-            " flagged=%s",
-            job_id, article_url, label,
-            composite, traj_score, bridge_str, claim_novelty,
-            p_str, flagged_for_review,
-        )
+            if label == "Signal":
+                promote_at = datetime.now(tz=timezone.utc) + timedelta(
+                    days=_DEFERRAL_DAYS
+                )
+                insert_deferred_promotion(
+                    classification_id=classification_id,
+                    promote_at=promote_at,
+                )
+
+            bridge_str = f"{bridge:.3f}" if bridge is not None else "null"
+            p_str = (
+                f"{plausibility_score:.3f}"
+                if plausibility_score is not None else "null"
+            )
+            logger.info(
+                "Job %d: %s → label=%s composite=%.3f"
+                " traj=%.3f bridge=%s novelty=%.3f plausibility=%s"
+                " flagged=%s",
+                job_id, article_url, label,
+                composite, traj_score, bridge_str, claim_novelty,
+                p_str, flagged_for_review,
+            )
+
+    if lf:
+        lf.flush()
 
 
 async def _embed_and_store(
@@ -354,7 +374,6 @@ async def _embed_and_store(
     claim_embedding_model: str,
     qdrant: QdrantClient,
     loop: asyncio.AbstractEventLoop,
-    trace: object,
 ) -> None:
     """Embed claims for one article and persist them to Qdrant and Postgres.
 
@@ -367,7 +386,6 @@ async def _embed_and_store(
         claim_embedding_model: Model identifier for claim embeddings.
         qdrant: Qdrant client.
         loop: Running event loop used to offload blocking calls.
-        trace: Langfuse trace object, or None if tracing is disabled.
     """
     if not claims:
         return
@@ -376,14 +394,6 @@ async def _embed_and_store(
         None,
         partial(_embed_texts, oai, claim_embedding_model, claims),
     )
-    if trace:
-        trace.span(
-            name="claim-embedding",
-            input={
-                "claim_count": len(claims),
-                "url": article_url,
-            },
-        )
     claim_points = [
         PointStruct(
             id=_url_to_point_id(claim_text),
@@ -425,9 +435,12 @@ async def _run_feature_extraction(
         return
 
     lf = _langfuse_client()
-    trace = (
-        lf.trace(name="feature-extraction", session_id=str(job_id))
-        if lf else None
+    span_ctx = (
+        lf.start_as_current_observation(
+            name="feature-extraction",
+            input={"job_id": job_id, "article_count": len(articles)},
+        )
+        if lf else contextlib.nullcontext()
     )
 
     oai = _openai_client()
@@ -439,157 +452,163 @@ async def _run_feature_extraction(
     _ensure_qdrant_collection(qdrant, "articles", _ARTICLE_VECTOR_SIZE)
     _ensure_qdrant_collection(qdrant, "claims", _CLAIM_VECTOR_SIZE)
 
-    # Step 1 — MinHash LSH deduplication (within-batch)
-    keep_indices = _dedup_indices(articles)
-    deduped = [articles[i] for i in keep_indices]
-    skipped = len(articles) - len(deduped)
-    if skipped:
-        logger.info(
-            "Job %d: MinHash dedup skipped %d near-duplicate articles",
-            job_id, skipped,
-        )
-
-    # Step 2 — Language filter
-    english = []
-    for article in deduped:
-        lang = _detect_language(article.get("body", ""))
-        if trace:
-            trace.span(
-                name="language-filter",
-                input={"url": article.get("url", "")},
-                output={"lang": lang},
-            )
-        if lang != "en":
+    with span_ctx as span:
+        # Step 1 — MinHash LSH deduplication (within-batch)
+        keep_indices = _dedup_indices(articles)
+        deduped = [articles[i] for i in keep_indices]
+        skipped = len(articles) - len(deduped)
+        if skipped:
             logger.info(
-                "Job %d: skipping non-English article %s (lang=%s)",
-                job_id, article.get("url", ""), lang,
+                "Job %d: MinHash dedup skipped %d near-duplicate articles",
+                job_id, skipped,
             )
-            continue
-        english.append(article)
 
-    if not english:
-        logger.info("Job %d: no English articles to process", job_id)
-        return
-
-    # Step 3 — Embed article bodies in batches
-    bodies = [a.get("body", "") for a in english]
-    total_chars = sum(len(b) for b in bodies)
-    if trace:
-        trace.span(
-            name="article-embedding",
-            input={"char_count": total_chars, "article_count": len(english)},
-        )
-
-    loop = asyncio.get_running_loop()
-    all_embeddings: list[list[float]] = []
-    for i in range(0, len(english), _EMBED_BATCH_SIZE):
-        batch_bodies = bodies[i: i + _EMBED_BATCH_SIZE]
-        batch_embeddings = _embed_texts(oai, embedding_model, batch_bodies)
-        all_embeddings.extend(batch_embeddings)
-
-    # Step 4 — Upsert article vectors to Qdrant and insert DB rows
-    article_points = [
-        PointStruct(
-            id=_url_to_point_id(a["url"]),
-            vector=emb,
-            payload={
-                "url": a.get("url", ""),
-                "domain": a.get("source", ""),
-                "published_date": a.get("published", ""),
-                "label": None,
-            },
-        )
-        for a, emb in zip(english, all_embeddings)
-    ]
-    qdrant.upsert(collection_name="articles", points=article_points)
-    logger.info(
-        "Job %d: upserted %d articles to Qdrant", job_id, len(article_points)
-    )
-
-    # Step 5 — Insert classification rows and collect per-article metadata
-    classification_ids: list[int] = []
-    article_urls: list[str] = []
-    article_bodies: list[str] = []
-    for article, embedding in zip(english, all_embeddings):
-        article_url = article.get("url", "")
-        classification_id = insert_classification(
-            job_id=job_id,
-            article_url=article_url,
-            article_embedding=embedding,
-            model_embedding=embedding_model,
-            model_llm=llm_model,
-            source=article.get("source"),
-        )
-        classification_ids.append(classification_id)
-        article_urls.append(article_url)
-        article_bodies.append(article.get("body", ""))
-
-    # Step 6 — Extract claims for all articles concurrently
-    all_claims: list[list[str]] = await asyncio.gather(
-        *[
-            loop.run_in_executor(
-                None,
-                partial(_extract_claims, oai, llm_model, body),
-            )
-            for body in article_bodies
-        ]
-    )
-
-    if trace:
-        for article_url, body, claims in zip(
-            article_urls, article_bodies, all_claims
-        ):
-            if claims:
-                trace.span(
-                    name="claim-extraction",
-                    input={
-                        "url": article_url,
-                        "body_preview": body[:500],
-                    },
-                    output={"claims": claims},
+        # Step 2 — Language filter
+        english = []
+        for article in deduped:
+            lang = _detect_language(article.get("body", ""))
+            if span:
+                span.start_observation(
+                    name="language-filter",
+                    input={"url": article.get("url", "")},
+                    output={"lang": lang},
+                ).end()
+            if lang != "en":
+                logger.info(
+                    "Job %d: skipping non-English article %s (lang=%s)",
+                    job_id, article.get("url", ""), lang,
                 )
+                continue
+            english.append(article)
 
-    # Step 7 — Embed claims for all articles concurrently, then store
-    await asyncio.gather(
-        *[
-            _embed_and_store(
+        if not english:
+            logger.info("Job %d: no English articles to process", job_id)
+            return
+
+        # Step 3 — Embed article bodies in batches
+        bodies = [a.get("body", "") for a in english]
+        total_chars = sum(len(b) for b in bodies)
+        if span:
+            span.start_observation(
+                name="article-embedding",
+                input={
+                    "char_count": total_chars,
+                    "article_count": len(english),
+                },
+            ).end()
+
+        loop = asyncio.get_running_loop()
+        all_embeddings: list[list[float]] = []
+        for i in range(0, len(english), _EMBED_BATCH_SIZE):
+            batch_bodies = bodies[i: i + _EMBED_BATCH_SIZE]
+            batch_embeddings = _embed_texts(
+                oai, embedding_model, batch_bodies
+            )
+            all_embeddings.extend(batch_embeddings)
+
+        # Step 4 — Upsert article vectors to Qdrant and insert DB rows
+        article_points = [
+            PointStruct(
+                id=_url_to_point_id(a["url"]),
+                vector=emb,
+                payload={
+                    "url": a.get("url", ""),
+                    "domain": a.get("source", ""),
+                    "published_date": a.get("published", ""),
+                    "label": None,
+                },
+            )
+            for a, emb in zip(english, all_embeddings)
+        ]
+        qdrant.upsert(collection_name="articles", points=article_points)
+        logger.info(
+            "Job %d: upserted %d articles to Qdrant",
+            job_id, len(article_points),
+        )
+
+        # Step 5 — Insert classification rows and collect per-article metadata
+        classification_ids: list[int] = []
+        article_urls: list[str] = []
+        article_bodies: list[str] = []
+        for article, embedding in zip(english, all_embeddings):
+            article_url = article.get("url", "")
+            classification_id = insert_classification(
                 job_id=job_id,
-                classification_id=cid,
-                article_url=url,
-                claims=claims,
-                oai=oai,
-                claim_embedding_model=claim_embedding_model,
-                qdrant=qdrant,
-                loop=loop,
-                trace=trace,
+                article_url=article_url,
+                article_embedding=embedding,
+                model_embedding=embedding_model,
+                model_llm=llm_model,
+                source=article.get("source"),
             )
-            for cid, url, claims in zip(
-                classification_ids, article_urls, all_claims
-            )
-        ]
-    )
+            classification_ids.append(classification_id)
+            article_urls.append(article_url)
+            article_bodies.append(article.get("body", ""))
 
-    # Step 8 — NER concept extraction; results stored on classifications row
-    article_titles = [a.get("title", "") for a in english]
-    all_concepts: list[list[str]] = await asyncio.gather(
-        *[
-            loop.run_in_executor(
-                None,
-                extract_concepts,
-                f"{title} {body}",
-            )
-            for title, body in zip(article_titles, article_bodies)
-        ]
-    )
-    for cid, article_url, concepts in zip(
-        classification_ids, article_urls, all_concepts
-    ):
-        if not concepts:
-            logger.warning(
-                "Job %d: no concepts matched for %s",
-                job_id, article_url,
-            )
-        update_classification_concepts(cid, concepts)
+        # Step 6 — Extract claims for all articles concurrently
+        all_claims: list[list[str]] = await asyncio.gather(
+            *[
+                loop.run_in_executor(
+                    None,
+                    partial(_extract_claims, oai, llm_model, body),
+                )
+                for body in article_bodies
+            ]
+        )
+
+        if span:
+            for article_url, body, claims in zip(
+                article_urls, article_bodies, all_claims
+            ):
+                if claims:
+                    span.start_observation(
+                        name="claim-extraction",
+                        input={
+                            "url": article_url,
+                            "body_preview": body[:500],
+                        },
+                        output={"claims": claims},
+                    ).end()
+
+        # Step 7 — Embed claims for all articles concurrently, then store
+        await asyncio.gather(
+            *[
+                _embed_and_store(
+                    job_id=job_id,
+                    classification_id=cid,
+                    article_url=url,
+                    claims=claims,
+                    oai=oai,
+                    claim_embedding_model=claim_embedding_model,
+                    qdrant=qdrant,
+                    loop=loop,
+                )
+                for cid, url, claims in zip(
+                    classification_ids, article_urls, all_claims
+                )
+            ]
+        )
+
+        # Step 8 — NER concept extraction; results stored on classifications row
+        article_titles = [a.get("title", "") for a in english]
+        all_concepts: list[list[str]] = await asyncio.gather(
+            *[
+                loop.run_in_executor(
+                    None,
+                    extract_concepts,
+                    f"{title} {body}",
+                )
+                for title, body in zip(article_titles, article_bodies)
+            ]
+        )
+        for cid, article_url, concepts in zip(
+            classification_ids, article_urls, all_concepts
+        ):
+            if not concepts:
+                logger.warning(
+                    "Job %d: no concepts matched for %s",
+                    job_id, article_url,
+                )
+            update_classification_concepts(cid, concepts)
 
     if lf:
         lf.flush()
@@ -773,12 +792,11 @@ def _call_plausibility_llm(
     title: str,
     body: str,
     composite: float,
-    trace: object,
 ) -> dict | None:
     """Call LLM to assess plausibility of an article's claims.
 
     Returns a dict with keys plausibility_score, flags, reasoning,
-    or None on JSON parse failure or any exception.
+    total_tokens, or None on JSON parse failure or any exception.
     """
     truncated_body = body[:_PLAUSIBILITY_BODY_CHARS]
     system_prompt = (
@@ -805,7 +823,12 @@ def _call_plausibility_llm(
             ],
         )
         raw = response.choices[0].message.content or ""
-        result = json.loads(raw)
+        # Strip markdown code fences if the model wraps JSON in ```json ... ```
+        stripped = raw.strip()
+        if stripped.startswith("```"):
+            stripped = stripped.split("\n", 1)[-1]
+            stripped = stripped.rsplit("```", 1)[0].strip()
+        result = json.loads(stripped)
         if not isinstance(result, dict):
             raise ValueError("LLM did not return a JSON object")
         total_tokens = (
@@ -816,16 +839,7 @@ def _call_plausibility_llm(
                 "Plausibility call used %d tokens (threshold %d)",
                 total_tokens, _PLAUSIBILITY_TOKEN_WARN_THRESHOLD,
             )
-        if trace:
-            trace.span(
-                name="plausibility",
-                input={"title": title, "composite": composite},
-                output={
-                    "plausibility_score": result.get("plausibility_score"),
-                    "flags": result.get("flags", []),
-                    "total_tokens": total_tokens,
-                },
-            )
+        result["total_tokens"] = total_tokens
         return result
     except Exception:
         logger.error(
