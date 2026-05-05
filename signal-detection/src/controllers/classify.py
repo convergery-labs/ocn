@@ -235,11 +235,11 @@ async def _run_scoring_phase(
             ),
         )
 
-        concepts = json.loads(row.get("concepts") or "[]")
-        upsert_cooccurrences(concepts)
+        concepts = row.get("concepts") or []
         pairs = list(combinations(sorted(concepts), 2))
         counts = get_cooccurrence_counts(pairs)
         bridge = _compute_bridge_score(concepts, counts)
+        upsert_cooccurrences(concepts)
         if bridge is None:
             logger.info(
                 "Job %d: bridge_score_unavailable for %s",
