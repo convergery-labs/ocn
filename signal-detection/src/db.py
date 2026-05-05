@@ -155,3 +155,13 @@ def init_db() -> None:
             " ADD COLUMN IF NOT EXISTS"
             " concepts JSONB NOT NULL DEFAULT '[]'::jsonb"
         )
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS concept_cooccurrences (
+                concept_a           TEXT NOT NULL,
+                concept_b           TEXT NOT NULL,
+                co_occurrence_count INTEGER NOT NULL DEFAULT 1,
+                last_updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+                PRIMARY KEY (concept_a, concept_b),
+                CHECK (concept_a < concept_b)
+            )
+        """)

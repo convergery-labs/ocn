@@ -156,8 +156,15 @@ query parameters.
 Each classified article has its text processed by a spaCy `en_core_web_lg` NER
 pipeline that extracts named entities and noun chunks, maps them against
 `src/taxonomy_mappings.json`, and stores the matched concept slugs as a JSONB
-array on the `classifications` row. This is the foundation for the bridge score
-(Sub-score B).
+array on the `classifications` row, and feeds the bridge score (Sub-score B).
+
+**Bridge score (Sub-score B):** After concept extraction, all canonical concept
+pairs are upserted into the `concept_cooccurrences` Postgres table. The bridge
+score rewards articles that connect rarely co-occurring concept pairs:
+`mean(1 / (1 + log(1 + count)))` across all pairs. When ≥ 2 concepts are
+present the composite formula switches to Phase 4 weights
+(`0.25 * A + 0.30 * B + 0.45 * C`); articles with fewer than 2 concepts fall
+back to Phase 3 weights (`0.40 * A + 0.60 * C`).
 
 The taxonomy contains 40 v1 concept slugs in 8 domain groups (e.g. `ai-core`,
 `science`, `governance`, `finance`). `taxonomy_mappings.json` maps ≥150 keyword

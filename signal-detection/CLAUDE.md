@@ -12,6 +12,8 @@ Additional historical content can be ingested directly into Qdrant via the `hist
 
 After each classification, the article embedding incrementally updates the EWMA centroid for its assigned cluster. Signal articles are deferred for 30 days and re-evaluated by a nightly `promote-corpus` job before their centroid contribution is accepted.
 
+The composite score uses Phase 4 weights (`0.25 * A + 0.30 * B + 0.45 * C`) when a bridge score is available (≥ 2 concepts extracted), and falls back to Phase 3 (`0.40 * A + 0.60 * C`) otherwise. Co-occurrence counts are maintained in the `concept_cooccurrences` Postgres table and updated after each article is classified.
+
 ## Documentation Index
 | Doc | Read when | Page ID |
 |-----|-----------|---------|

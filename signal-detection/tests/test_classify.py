@@ -252,3 +252,53 @@ class TestGetClassificationResults:
             headers={"x-ocn-caller": user_key},
         )
         assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Co-occurrence upsert integration
+# ---------------------------------------------------------------------------
+
+
+class TestCooccurrenceUpsert:
+    """Integration tests for concept co-occurrence store (CON-149)."""
+
+    def test_upsert_increments_count_correctly(self) -> None:
+        """Calling upsert_cooccurrences twice with the same pair increments."""
+        from db import get_db
+        from models.cooccurrences import upsert_cooccurrences
+
+        concepts = ["ai", "biotech"]
+        upsert_cooccurrences(concepts)
+        upsert_cooccurrences(concepts)
+
+        with get_db() as conn:
+            row = conn.execute(
+                """
+                SELECT co_occurrence_count
+                FROM concept_cooccurrences
+                WHERE concept_a = :a AND concept_b = :b
+                """,
+                {"a": "ai", "b": "biotech"},
+            ).fetchone()
+
+        assert row is not None
+        assert row["co_occurrence_count"] == 2
+
+    def test_upsert_skips_fewer_than_two_concepts(self) -> None:
+        """Single-concept list inserts nothing into the store."""
+        from db import get_db
+        from models.cooccurrences import upsert_cooccurrences
+
+        upsert_cooccurrences(["solo-concept"])
+
+        with get_db() as conn:
+            row = conn.execute(
+                """
+                SELECT co_occurrence_count
+                FROM concept_cooccurrences
+                WHERE concept_a = :a
+                """,
+                {"a": "solo-concept"},
+            ).fetchone()
+
+        assert row is None

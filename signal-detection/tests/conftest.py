@@ -105,10 +105,11 @@ async def client(db_setup: None) -> AsyncClient:
 
 @pytest.fixture(autouse=True)
 def clean_jobs() -> None:
-    """Truncate job and classification rows after each test."""
+    """Truncate job, classification, and co-occurrence rows after each test."""
     yield
     with get_db() as conn:
         conn.execute(
-            "TRUNCATE classifications, classification_jobs"
+            "TRUNCATE classifications, classification_jobs,"
+            " concept_cooccurrences"
             " RESTART IDENTITY CASCADE"
         )
