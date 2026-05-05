@@ -35,6 +35,8 @@ src/
 │   ├── jobs.py           Repository — classification_jobs, classifications, deferred_promotions;
 │   │                                  cursor encode/decode delegated to shared/src/cursor_utils.py
 │   ├── claims.py         Repository — claims
+│   ├── cooccurrences.py  Repository — concept_cooccurrences; upsert_cooccurrences(),
+│   │                                  get_cooccurrence_counts()
 │   └── clusters.py       Repository — topic_clusters, corpus_centroids (incl. EWMA update,
 │                                       get_corpus_centroids_bulk, get_clusters_for_domain)
 ├── taxonomy_mappings.json  Config — keyword → concept-slug mappings; human-editable
@@ -90,11 +92,12 @@ For each article classified in Phase 1:
 
 1. **Cluster assignment** (`_assign_cluster`) — cosine similarity between the article embedding and each cluster centroid in `corpus_centroids`; nearest cluster wins. Low-confidence flag raised when similarity < `MIN_CLUSTER_SIMILARITY` (default 0.3). Cold-start default score used when no centroid vectors exist.
 2. **Sub-score A — trajectory deviation** — `1 - cosine_similarity`, normalised to [0, 1].
-3. **Sub-score C — claim novelty** (`_compute_claim_novelty`) — for each extracted claim, Qdrant `search` against the `claims` collection (k=10) excluding the article's own claims; score = mean cosine distance. `COLD_START_CLAIM_SCORE` (default 0.5) used when the claim store is empty.
-4. **Composite score** (`_compute_composite`) — `0.40 * trajectory + 0.60 * claim_novelty`. Weights are env-configurable (`W_TRAJECTORY`, `W_CLAIM_NOVELTY`).
-5. **Label** (`_assign_label`) — High Signal ≥ 0.70, Weak Signal 0.40–0.70, Noise < 0.40. Thresholds env-configurable (`SIGNAL_THRESHOLD`, `WEAK_SIGNAL_THRESHOLD`).
-6. **DB update** — `classifications` row updated with label, scores, and `cluster_id`.
-7. **Deferred promotion** — Signal articles inserted into `deferred_promotions` with `promote_at = now() + 30 days`.
+3. **Sub-score B — bridge score** (`_compute_bridge_score`) — reads `concepts` JSONB from the classification row; upserts all canonical concept pairs into `concept_cooccurrences`; computes `mean(1 / (1 + log(1 + count)))` across all pairs. Returns `null` when fewer than 2 concepts are extracted (logged as `bridge_score_unavailable`).
+4. **Sub-score C — claim novelty** (`_compute_claim_novelty`) — for each extracted claim, Qdrant `search` against the `claims` collection (k=10) excluding the article's own claims; score = mean cosine distance. `COLD_START_CLAIM_SCORE` (default 0.5) used when the claim store is empty.
+5. **Composite score** (`_compute_composite`) — Phase 4 (bridge available): `0.25 * A + 0.30 * B + 0.45 * C`; Phase 3 fallback (bridge=null): `0.40 * A + 0.60 * C`. All weights env-configurable (`W_TRAJECTORY`, `W_CLAIM_NOVELTY`, `W_TRAJECTORY_P4`, `W_BRIDGE`, `W_CLAIM_NOVELTY_P4`).
+6. **Label** (`_assign_label`) — High Signal ≥ 0.70, Weak Signal 0.40–0.70, Noise < 0.40. Thresholds env-configurable (`SIGNAL_THRESHOLD`, `WEAK_SIGNAL_THRESHOLD`).
+7. **DB update** — `classifications` row updated with label, scores, and `cluster_id`.
+8. **Deferred promotion** — Signal articles inserted into `deferred_promotions` with `promote_at = now() + 30 days`.
 
 ## EWMA Centroid Update
 
@@ -161,7 +164,8 @@ collection with no Postgres involvement. Used to widen corpus coverage beyond wh
 | `topic_clusters` | `id`, `slug`, `centroid_qdrant_collection`, `alpha` |
 | `corpus_centroids` | `cluster_id`, `centroid_vector REAL[]`, `document_count`, `embedding_model` |
 | `classification_jobs` | `id`, `run_id`, `status`, `article_count`, `callback_url` |
-| `classifications` | `id`, `job_id`, `article_url`, `source`, `label`, `composite_score`, `trajectory_score`, `claim_novelty_score`, `article_embedding REAL[]`, `cluster_id`, `concepts JSONB` |
+| `classifications` | `id`, `job_id`, `article_url`, `source`, `label`, `composite_score`, `trajectory_score`, `bridge_score`, `claim_novelty_score`, `article_embedding REAL[]`, `cluster_id`, `concepts JSONB` |
+| `concept_cooccurrences` | `concept_a`, `concept_b` (PRIMARY KEY pair, a < b), `co_occurrence_count`, `last_updated_at` |
 | `deferred_promotions` | `id`, `classification_id`, `promote_at`, `promoted_at`, `final_label` |
 | `claims` | `id`, `classification_id`, `claim_text`, `claim_embedding_id`, `embedding_model` |
 | `concept_taxonomy` | `id`, `slug`, `display_name`, `domain_group` — 40 v1 entries seeded at startup |
@@ -201,5 +205,5 @@ docker run --rm --network ocn_ocn-internal \
 | `test_smoke.py` | Health endpoint, app startup |
 | `test_classify.py` | POST /classify, GET /classifications/* |
 | `test_feature_extraction.py` | MinHash dedup, language filter, article embedding, claim extraction, claim embedding + Postgres storage, Langfuse tracing |
-| `test_scoring.py` | `_assign_cluster`, `_compute_claim_novelty`, `_compute_composite`, `_assign_label`, `_cosine_similarity` |
+| `test_scoring.py` | `_assign_cluster`, `_compute_claim_novelty`, `_compute_bridge_score`, `_compute_composite` (Phase 3 + 4), `_assign_label`, `_cosine_similarity` |
 | `test_ner.py` | `extract_concepts` — multi-concept match, zero-match, deduplication |

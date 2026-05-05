@@ -1,4 +1,5 @@
-"""Unit tests for CON-138 scoring helpers (sub-score A + C + composite)."""
+"""Unit tests for scoring helpers (sub-score A, B, C + composite)."""
+import math
 from unittest.mock import MagicMock
 
 import pytest
@@ -6,6 +7,7 @@ import pytest
 from controllers.classify import (
     _assign_cluster,
     _assign_label,
+    _compute_bridge_score,
     _compute_claim_novelty,
     _compute_composite,
     _cosine_similarity,
@@ -171,27 +173,102 @@ class TestComputeClaimNovelty:
 
 
 # ---------------------------------------------------------------------------
+# _compute_bridge_score
+# ---------------------------------------------------------------------------
+
+
+class TestComputeBridgeScore:
+    """_compute_bridge_score returns correct values."""
+
+    def test_single_concept_returns_none(self) -> None:
+        """Fewer than 2 concepts → None (Phase 3 fallback)."""
+        assert _compute_bridge_score(["ai"], {}) is None
+
+    def test_zero_concepts_returns_none(self) -> None:
+        """Empty concept list → None."""
+        assert _compute_bridge_score([], {}) is None
+
+    def test_rare_pair_scores_max(self) -> None:
+        """Pair with count=0 scores 1.0 (maximum novelty)."""
+        score = _compute_bridge_score(
+            ["ai", "biotech"], {("ai", "biotech"): 0}
+        )
+        assert score == pytest.approx(1.0, abs=1e-5)
+
+    def test_never_seen_pair_scores_max(self) -> None:
+        """Pair absent from counts dict (cold start) scores 1.0."""
+        score = _compute_bridge_score(["ai", "biotech"], {})
+        assert score == pytest.approx(1.0, abs=1e-5)
+
+    def test_common_pair_scores_low(self) -> None:
+        """Pair seen 1000 times scores well below 0.5."""
+        score = _compute_bridge_score(
+            ["ai", "finance"], {("ai", "finance"): 1000}
+        )
+        expected = 1.0 / (1.0 + math.log(1001))
+        assert score == pytest.approx(expected, abs=1e-5)
+        assert score < 0.2
+
+    def test_mean_across_multiple_pairs(self) -> None:
+        """Score is mean across all concept pairs."""
+        concepts = ["ai", "biotech", "finance"]
+        counts = {
+            ("ai", "biotech"): 0,
+            ("ai", "finance"): 0,
+            ("biotech", "finance"): 0,
+        }
+        score = _compute_bridge_score(concepts, counts)
+        assert score == pytest.approx(1.0, abs=1e-5)
+
+
+# ---------------------------------------------------------------------------
 # _compute_composite
 # ---------------------------------------------------------------------------
 
 
 class TestComputeComposite:
-    """_compute_composite applies correct weights."""
+    """_compute_composite applies correct weights for Phase 3 and 4."""
 
-    def test_weights_sum_correctly(self) -> None:
-        """With equal sub-scores the composite equals that score."""
-        score = _compute_composite(0.5, 0.5)
+    def test_phase3_weights_sum_correctly(self) -> None:
+        """With equal sub-scores (no bridge) the composite equals that score."""
+        score = _compute_composite(0.5, 0.5, bridge_score=None)
         assert score == pytest.approx(0.5, abs=1e-5)
 
-    def test_trajectory_weight(self) -> None:
-        """Pure trajectory deviation (claim_novelty=0) uses 0.40 weight."""
-        score = _compute_composite(1.0, 0.0)
+    def test_phase3_trajectory_weight(self) -> None:
+        """Pure trajectory deviation (no bridge) uses 0.40 weight."""
+        score = _compute_composite(1.0, 0.0, bridge_score=None)
         assert score == pytest.approx(0.40, abs=1e-5)
 
-    def test_claim_novelty_weight(self) -> None:
-        """Pure claim novelty (trajectory=0) uses 0.60 weight."""
-        score = _compute_composite(0.0, 1.0)
+    def test_phase3_claim_novelty_weight(self) -> None:
+        """Pure claim novelty (no bridge) uses 0.60 weight."""
+        score = _compute_composite(0.0, 1.0, bridge_score=None)
         assert score == pytest.approx(0.60, abs=1e-5)
+
+    def test_phase3_default_bridge_is_none(self) -> None:
+        """Omitting bridge_score defaults to Phase 3 behaviour."""
+        p3 = _compute_composite(0.6, 0.4, bridge_score=None)
+        p3_default = _compute_composite(0.6, 0.4)
+        assert p3 == pytest.approx(p3_default, abs=1e-5)
+
+    def test_phase4_trajectory_weight(self) -> None:
+        """Pure trajectory (with bridge=0, novelty=0) uses 0.25 weight."""
+        score = _compute_composite(1.0, 0.0, bridge_score=0.0)
+        assert score == pytest.approx(0.25, abs=1e-5)
+
+    def test_phase4_bridge_weight(self) -> None:
+        """Pure bridge score (trajectory=0, novelty=0) uses 0.30 weight."""
+        score = _compute_composite(0.0, 0.0, bridge_score=1.0)
+        assert score == pytest.approx(0.30, abs=1e-5)
+
+    def test_phase4_claim_novelty_weight(self) -> None:
+        """Pure claim novelty (with bridge=0) uses 0.45 weight."""
+        score = _compute_composite(0.0, 1.0, bridge_score=0.0)
+        assert score == pytest.approx(0.45, abs=1e-5)
+
+    def test_phase4_all_ones(self) -> None:
+        """All sub-scores = 1.0 with Phase 4 weights sum to 1.0."""
+        score = _compute_composite(1.0, 1.0, bridge_score=1.0)
+        assert score == pytest.approx(1.0, abs=1e-5)
 
 
 # ---------------------------------------------------------------------------

@@ -2,10 +2,12 @@
 import asyncio
 import json
 import logging
+import math
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from functools import partial
+from itertools import combinations
 
 import httpx
 import numpy as np
@@ -24,6 +26,10 @@ from qdrant_client.models import (
 
 from models.claims import insert_claim
 from models.clusters import get_clusters_for_domain
+from models.cooccurrences import (
+    get_cooccurrence_counts,
+    upsert_cooccurrences,
+)
 from models.jobs import (
     JobRow,
     create_job,
@@ -55,6 +61,10 @@ _COLD_START_CLAIM_SCORE = float(
 )
 _W_TRAJECTORY = float(os.environ.get("W_TRAJECTORY", "0.40"))
 _W_CLAIM_NOVELTY = float(os.environ.get("W_CLAIM_NOVELTY", "0.60"))
+# Phase 4 weights — used when bridge score is available
+_W_TRAJ_P4 = float(os.environ.get("W_TRAJECTORY_P4", "0.25"))
+_W_BRIDGE = float(os.environ.get("W_BRIDGE", "0.30"))
+_W_NOVELTY_P4 = float(os.environ.get("W_CLAIM_NOVELTY_P4", "0.45"))
 _SIGNAL_THRESHOLD = float(os.environ.get("SIGNAL_THRESHOLD", "0.70"))
 _WEAK_SIGNAL_THRESHOLD = float(
     os.environ.get("WEAK_SIGNAL_THRESHOLD", "0.40")
@@ -183,13 +193,15 @@ async def _run_scoring_phase(
                    c.article_url,
                    c.source,
                    c.article_embedding,
+                   c.concepts,
                    array_agg(
                        cl.claim_embedding_id::text
                    ) FILTER (WHERE cl.id IS NOT NULL) AS claim_ids
             FROM classifications c
             LEFT JOIN claims cl ON cl.classification_id = c.id
             WHERE c.job_id = :job_id
-            GROUP BY c.id, c.article_url, c.source, c.article_embedding
+            GROUP BY c.id, c.article_url, c.source,
+                     c.article_embedding, c.concepts
             """,
             {"job_id": job_id},
         ).fetchall()
@@ -223,7 +235,18 @@ async def _run_scoring_phase(
             ),
         )
 
-        composite = _compute_composite(traj_score, claim_novelty)
+        concepts = json.loads(row.get("concepts") or "[]")
+        upsert_cooccurrences(concepts)
+        pairs = list(combinations(sorted(concepts), 2))
+        counts = get_cooccurrence_counts(pairs)
+        bridge = _compute_bridge_score(concepts, counts)
+        if bridge is None:
+            logger.info(
+                "Job %d: bridge_score_unavailable for %s",
+                job_id, article_url,
+            )
+
+        composite = _compute_composite(traj_score, claim_novelty, bridge)
         label = _assign_label(composite)
 
         update_classification_scores(
@@ -232,6 +255,7 @@ async def _run_scoring_phase(
             composite_score=composite,
             trajectory_score=traj_score,
             claim_novelty_score=claim_novelty,
+            bridge_score=bridge,
             cluster_id=cluster_id,
         )
 
@@ -244,11 +268,12 @@ async def _run_scoring_phase(
                 promote_at=promote_at,
             )
 
+        bridge_str = f"{bridge:.3f}" if bridge is not None else "null"
         logger.info(
             "Job %d: %s → label=%s composite=%.3f"
-            " traj=%.3f novelty=%.3f",
+            " traj=%.3f bridge=%s novelty=%.3f",
             job_id, article_url, label,
-            composite, traj_score, claim_novelty,
+            composite, traj_score, bridge_str, claim_novelty,
         )
 
 
@@ -607,12 +632,45 @@ def _compute_claim_novelty(
     return sum(distances) / len(distances)
 
 
+def _compute_bridge_score(
+    concepts: list[str],
+    counts: dict[tuple[str, str], int],
+) -> float | None:
+    """Return bridge score in [0, 1], or None if fewer than 2 concepts.
+
+    Rare pairs (low count) score near 1.0; frequent pairs score near 0.
+    Formula: mean(1 / (1 + log(1 + count))) across all concept pairs.
+    """
+    if len(concepts) < 2:
+        return None
+    pairs = list(combinations(sorted(concepts), 2))
+    scores = [
+        1.0 / (1.0 + math.log(1.0 + counts.get(pair, 0)))
+        for pair in pairs
+    ]
+    return sum(scores) / len(scores)
+
+
 def _compute_composite(
     trajectory_score: float,
     claim_novelty: float,
+    bridge_score: float | None = None,
 ) -> float:
-    """Return the v1 composite score (weighted sum of sub-scores)."""
-    return _W_TRAJECTORY * trajectory_score + _W_CLAIM_NOVELTY * claim_novelty
+    """Return composite score using Phase 4 weights when bridge is available.
+
+    Phase 3 (bridge_score=None): 0.40 * A + 0.60 * C
+    Phase 4 (bridge_score set):  0.25 * A + 0.30 * B + 0.45 * C
+    """
+    if bridge_score is None:
+        return (
+            _W_TRAJECTORY * trajectory_score
+            + _W_CLAIM_NOVELTY * claim_novelty
+        )
+    return (
+        _W_TRAJ_P4 * trajectory_score
+        + _W_BRIDGE * bridge_score
+        + _W_NOVELTY_P4 * claim_novelty
+    )
 
 
 def _assign_label(composite: float) -> str:

@@ -104,6 +104,7 @@ def update_classification_scores(
     trajectory_score: float,
     claim_novelty_score: float,
     cluster_id: int | None,
+    bridge_score: float | None = None,
 ) -> None:
     """Update label, scores, and cluster assignment on a classification row."""
     with get_db() as conn:
@@ -113,6 +114,7 @@ def update_classification_scores(
             SET label               = :label,
                 composite_score     = :composite_score,
                 trajectory_score    = :trajectory_score,
+                bridge_score        = :bridge_score,
                 claim_novelty_score = :claim_novelty_score,
                 cluster_id          = :cluster_id
             WHERE id = :id
@@ -122,6 +124,7 @@ def update_classification_scores(
                 "label": label,
                 "composite_score": composite_score,
                 "trajectory_score": trajectory_score,
+                "bridge_score": bridge_score,
                 "claim_novelty_score": claim_novelty_score,
                 "cluster_id": cluster_id,
             },
