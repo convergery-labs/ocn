@@ -37,6 +37,7 @@ from models.jobs import (
     insert_classification,
     insert_deferred_promotion,
     update_classification_concepts,
+    update_classification_plausibility,
     update_classification_scores,
     update_job_status,
 )
@@ -71,6 +72,18 @@ _WEAK_SIGNAL_THRESHOLD = float(
 )
 _CLAIM_NOVELTY_K = 10
 _DEFERRAL_DAYS = 30
+
+# Plausibility filter hyper-parameters
+_PLAUSIBILITY_THRESHOLD = float(
+    os.environ.get("PLAUSIBILITY_THRESHOLD", "0.40")
+)
+_PLAUSIBILITY_DOWNGRADE_THRESHOLD = float(
+    os.environ.get("PLAUSIBILITY_DOWNGRADE_THRESHOLD", "0.30")
+)
+_PLAUSIBILITY_TOKEN_WARN_THRESHOLD = int(
+    os.environ.get("PLAUSIBILITY_TOKEN_WARN_THRESHOLD", "4096")
+)
+_PLAUSIBILITY_BODY_CHARS = 8_000  # ~2,000 tokens
 
 
 class RunNotFoundError(Exception):
@@ -158,7 +171,7 @@ async def run_agent_loop(
     try:
         qdrant = _qdrant_client()
         await _run_feature_extraction(job_id, articles)
-        await _run_scoring_phase(job_id, qdrant)
+        await _run_scoring_phase(job_id, qdrant, articles)
         update_job_status(job_id, "completed", set_completed_at=True)
     except Exception:
         logger.exception("Agent loop failed for job %d", job_id)
@@ -176,6 +189,7 @@ async def run_agent_loop(
 async def _run_scoring_phase(
     job_id: int,
     qdrant: QdrantClient,
+    articles: list[dict],
 ) -> None:
     """Score every classification in job_id and write results to DB.
 
@@ -185,6 +199,13 @@ async def _run_scoring_phase(
     from db import get_db
 
     loop = asyncio.get_running_loop()
+    oai = _openai_client()
+    article_lookup = {a.get("url", ""): a for a in articles}
+
+    lf = _langfuse_client()
+    trace = (
+        lf.trace(name="scoring", session_id=str(job_id)) if lf else None
+    )
 
     with get_db() as conn:
         rows = conn.execute(
@@ -249,6 +270,39 @@ async def _run_scoring_phase(
         composite = _compute_composite(traj_score, claim_novelty, bridge)
         label = _assign_label(composite)
 
+        plausibility_score = None
+        plausibility_flags = None
+        plausibility_reasoning = None
+        flagged_for_review = False
+
+        if composite > _PLAUSIBILITY_THRESHOLD:
+            article = article_lookup.get(article_url, {})
+            result = await loop.run_in_executor(
+                None,
+                partial(
+                    _call_plausibility_llm,
+                    oai,
+                    _plausibility_model(),
+                    article.get("title", ""),
+                    article.get("body", ""),
+                    composite,
+                    trace,
+                ),
+            )
+            if result is not None:
+                plausibility_score = result["plausibility_score"]
+                plausibility_flags = result.get("flags", [])
+                plausibility_reasoning = result.get("reasoning", "")
+                label, flagged_for_review = _apply_plausibility_downgrade(
+                    label, plausibility_score
+                )
+                if flagged_for_review:
+                    logger.info(
+                        "Job %d: flagged for review — %s"
+                        " (plausibility=%.3f)",
+                        job_id, article_url, plausibility_score,
+                    )
+
         update_classification_scores(
             classification_id=classification_id,
             label=label,
@@ -257,6 +311,13 @@ async def _run_scoring_phase(
             claim_novelty_score=claim_novelty,
             bridge_score=bridge,
             cluster_id=cluster_id,
+        )
+        update_classification_plausibility(
+            classification_id=classification_id,
+            plausibility_score=plausibility_score,
+            plausibility_flags=plausibility_flags,
+            plausibility_reasoning=plausibility_reasoning,
+            flagged_for_review=flagged_for_review,
         )
 
         if label == "Signal":
@@ -269,11 +330,17 @@ async def _run_scoring_phase(
             )
 
         bridge_str = f"{bridge:.3f}" if bridge is not None else "null"
+        p_str = (
+            f"{plausibility_score:.3f}"
+            if plausibility_score is not None else "null"
+        )
         logger.info(
             "Job %d: %s → label=%s composite=%.3f"
-            " traj=%.3f bridge=%s novelty=%.3f",
+            " traj=%.3f bridge=%s novelty=%.3f plausibility=%s"
+            " flagged=%s",
             job_id, article_url, label,
             composite, traj_score, bridge_str, claim_novelty,
+            p_str, flagged_for_review,
         )
 
 
@@ -682,6 +749,92 @@ def _assign_label(composite: float) -> str:
     return "Noise"
 
 
+def _apply_plausibility_downgrade(
+    label: str,
+    plausibility_score: float,
+) -> tuple[str, bool]:
+    """Return (new_label, flagged_for_review) after applying downgrade logic.
+
+    Signal articles with plausibility_score < threshold are downgraded to
+    Weak Signal and flagged. Weak Signal articles are flagged but not further
+    downgraded. All other cases are unchanged.
+    """
+    if plausibility_score < _PLAUSIBILITY_DOWNGRADE_THRESHOLD:
+        if label == "Signal":
+            return "Weak Signal", True
+        if label == "Weak Signal":
+            return "Weak Signal", True
+    return label, False
+
+
+def _call_plausibility_llm(
+    oai: OpenAI,
+    model: str,
+    title: str,
+    body: str,
+    composite: float,
+    trace: object,
+) -> dict | None:
+    """Call LLM to assess plausibility of an article's claims.
+
+    Returns a dict with keys plausibility_score, flags, reasoning,
+    or None on JSON parse failure or any exception.
+    """
+    truncated_body = body[:_PLAUSIBILITY_BODY_CHARS]
+    system_prompt = (
+        "You are a scientific plausibility assessor. Evaluate whether the"
+        " article's claims are grounded in credible evidence and mechanisms."
+        " Return ONLY valid JSON matching this schema:\n"
+        '{"plausibility_score": <float 0.0-1.0>,'
+        ' "flags": <array of zero or more strings from:'
+        ' ["conspiracy_framing", "no_credible_mechanism",'
+        ' "low_credibility_source", "speculative_extrapolation"]>,'
+        ' "reasoning": <brief explanation string>}'
+    )
+    user_content = (
+        f"Title: {title}\n\n"
+        f"Body:\n{truncated_body}\n\n"
+        f"Composite signal score (context): {composite:.3f}"
+    )
+    try:
+        response = oai.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ],
+        )
+        raw = response.choices[0].message.content or ""
+        result = json.loads(raw)
+        if not isinstance(result, dict):
+            raise ValueError("LLM did not return a JSON object")
+        total_tokens = (
+            response.usage.total_tokens if response.usage else 0
+        )
+        if total_tokens > _PLAUSIBILITY_TOKEN_WARN_THRESHOLD:
+            logger.warning(
+                "Plausibility call used %d tokens (threshold %d)",
+                total_tokens, _PLAUSIBILITY_TOKEN_WARN_THRESHOLD,
+            )
+        if trace:
+            trace.span(
+                name="plausibility",
+                input={"title": title, "composite": composite},
+                output={
+                    "plausibility_score": result.get("plausibility_score"),
+                    "flags": result.get("flags", []),
+                    "total_tokens": total_tokens,
+                },
+            )
+        return result
+    except Exception:
+        logger.error(
+            "Plausibility LLM call failed; skipping filter",
+            exc_info=True,
+        )
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -724,6 +877,13 @@ def _claim_embedding_model() -> str:
 def _llm_model() -> str:
     """Return the configured LLM model for claim extraction."""
     return os.environ.get("OPENROUTER_MODEL", "openai/gpt-4o-mini")
+
+
+def _plausibility_model() -> str:
+    """Return the configured LLM model for plausibility assessment."""
+    return os.environ.get(
+        "PLAUSIBILITY_MODEL", "anthropic/claude-sonnet-4-5"
+    )
 
 
 def _langfuse_client():

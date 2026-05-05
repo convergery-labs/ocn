@@ -165,3 +165,16 @@ def init_db() -> None:
                 CHECK (concept_a < concept_b)
             )
         """)
+        conn.execute(
+            "ALTER TABLE classifications"
+            " ADD COLUMN IF NOT EXISTS plausibility_flags JSONB"
+        )
+        conn.execute(
+            "ALTER TABLE classifications"
+            " ADD COLUMN IF NOT EXISTS plausibility_reasoning TEXT"
+        )
+        conn.execute(
+            "ALTER TABLE classifications"
+            " ADD COLUMN IF NOT EXISTS"
+            " flagged_for_review BOOLEAN NOT NULL DEFAULT false"
+        )

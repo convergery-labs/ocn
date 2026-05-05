@@ -1,12 +1,15 @@
 """Unit tests for scoring helpers (sub-score A, B, C + composite)."""
+import json
 import math
 from unittest.mock import MagicMock
 
 import pytest
 
 from controllers.classify import (
+    _apply_plausibility_downgrade,
     _assign_cluster,
     _assign_label,
+    _call_plausibility_llm,
     _compute_bridge_score,
     _compute_claim_novelty,
     _compute_composite,
@@ -293,3 +296,117 @@ class TestAssignLabel:
         """Score < 0.40 → 'Noise'."""
         assert _assign_label(0.00) == "Noise"
         assert _assign_label(0.39) == "Noise"
+
+
+# ---------------------------------------------------------------------------
+# _apply_plausibility_downgrade
+# ---------------------------------------------------------------------------
+
+
+class TestApplyPlausibilityDowngrade:
+    """_apply_plausibility_downgrade applies correct downgrade logic."""
+
+    def test_signal_low_plausibility_downgraded(self) -> None:
+        """Signal + plausibility < 0.30 → Weak Signal, flagged."""
+        label, flagged = _apply_plausibility_downgrade("Signal", 0.10)
+        assert label == "Weak Signal"
+        assert flagged is True
+
+    def test_weak_signal_low_plausibility_flagged(self) -> None:
+        """Weak Signal + plausibility < 0.30 → stays Weak Signal, flagged."""
+        label, flagged = _apply_plausibility_downgrade("Weak Signal", 0.20)
+        assert label == "Weak Signal"
+        assert flagged is True
+
+    def test_signal_high_plausibility_unchanged(self) -> None:
+        """Signal + plausibility >= 0.30 → unchanged, not flagged."""
+        label, flagged = _apply_plausibility_downgrade("Signal", 0.80)
+        assert label == "Signal"
+        assert flagged is False
+
+    def test_weak_signal_high_plausibility_unchanged(self) -> None:
+        """Weak Signal + plausibility >= 0.30 → unchanged, not flagged."""
+        label, flagged = _apply_plausibility_downgrade("Weak Signal", 0.50)
+        assert label == "Weak Signal"
+        assert flagged is False
+
+    def test_boundary_at_threshold(self) -> None:
+        """plausibility_score == 0.30 is not below threshold → no downgrade."""
+        label, flagged = _apply_plausibility_downgrade("Signal", 0.30)
+        assert label == "Signal"
+        assert flagged is False
+
+    def test_noise_label_unchanged(self) -> None:
+        """Noise label is never passed to the filter but is handled safely."""
+        label, flagged = _apply_plausibility_downgrade("Noise", 0.10)
+        assert label == "Noise"
+        assert flagged is False
+
+
+# ---------------------------------------------------------------------------
+# _call_plausibility_llm
+# ---------------------------------------------------------------------------
+
+
+class TestCallPlausibilityLlm:
+    """_call_plausibility_llm parses responses and handles failures."""
+
+    def _make_oai_mock(self, content: str) -> MagicMock:
+        """Return a mocked OpenAI client returning *content*."""
+        usage = MagicMock()
+        usage.total_tokens = 500
+        choice = MagicMock()
+        choice.message.content = content
+        response = MagicMock()
+        response.choices = [choice]
+        response.usage = usage
+        oai = MagicMock()
+        oai.chat.completions.create.return_value = response
+        return oai
+
+    def test_valid_json_returned(self) -> None:
+        """Valid JSON response is parsed and returned as a dict."""
+        payload = {
+            "plausibility_score": 0.75,
+            "flags": [],
+            "reasoning": "Credible sources.",
+        }
+        oai = self._make_oai_mock(json.dumps(payload))
+        result = _call_plausibility_llm(
+            oai, "test-model", "Title", "Body", 0.60, None
+        )
+        assert result is not None
+        assert result["plausibility_score"] == pytest.approx(0.75)
+        assert result["flags"] == []
+        assert result["reasoning"] == "Credible sources."
+
+    def test_invalid_json_returns_none(self) -> None:
+        """Malformed JSON response → returns None without raising."""
+        oai = self._make_oai_mock("NOT JSON AT ALL")
+        result = _call_plausibility_llm(
+            oai, "test-model", "Title", "Body", 0.60, None
+        )
+        assert result is None
+
+    def test_llm_exception_returns_none(self) -> None:
+        """LLM call raising an exception → returns None without raising."""
+        oai = MagicMock()
+        oai.chat.completions.create.side_effect = RuntimeError("api down")
+        result = _call_plausibility_llm(
+            oai, "test-model", "Title", "Body", 0.60, None
+        )
+        assert result is None
+
+    def test_flags_from_response(self) -> None:
+        """Flags array from LLM response is preserved."""
+        payload = {
+            "plausibility_score": 0.15,
+            "flags": ["conspiracy_framing", "no_credible_mechanism"],
+            "reasoning": "Suspicious framing.",
+        }
+        oai = self._make_oai_mock(json.dumps(payload))
+        result = _call_plausibility_llm(
+            oai, "test-model", "Title", "Body", 0.65, None
+        )
+        assert result is not None
+        assert "conspiracy_framing" in result["flags"]

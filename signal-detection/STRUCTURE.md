@@ -96,8 +96,9 @@ For each article classified in Phase 1:
 4. **Sub-score C — claim novelty** (`_compute_claim_novelty`) — for each extracted claim, Qdrant `search` against the `claims` collection (k=10) excluding the article's own claims; score = mean cosine distance. `COLD_START_CLAIM_SCORE` (default 0.5) used when the claim store is empty.
 5. **Composite score** (`_compute_composite`) — Phase 4 (bridge available): `0.25 * A + 0.30 * B + 0.45 * C`; Phase 3 fallback (bridge=null): `0.40 * A + 0.60 * C`. All weights env-configurable (`W_TRAJECTORY`, `W_CLAIM_NOVELTY`, `W_TRAJECTORY_P4`, `W_BRIDGE`, `W_CLAIM_NOVELTY_P4`).
 6. **Label** (`_assign_label`) — High Signal ≥ 0.70, Weak Signal 0.40–0.70, Noise < 0.40. Thresholds env-configurable (`SIGNAL_THRESHOLD`, `WEAK_SIGNAL_THRESHOLD`).
-7. **DB update** — `classifications` row updated with label, scores, and `cluster_id`.
-8. **Deferred promotion** — Signal articles inserted into `deferred_promotions` with `promote_at = now() + 30 days`.
+7. **Plausibility filter** (`_call_plausibility_llm` + `_apply_plausibility_downgrade`) — runs for articles with `composite_score > PLAUSIBILITY_THRESHOLD` (default 0.40). A single Claude Sonnet call via OpenRouter returns `{plausibility_score, flags, reasoning}`. If `plausibility_score < PLAUSIBILITY_DOWNGRADE_THRESHOLD` (default 0.30): Signal is downgraded to Weak Signal and `flagged_for_review` is set. Noise articles skip this step; LLM failures are logged and the label is unchanged.
+8. **DB update** — `classifications` row updated with label, scores, cluster_id, and plausibility fields.
+9. **Deferred promotion** — Signal articles inserted into `deferred_promotions` with `promote_at = now() + 30 days`.
 
 ## EWMA Centroid Update
 
@@ -164,7 +165,7 @@ collection with no Postgres involvement. Used to widen corpus coverage beyond wh
 | `topic_clusters` | `id`, `slug`, `centroid_qdrant_collection`, `alpha` |
 | `corpus_centroids` | `cluster_id`, `centroid_vector REAL[]`, `document_count`, `embedding_model` |
 | `classification_jobs` | `id`, `run_id`, `status`, `article_count`, `callback_url` |
-| `classifications` | `id`, `job_id`, `article_url`, `source`, `label`, `composite_score`, `trajectory_score`, `bridge_score`, `claim_novelty_score`, `article_embedding REAL[]`, `cluster_id`, `concepts JSONB` |
+| `classifications` | `id`, `job_id`, `article_url`, `source`, `label`, `composite_score`, `trajectory_score`, `bridge_score`, `claim_novelty_score`, `plausibility_score`, `plausibility_flags JSONB`, `plausibility_reasoning`, `flagged_for_review`, `article_embedding REAL[]`, `cluster_id`, `concepts JSONB` |
 | `concept_cooccurrences` | `concept_a`, `concept_b` (PRIMARY KEY pair, a < b), `co_occurrence_count`, `last_updated_at` |
 | `deferred_promotions` | `id`, `classification_id`, `promote_at`, `promoted_at`, `final_label` |
 | `claims` | `id`, `classification_id`, `claim_text`, `claim_embedding_id`, `embedding_model` |
@@ -205,5 +206,5 @@ docker run --rm --network ocn_ocn-internal \
 | `test_smoke.py` | Health endpoint, app startup |
 | `test_classify.py` | POST /classify, GET /classifications/* |
 | `test_feature_extraction.py` | MinHash dedup, language filter, article embedding, claim extraction, claim embedding + Postgres storage, Langfuse tracing |
-| `test_scoring.py` | `_assign_cluster`, `_compute_claim_novelty`, `_compute_bridge_score`, `_compute_composite` (Phase 3 + 4), `_assign_label`, `_cosine_similarity` |
+| `test_scoring.py` | `_assign_cluster`, `_compute_claim_novelty`, `_compute_bridge_score`, `_compute_composite` (Phase 3 + 4), `_assign_label`, `_cosine_similarity`, `_apply_plausibility_downgrade`, `_call_plausibility_llm` |
 | `test_ner.py` | `extract_concepts` — multi-concept match, zero-match, deduplication |
