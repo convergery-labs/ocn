@@ -100,6 +100,7 @@ jobs:
         working-directory: signal-detection
         run: |
           pip install -r requirements.txt -r requirements-test.txt
+          python -m spacy download en_core_web_lg
           pytest tests/ -v
         env:
           POSTGRES_HOST:      localhost
