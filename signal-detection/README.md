@@ -151,6 +151,26 @@ Returns `{"job_id": 1, "status": "processing"}`. On completion, POSTs
 Supports cursor-based pagination via `limit` (1–100, default 20) and `cursor`
 query parameters.
 
+## Concept Taxonomy & NER Pipeline
+
+Each classified article has its text processed by a spaCy `en_core_web_lg` NER
+pipeline that extracts named entities and noun chunks, maps them against
+`src/taxonomy_mappings.json`, and stores the matched concept slugs as a JSONB
+array on the `classifications` row. This is the foundation for the bridge score
+(Sub-score B).
+
+The taxonomy contains 40 v1 concept slugs in 8 domain groups (e.g. `ai-core`,
+`science`, `governance`, `finance`). `taxonomy_mappings.json` maps ≥150 keyword
+patterns to those slugs and can be edited without code changes.
+
+The `en_core_web_lg` model is downloaded automatically during the Docker image
+build. To install it locally for testing:
+
+```bash
+pip install "spacy>=3.7,<4"
+python -m spacy download en_core_web_lg
+```
+
 ## Testing
 
 Tests connect to `postgres-signal-test` on `localhost:5435`. Qdrant is not needed.
@@ -168,3 +188,4 @@ Test modules:
 |--------|----------|
 | `test_smoke.py` | Health endpoint, app startup |
 | `test_classify.py` | POST /classify and GET /classifications/* endpoints |
+| `test_ner.py` | `extract_concepts` — multi-concept match, zero-match, deduplication |

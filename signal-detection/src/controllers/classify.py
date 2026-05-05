@@ -30,9 +30,11 @@ from models.jobs import (
     find_processing_job,
     insert_classification,
     insert_deferred_promotion,
+    update_classification_concepts,
     update_classification_scores,
     update_job_status,
 )
+from pipeline.ner import extract_concepts
 
 DetectorFactory.seed = 0  # deterministic language detection
 
@@ -474,6 +476,28 @@ async def _run_feature_extraction(
             )
         ]
     )
+
+    # Step 8 — NER concept extraction; results stored on classifications row
+    article_titles = [a.get("title", "") for a in english]
+    all_concepts: list[list[str]] = await asyncio.gather(
+        *[
+            loop.run_in_executor(
+                None,
+                extract_concepts,
+                f"{title} {body}",
+            )
+            for title, body in zip(article_titles, article_bodies)
+        ]
+    )
+    for cid, article_url, concepts in zip(
+        classification_ids, article_urls, all_concepts
+    ):
+        if not concepts:
+            logger.warning(
+                "Job %d: no concepts matched for %s",
+                job_id, article_url,
+            )
+        update_classification_concepts(cid, concepts)
 
     if lf:
         lf.flush()
