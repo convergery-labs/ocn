@@ -26,9 +26,12 @@ src/
 │                                         concept_taxonomy on startup
 ├── routes/
 │   ├── health.py        Route — GET /health
-│   └── classify.py      Route — POST /classify, GET /classifications/*
+│   ├── classify.py      Route — POST /classify, GET /classifications/*
+│   └── run.py           Route — POST /run (unified fetch-and-classify pipeline)
 ├── controllers/
 │   ├── classify.py      Controller — job submission and background execution
+│   ├── run.py           Controller — unified pipeline: trigger news-retrieval run,
+│   │                                 poll until complete, fetch articles, classify
 │   ├── bootstrap.py     Controller — corpus bootstrap pipeline orchestration
 │   └── promote.py       Controller — nightly deferred corpus promotion job
 ├── models/
@@ -165,7 +168,7 @@ collection with no Postgres involvement. Used to widen corpus coverage beyond wh
 | `topic_clusters` | `id`, `slug`, `centroid_qdrant_collection`, `alpha` |
 | `corpus_centroids` | `cluster_id`, `centroid_vector REAL[]`, `document_count`, `embedding_model` |
 | `classification_jobs` | `id`, `run_id`, `status`, `article_count`, `callback_url` |
-| `classifications` | `id`, `job_id`, `article_url`, `source`, `label`, `composite_score`, `trajectory_score`, `bridge_score`, `claim_novelty_score`, `plausibility_score`, `plausibility_flags JSONB`, `plausibility_reasoning`, `flagged_for_review`, `article_embedding REAL[]`, `cluster_id`, `concepts JSONB` |
+| `classifications` | `id`, `job_id`, `article_url`, `source`, `label`, `composite_score`, `trajectory_score`, `bridge_score`, `claim_novelty_score`, `plausibility_score`, `plausibility_flags JSONB`, `plausibility_reasoning`, `flagged_for_review`, `article_embedding REAL[]`, `cluster_id`, `concepts JSONB`, `article_title`, `article_summary`, `article_body`, `article_published` |
 | `concept_cooccurrences` | `concept_a`, `concept_b` (PRIMARY KEY pair, a < b), `co_occurrence_count`, `last_updated_at` |
 | `deferred_promotions` | `id`, `classification_id`, `promote_at`, `promoted_at`, `final_label` |
 | `claims` | `id`, `classification_id`, `claim_text`, `claim_embedding_id`, `embedding_model` |
@@ -176,9 +179,10 @@ collection with no Postgres involvement. Used to widen corpus coverage beyond wh
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `GET` | `/health` | None | Liveness check — Postgres, Qdrant, auth-service |
-| `POST` | `/classify` | Bearer | Submit a classification job (202 Accepted) |
+| `POST` | `/run` | Bearer | Unified pipeline: fetch from news-retrieval + classify (202 Accepted) |
+| `POST` | `/classify` | Bearer | Submit a classification job directly (202 Accepted) |
 | `GET` | `/classifications/{job_id}` | Bearer | Job status and aggregate stats |
-| `GET` | `/classifications/{job_id}/results` | Bearer | Paginated per-article results |
+| `GET` | `/classifications/{job_id}/results` | Bearer | Paginated per-article results (includes `claims` array) |
 
 ## Testing
 

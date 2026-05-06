@@ -178,3 +178,19 @@ def init_db() -> None:
             " ADD COLUMN IF NOT EXISTS"
             " flagged_for_review BOOLEAN NOT NULL DEFAULT false"
         )
+        conn.execute(
+            "ALTER TABLE classifications"
+            " ADD COLUMN IF NOT EXISTS article_title TEXT"
+        )
+        conn.execute(
+            "ALTER TABLE classifications"
+            " ADD COLUMN IF NOT EXISTS article_summary TEXT"
+        )
+        conn.execute(
+            "ALTER TABLE classifications"
+            " ADD COLUMN IF NOT EXISTS article_body TEXT"
+        )
+        conn.execute(
+            "ALTER TABLE classifications"
+            " ADD COLUMN IF NOT EXISTS article_published TEXT"
+        )

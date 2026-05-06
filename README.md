@@ -8,14 +8,14 @@ Monorepo for the OCN platform: auth, news retrieval, and signal detection.
 |---------|------|-------------|
 | [auth-service](auth-service/README.md) | 8001 | Authentication and API key management |
 | [news-retrieval](news-retrieval/README.md) | 8000 | RSS feed fetching and LLM-based relevance filtering |
-| [signal-detection](signal-detection/README.md) | 8002 | Signal detection and vector-similarity pipelines |
+| [signal-detection](signal-detection/README.md) | 8002 | Signal detection and vector-similarity pipelines; `POST /run` triggers the full fetch-and-classify pipeline in one call |
 
 ## Stack
 
 - **Services**: FastAPI + uvicorn (Python 3.12)
 - **Databases**: PostgreSQL (one sidecar per service)
 - **Vector store**: Qdrant (signal-detection)
-- **LLM**: Configurable via OpenRouter (news-retrieval)
+- **LLM**: Configurable via OpenRouter (news-retrieval, signal-detection)
 - **Infrastructure**: Docker Compose
 - **Shared utilities**: `shared/src/` — PostgreSQL connection helpers and keyset-pagination cursor utilities, copied into each service image at build time
 

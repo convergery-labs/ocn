@@ -67,6 +67,10 @@ def insert_classification(
     model_embedding: str,
     model_llm: str,
     source: str | None = None,
+    title: str | None = None,
+    summary: str | None = None,
+    body: str | None = None,
+    published: str | None = None,
 ) -> int:
     """Insert a placeholder classification row and return its id.
 
@@ -78,11 +82,14 @@ def insert_classification(
             """
             INSERT INTO classifications
                 (job_id, article_url, label, composite_score,
-                 model_embedding, model_llm, article_embedding, source)
+                 model_embedding, model_llm, article_embedding, source,
+                 article_title, article_summary, article_body,
+                 article_published)
             VALUES
                 (:job_id, :article_url, 'Noise', 0.0,
                  :model_embedding, :model_llm, :article_embedding,
-                 :source)
+                 :source, :article_title, :article_summary, :article_body,
+                 :article_published)
             RETURNING id
             """,
             {
@@ -92,6 +99,10 @@ def insert_classification(
                 "model_llm": model_llm,
                 "article_embedding": article_embedding,
                 "source": source,
+                "article_title": title,
+                "article_summary": summary,
+                "article_body": body,
+                "article_published": published
             },
         ).fetchone()
     return row["id"]
@@ -207,20 +218,29 @@ def list_job_results(
     When flagged=True, only rows with flagged_for_review=TRUE are returned.
     """
     flagged_clause = (
-        "AND flagged_for_review = TRUE" if flagged is True else ""
+        "AND c.flagged_for_review = TRUE" if flagged is True else ""
     )
     with get_db() as conn:
         rows = conn.execute(
             f"""
-            SELECT id, job_id, article_url, source, label,
-                   composite_score, trajectory_score, bridge_score,
-                   claim_novelty_score, plausibility_score,
-                   plausibility_flags, plausibility_reasoning,
-                   flagged_for_review,
-                   model_embedding, model_llm, cluster_id, created_at
-            FROM classifications
-            WHERE job_id = :job_id AND id > :after_id {flagged_clause}
-            ORDER BY id ASC
+            SELECT c.id, c.job_id, c.article_url, c.source, c.label,
+                 c.article_title, c.article_summary,
+                 c.article_body, c.article_published,
+                 c.composite_score, c.trajectory_score, c.bridge_score,
+                 c.claim_novelty_score, c.plausibility_score,
+                 c.plausibility_flags, c.plausibility_reasoning,
+                 c.flagged_for_review,
+                 c.model_embedding, c.model_llm, c.cluster_id, c.created_at,
+                 COALESCE(
+                     array_agg(cl.claim_text)
+                         FILTER (WHERE cl.id IS NOT NULL),
+                         ARRAY[]::TEXT[]
+                 ) AS claims
+            FROM classifications c
+            LEFT JOIN claims cl ON cl.classification_id = c.id
+            WHERE c.job_id = :job_id AND c.id > :after_id {flagged_clause}
+            GROUP BY c.id
+            ORDER BY c.id ASC
             LIMIT :fetch
             """,
             {"job_id": job_id, "after_id": after_id, "fetch": limit + 1},
@@ -329,6 +349,16 @@ def mark_promotion_done(
                 "promotion_id": promotion_id,
                 "final_label": final_label,
             },
+        )
+
+
+def update_job_article_count(job_id: int, count: int) -> None:
+    """Update the article_count on a classification_jobs row."""
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE classification_jobs SET article_count = :count WHERE id = \
+            :job_id",
+            {"count": count, "job_id": job_id},
         )
 
 
