@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 _EMBED_BATCH_SIZE = 50
 _FETCH_PAGE_SIZE = 100
 _VECTOR_SIZE = 3072
+_CLAIM_VECTOR_SIZE = 1536
 _SCROLL_PAGE_SIZE = 256
 
 
@@ -37,6 +38,18 @@ def _news_retrieval_url() -> str:
 def _embedding_model() -> str:
     """Return the configured embedding model name."""
     return os.environ.get("EMBEDDING_MODEL", "openai/text-embedding-3-large")
+
+
+def _openrouter_model() -> str:
+    """Return the configured chat model name."""
+    return os.environ.get("OPENROUTER_MODEL", "openai/gpt-4o-mini")
+
+
+def _claim_embedding_model() -> str:
+    """Return the configured claim embedding model name."""
+    return os.environ.get(
+        "CLAIM_EMBEDDING_MODEL", "openai/text-embedding-3-small"
+    )
 
 
 def _openai_client() -> OpenAI:
@@ -148,6 +161,7 @@ def _embed_batch(
 def _ensure_collection(
     qdrant: QdrantClient,
     name: str,
+    size: int = _VECTOR_SIZE,
 ) -> None:
     """Create a Qdrant collection if it does not exist."""
     existing = {c.name for c in qdrant.get_collections().collections}
@@ -155,10 +169,86 @@ def _ensure_collection(
         qdrant.create_collection(
             collection_name=name,
             vectors_config=VectorParams(
-                size=_VECTOR_SIZE,
+                size=size,
                 distance=Distance.COSINE,
             ),
         )
+
+
+def _populate_claims(
+    articles: list[dict],
+    openai_client: OpenAI,
+    qdrant: QdrantClient,
+) -> None:
+    """Extract and embed claims for articles not yet in the claims collection.
+
+    Idempotent: articles whose article_qdrant_id already appears in the
+    claims collection payload are skipped. Extraction or embedding failures
+    are logged and skipped without aborting the overall bootstrap.
+    """
+    from controllers.classify import _extract_claims
+
+    _ensure_collection(qdrant, "claims", size=_CLAIM_VECTOR_SIZE)
+
+    existing_article_ids: set[str] = set()
+    scroll_offset = None
+    while True:
+        result, scroll_offset = qdrant.scroll(
+            collection_name="claims",
+            limit=_SCROLL_PAGE_SIZE,
+            with_payload=["article_qdrant_id"],
+            with_vectors=False,
+            offset=scroll_offset,
+        )
+        for point in result:
+            aid = point.payload.get("article_qdrant_id")
+            if aid:
+                existing_article_ids.add(str(aid))
+        if scroll_offset is None:
+            break
+
+    to_process = [
+        a for a in articles
+        if _url_to_point_id(a["url"]) not in existing_article_ids
+    ]
+    logger.info(
+        "%d articles already have claims; extracting claims for %d new",
+        len(articles) - len(to_process),
+        len(to_process),
+    )
+
+    chat_model = _openrouter_model()
+    claim_model = _claim_embedding_model()
+
+    for article in to_process:
+        url = article["url"]
+        body = article.get("body", "")
+        article_qdrant_id = _url_to_point_id(url)
+        try:
+            claims = _extract_claims(openai_client, chat_model, body)
+            if not claims:
+                continue
+            embeddings = _embed_batch(openai_client, claims, claim_model)
+            points = [
+                PointStruct(
+                    id=_url_to_point_id(claim_text),
+                    vector=emb,
+                    payload={
+                        "article_qdrant_id": article_qdrant_id,
+                        "article_url": url,
+                        "claim_text": claim_text,
+                    },
+                )
+                for claim_text, emb in zip(claims, embeddings)
+            ]
+            qdrant.upsert(collection_name="claims", points=points)
+            logger.info("Stored %d claims for %s", len(claims), url)
+        except Exception:
+            logger.warning(
+                "Claim extraction/embedding failed for %s; skipping",
+                url,
+                exc_info=True,
+            )
 
 
 def run_bootstrap(
@@ -231,6 +321,11 @@ def run_bootstrap(
             len(to_embed),
             remaining,
         )
+
+    logger.info(
+        "Extracting and embedding claims for bootstrapped articles..."
+    )
+    _populate_claims(articles, openai_client, qdrant)
 
     logger.info("Scrolling all vectors for clustering...")
     all_ids: list[str] = []

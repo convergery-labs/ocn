@@ -54,7 +54,7 @@ docker compose run --rm signal-detection python -m src bootstrap \
 
 ## Bootstrap CLI
 
-Seeds the Qdrant corpus before the service can classify articles. Idempotent — re-runs skip already-embedded documents.
+Seeds the Qdrant corpus before the service can classify articles. Idempotent — re-runs skip already-embedded documents and articles whose claims are already stored.
 
 ```bash
 docker compose run --rm signal-detection python -m src bootstrap \
@@ -69,7 +69,10 @@ docker compose run --rm signal-detection python -m src bootstrap \
 | `--days-back` | `180` | How many days of historical articles to fetch |
 | `--k` | `8` | Number of topic clusters (k-means k) |
 
-The command fetches completed runs from `news-retrieval`, embeds article bodies via OpenRouter (`text-embedding-3-large`, truncated to 30,000 characters), clusters with MiniBatchKMeans, and writes `topic_clusters` + `corpus_centroids` rows to Postgres with one Qdrant collection per cluster.
+The command:
+1. Fetches completed runs from `news-retrieval` and embeds article bodies via OpenRouter (`text-embedding-3-large`, truncated to 30,000 characters).
+2. Extracts 3–5 factual claims per article via LLM (`OPENROUTER_MODEL`) and stores claim embeddings in the Qdrant `claims` collection (`text-embedding-3-small`, 1536 dims). This seeds claim novelty scoring so the first classification run produces results across all three labels rather than defaulting to cold-start scores. Failures are logged and skipped without aborting bootstrap.
+3. Clusters article embeddings with MiniBatchKMeans and writes `topic_clusters` + `corpus_centroids` rows to Postgres with one Qdrant collection per cluster.
 
 ## Historical Ingest CLI
 
