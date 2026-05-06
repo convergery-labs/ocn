@@ -173,4 +173,4 @@ async def fetch_and_classify(
             _fire_callback(callback_url, job_id, "failed")
         return
 
-    await run_agent_loop(job_id, articles, callback_url)
+    await run_agent_loop(job_id, articles, callback_url, domain=request.domain)

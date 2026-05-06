@@ -37,6 +37,48 @@ def _mock_news_retrieval_not_found():
     )
 
 
+def _mock_domain_known(slug: str = "ai_news", run_status: int = 200):
+    """Patch httpx.AsyncClient so GET /domains returns a list containing slug.
+
+    run_status controls the status_code returned for all non-domain GET
+    requests (e.g. run_id validation). Default 200 (run exists).
+    """
+    domain_resp = MagicMock()
+    domain_resp.raise_for_status = MagicMock()
+    domain_resp.json = MagicMock(return_value=[{"slug": slug}])
+    run_resp = MagicMock()
+    run_resp.status_code = run_status
+
+    async def _get(url, **kwargs):
+        if "/domains" in url:
+            return domain_resp
+        return run_resp
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = _get
+    return patch(
+        "controllers.classify.httpx.AsyncClient",
+        return_value=mock_client,
+    )
+
+
+def _mock_domain_unknown():
+    """Patch httpx.AsyncClient so GET /domains returns an empty domain list."""
+    domain_resp = MagicMock()
+    domain_resp.raise_for_status = MagicMock()
+    domain_resp.json = MagicMock(return_value=[])
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(return_value=domain_resp)
+    return patch(
+        "controllers.classify.httpx.AsyncClient",
+        return_value=mock_client,
+    )
+
+
 class TestPostClassifyModeB:
     """Direct-article (Mode B) submission tests."""
 
@@ -44,11 +86,12 @@ class TestPostClassifyModeB:
         self, client: AsyncClient, user_key: str
     ) -> None:
         """Valid Mode B request returns 202 with job_id and status."""
-        resp = await client.post(
-            "/classify",
-            headers={"x-ocn-caller": user_key},
-            json={"articles": [_ARTICLE]},
-        )
+        with _mock_domain_known():
+            resp = await client.post(
+                "/classify",
+                headers={"x-ocn-caller": user_key},
+                json={"articles": [_ARTICLE], "domain": "ai_news"},
+            )
         assert resp.status_code == 202
         data = resp.json()
         assert "job_id" in data
@@ -60,7 +103,7 @@ class TestPostClassifyModeB:
         """Missing x-ocn-caller header returns 401."""
         resp = await client.post(
             "/classify",
-            json={"articles": [_ARTICLE]},
+            json={"articles": [_ARTICLE], "domain": "ai_news"},
         )
         assert resp.status_code == 401
 
@@ -71,7 +114,7 @@ class TestPostClassifyModeB:
         resp = await client.post(
             "/classify",
             headers={"x-ocn-caller": "not-valid-base64!!!"},
-            json={"articles": [_ARTICLE]},
+            json={"articles": [_ARTICLE], "domain": "ai_news"},
         )
         assert resp.status_code == 401
 
@@ -90,11 +133,11 @@ class TestPostClassifyModeB:
         self, client: AsyncClient, user_key: str
     ) -> None:
         """Request with both run_id and articles returns 422."""
-        with _mock_news_retrieval_ok():
+        with _mock_domain_known():
             resp = await client.post(
                 "/classify",
                 headers={"x-ocn-caller": user_key},
-                json={"run_id": 1, "articles": [_ARTICLE]},
+                json={"run_id": 1, "articles": [_ARTICLE], "domain": "ai_news"},
             )
         assert resp.status_code == 422
 
@@ -106,11 +149,11 @@ class TestPostClassifyModeA:
         self, client: AsyncClient, user_key: str
     ) -> None:
         """Valid run_id that exists in news-retrieval returns 202."""
-        with _mock_news_retrieval_ok():
+        with _mock_domain_known():
             resp = await client.post(
                 "/classify",
                 headers={"x-ocn-caller": user_key},
-                json={"run_id": 42},
+                json={"run_id": 42, "domain": "ai_news"},
             )
         assert resp.status_code == 202
         data = resp.json()
@@ -120,11 +163,11 @@ class TestPostClassifyModeA:
         self, client: AsyncClient, user_key: str
     ) -> None:
         """run_id not found in news-retrieval returns 404."""
-        with _mock_news_retrieval_not_found():
+        with _mock_domain_known(run_status=404):
             resp = await client.post(
                 "/classify",
                 headers={"x-ocn-caller": user_key},
-                json={"run_id": 999},
+                json={"run_id": 999, "domain": "ai_news"},
             )
         assert resp.status_code == 404
 
@@ -137,12 +180,13 @@ class TestPostClassifyModeA:
             status="processing",
             callback_url=None,
             article_count=0,
-        )
-        with _mock_news_retrieval_ok():
+            domain="ai_news",
+        )  # pre-existing job to trigger 409
+        with _mock_domain_known():
             resp = await client.post(
                 "/classify",
                 headers={"x-ocn-caller": user_key},
-                json={"run_id": 77},
+                json={"run_id": 77, "domain": "ai_news"},
             )
         assert resp.status_code == 409
 
@@ -169,6 +213,7 @@ class TestGetClassification:
             status="processing",
             callback_url=None,
             article_count=5,
+            domain="ai_news",
         )
         resp = await client.get(
             f"/classifications/{job['id']}",
@@ -211,6 +256,7 @@ class TestGetClassificationResults:
             status="completed",
             callback_url=None,
             article_count=0,
+            domain="ai_news",
         )
         resp = await client.get(
             f"/classifications/{job['id']}/results",
@@ -230,6 +276,7 @@ class TestGetClassificationResults:
             status="completed",
             callback_url=None,
             article_count=0,
+            domain="ai_news",
         )
         resp = await client.get(
             f"/classifications/{job['id']}/results?limit=200",
@@ -246,6 +293,7 @@ class TestGetClassificationResults:
             status="completed",
             callback_url=None,
             article_count=0,
+            domain="ai_news",
         )
         resp = await client.get(
             f"/classifications/{job['id']}/results?cursor=notbase64!!!",
@@ -369,6 +417,7 @@ class TestDeferredCorpusGuard:
             status="processing",
             callback_url=None,
             article_count=1,
+            domain="ai_news",
         )
         qdrant = MagicMock()
         self._run_scoring(
@@ -392,6 +441,7 @@ class TestDeferredCorpusGuard:
             status="processing",
             callback_url=None,
             article_count=1,
+            domain="ai_news",
         )
         qdrant = MagicMock()
         self._run_scoring(
@@ -418,6 +468,7 @@ class TestDeferredCorpusGuard:
             status="processing",
             callback_url=None,
             article_count=1,
+            domain="ai_news",
         )
         qdrant = MagicMock()
         self._run_scoring(
@@ -440,6 +491,7 @@ class TestDeferredCorpusGuard:
             status="processing",
             callback_url=None,
             article_count=1,
+            domain="ai_news",
         )
         qdrant = MagicMock()
         self._run_scoring(
@@ -474,6 +526,7 @@ class TestFlaggedFilter:
             status="completed",
             callback_url=None,
             article_count=2,
+            domain="ai_news",
         )
         job_id = job["id"]
 
@@ -544,6 +597,7 @@ class TestFlaggedFilter:
             status="completed",
             callback_url=None,
             article_count=2,
+            domain="ai_news",
         )
         job_id = job["id"]
 
@@ -583,3 +637,59 @@ class TestFlaggedFilter:
         assert resp.status_code == 200
         data = resp.json()
         assert len(data["results"]) == 2
+
+
+# ---------------------------------------------------------------------------
+# Domain validation (CON-197)
+# ---------------------------------------------------------------------------
+
+
+class TestDomainValidation:
+    """Unknown domain slugs are rejected before a job is created."""
+
+    async def test_422_unknown_domain_on_classify(
+        self, client: AsyncClient, user_key: str
+    ) -> None:
+        """POST /classify with an unregistered domain returns 422."""
+        with _mock_domain_unknown():
+            resp = await client.post(
+                "/classify",
+                headers={"x-ocn-caller": user_key},
+                json={"articles": [_ARTICLE], "domain": "nonexistent_domain"},
+            )
+        assert resp.status_code == 422
+        assert "nonexistent_domain" in resp.json()["detail"]
+
+    async def test_422_unknown_domain_on_run(
+        self, client: AsyncClient, user_key: str
+    ) -> None:
+        """POST /run with an unregistered domain returns 422."""
+        with _mock_domain_unknown():
+            resp = await client.post(
+                "/run",
+                headers={"x-ocn-caller": user_key},
+                json={"domain": "nonexistent_domain", "days_back": 1},
+            )
+        assert resp.status_code == 422
+        assert "nonexistent_domain" in resp.json()["detail"]
+
+    async def test_no_job_created_on_invalid_domain(
+        self, client: AsyncClient, user_key: str
+    ) -> None:
+        """No classification_jobs row is inserted when domain validation fails."""
+        from db import get_db
+
+        with _mock_domain_unknown():
+            await client.post(
+                "/classify",
+                headers={"x-ocn-caller": user_key},
+                json={"articles": [_ARTICLE], "domain": "nonexistent_domain"},
+            )
+
+        with get_db() as conn:
+            count = conn.execute(
+                "SELECT COUNT(*) AS n FROM classification_jobs"
+                " WHERE run_id NOT IN (SELECT run_id FROM classification_jobs"
+                " WHERE domain = 'ai_news')"
+            ).fetchone()["n"]
+        assert count == 0

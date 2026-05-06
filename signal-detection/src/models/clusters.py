@@ -8,6 +8,7 @@ def upsert_topic_cluster(
     name: str,
     slug: str,
     collection: str,
+    domain: str = "",
     alpha: float = 0.15,
 ) -> int:
     """Insert or update a topic_clusters row; return its id."""
@@ -15,11 +16,12 @@ def upsert_topic_cluster(
         row = conn.execute(
             """
             INSERT INTO topic_clusters
-                (name, slug, centroid_qdrant_collection, alpha)
-            VALUES (:name, :slug, :collection, :alpha)
+                (name, slug, centroid_qdrant_collection, domain, alpha)
+            VALUES (:name, :slug, :collection, :domain, :alpha)
             ON CONFLICT (slug) DO UPDATE SET
                 name = EXCLUDED.name,
                 centroid_qdrant_collection = EXCLUDED.centroid_qdrant_collection,
+                domain = EXCLUDED.domain,
                 alpha = EXCLUDED.alpha
             RETURNING id
             """,
@@ -27,6 +29,7 @@ def upsert_topic_cluster(
                 "name": name,
                 "slug": slug,
                 "collection": collection,
+                "domain": domain,
                 "alpha": alpha,
             },
         ).fetchone()
@@ -145,7 +148,7 @@ def upsert_corpus_centroid(
 
 
 def get_clusters_for_domain(domain: str) -> list[dict]:
-    """Return topic_clusters with centroid_vectors for a domain prefix.
+    """Return topic_clusters with centroid_vectors for a domain.
 
     Returns an empty list if no bootstrap has been run for the domain.
     """
@@ -155,8 +158,8 @@ def get_clusters_for_domain(domain: str) -> list[dict]:
             SELECT tc.id AS cluster_id, tc.slug, cc.centroid_vector
             FROM topic_clusters tc
             JOIN corpus_centroids cc ON cc.cluster_id = tc.id
-            WHERE tc.slug LIKE :prefix
+            WHERE tc.domain = :domain
             """,
-            {"prefix": f"{domain}-%"},
+            {"domain": domain},
         ).fetchall()
     return [dict(r) for r in rows]

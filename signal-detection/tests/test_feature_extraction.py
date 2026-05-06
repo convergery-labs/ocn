@@ -212,18 +212,23 @@ class TestRunFeatureExtraction:
             status="processing",
             callback_url=None,
             article_count=3,
+            domain="ai_news",
         )
 
     @pytest.mark.asyncio
     async def test_article_upserted_to_qdrant(self, job) -> None:
-        """Article embedding is upserted to the 'articles' Qdrant collection."""
+        """Article embedding is upserted to the 'articles' Qdrant collection.
+
+        The Qdrant payload 'domain' field must reflect the domain slug passed
+        to _run_feature_extraction, not the article's RSS source field.
+        """
         qdrant = _mock_qdrant()
         oai = _mock_openai()
         with (
             patch("controllers.classify.QdrantClient", return_value=qdrant),
             patch("controllers.classify.OpenAI", return_value=oai),
         ):
-            await _run_feature_extraction(job["id"], [_ARTICLE_EN])
+            await _run_feature_extraction(job["id"], [_ARTICLE_EN], domain="ai_news")
 
         upsert_calls = [
             c for c in qdrant.upsert.call_args_list
@@ -238,7 +243,7 @@ class TestRunFeatureExtraction:
         assert len(points) == 1
         payload = points[0].payload
         assert payload["url"] == _ARTICLE_EN["url"]
-        assert payload["domain"] == _ARTICLE_EN["source"]
+        assert payload["domain"] == "ai_news"
         assert payload["published_date"] == _ARTICLE_EN["published"]
         assert payload["label"] is None
 
@@ -252,7 +257,7 @@ class TestRunFeatureExtraction:
             patch("controllers.classify.OpenAI", return_value=oai),
         ):
             await _run_feature_extraction(
-                job["id"], [_ARTICLE_EN, _ARTICLE_DUP]
+                job["id"], [_ARTICLE_EN, _ARTICLE_DUP], domain="ai_news"
             )
 
         article_upsert_calls = [
@@ -277,7 +282,7 @@ class TestRunFeatureExtraction:
             patch("controllers.classify.OpenAI", return_value=oai),
         ):
             await _run_feature_extraction(
-                job["id"], [_ARTICLE_FR]
+                job["id"], [_ARTICLE_FR], domain="ai_news"
             )
 
         qdrant.upsert.assert_not_called()
@@ -291,7 +296,7 @@ class TestRunFeatureExtraction:
             patch("controllers.classify.QdrantClient", return_value=qdrant),
             patch("controllers.classify.OpenAI", return_value=oai),
         ):
-            await _run_feature_extraction(job["id"], [_ARTICLE_EN])
+            await _run_feature_extraction(job["id"], [_ARTICLE_EN], domain="ai_news")
 
         claim_upsert_calls = [
             c for c in qdrant.upsert.call_args_list
@@ -319,7 +324,7 @@ class TestRunFeatureExtraction:
             patch("controllers.classify.QdrantClient", return_value=qdrant),
             patch("controllers.classify.OpenAI", return_value=oai),
         ):
-            await _run_feature_extraction(job["id"], [_ARTICLE_EN])
+            await _run_feature_extraction(job["id"], [_ARTICLE_EN], domain="ai_news")
 
         with get_db() as conn:
             rows = conn.execute(
@@ -347,7 +352,7 @@ class TestRunFeatureExtraction:
             patch("controllers.classify.QdrantClient", return_value=qdrant),
             patch("controllers.classify.OpenAI", return_value=oai),
         ):
-            await _run_feature_extraction(job["id"], [_ARTICLE_EN])
+            await _run_feature_extraction(job["id"], [_ARTICLE_EN], domain="ai_news")
 
         with get_db() as conn:
             rows = conn.execute(
@@ -374,7 +379,7 @@ class TestRunFeatureExtraction:
             patch.dict(os.environ, {"LANGFUSE_PUBLIC_KEY": "test-key"}),
             patch("langfuse.Langfuse", mock_lf_class),
         ):
-            await _run_feature_extraction(job["id"], [_ARTICLE_EN])
+            await _run_feature_extraction(job["id"], [_ARTICLE_EN], domain="ai_news")
 
         mock_lf_instance.start_as_current_observation.assert_called_once()
         call_kwargs = mock_lf_instance.start_as_current_observation.call_args
@@ -393,6 +398,6 @@ class TestRunFeatureExtraction:
             patch.dict(os.environ, env, clear=True),
             patch("langfuse.Langfuse", mock_lf_class),
         ):
-            await _run_feature_extraction(job["id"], [_ARTICLE_EN])
+            await _run_feature_extraction(job["id"], [_ARTICLE_EN], domain="ai_news")
 
         mock_lf_class.assert_not_called()

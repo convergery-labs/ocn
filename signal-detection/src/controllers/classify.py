@@ -95,11 +95,40 @@ class DuplicateJobError(Exception):
     """Raised when a processing job for run_id already exists."""
 
 
+class DomainNotFoundError(Exception):
+    """Raised when the domain slug is not registered in news-retrieval."""
+
+
 def _news_retrieval_url() -> str:
     """Return the news-retrieval base URL from env."""
     return os.environ.get(
         "NEWS_RETRIEVAL_URL", "http://news-retrieval:8000"
     )
+
+
+async def validate_domain(domain: str) -> None:
+    """Confirm domain slug is registered in news-retrieval.
+
+    Raises:
+        DomainNotFoundError: if the slug is absent from GET /domains or
+            news-retrieval is unreachable.
+    """
+    url = f"{_news_retrieval_url()}/domains"
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise DomainNotFoundError(
+            f"news-retrieval unreachable while validating domain: {exc}"
+        ) from exc
+    slugs = {d.get("slug") for d in resp.json()}
+    if domain not in slugs:
+        raise DomainNotFoundError(
+            f"Domain '{domain}' is not registered in news-retrieval. "
+            f"Classification cannot proceed: there is no corpus to compare "
+            f"articles against."
+        )
 
 
 async def validate_run_id(run_id: int) -> None:
@@ -127,6 +156,7 @@ async def submit_classify_job(
     run_id: str | None,
     articles: list[dict],
     callback_url: str | None,
+    domain: str,
 ) -> JobRow:
     """Validate, create a job record, and return it.
 
@@ -153,6 +183,7 @@ async def submit_classify_job(
         status="processing",
         callback_url=callback_url,
         article_count=len(articles),
+        domain=domain,
     )
     return job
 
@@ -161,6 +192,7 @@ async def run_agent_loop(
     job_id: int,
     articles: list[dict],
     callback_url: str | None,
+    domain: str,
 ) -> None:
     """Agent loop: feature extraction → scoring → label assignment.
 
@@ -171,8 +203,8 @@ async def run_agent_loop(
     status = "completed"
     try:
         qdrant = _qdrant_client()
-        await _run_feature_extraction(job_id, articles)
-        await _run_scoring_phase(job_id, qdrant, articles)
+        await _run_feature_extraction(job_id, articles, domain)
+        await _run_scoring_phase(job_id, qdrant, articles, domain)
         update_job_status(job_id, "completed", set_completed_at=True)
     except Exception:
         logger.exception("Agent loop failed for job %d", job_id)
@@ -191,6 +223,7 @@ async def _run_scoring_phase(
     job_id: int,
     qdrant: QdrantClient,
     articles: list[dict],
+    domain: str,
 ) -> None:
     """Score every classification in job_id and write results to DB.
 
@@ -241,7 +274,7 @@ async def _run_scoring_phase(
             claim_ids = row["claim_ids"] or []
             article_qdrant_id = _url_to_point_id(article_url)
 
-            clusters = get_clusters_for_domain(source)
+            clusters = get_clusters_for_domain(domain)
             cluster_id, traj_score, low_conf = _assign_cluster(
                 embedding, clusters
             )
@@ -429,6 +462,7 @@ async def _embed_and_store(
 async def _run_feature_extraction(
     job_id: int,
     articles: list[dict],
+    domain: str,
 ) -> None:
     """Execute dedup → lang-filter → embed → claim extract → store.
 
@@ -519,7 +553,7 @@ async def _run_feature_extraction(
                 vector=emb,
                 payload={
                     "url": a.get("url", ""),
-                    "domain": a.get("source", ""),
+                    "domain": domain,
                     "published_date": a.get("published", ""),
                     "label": None,
                 },

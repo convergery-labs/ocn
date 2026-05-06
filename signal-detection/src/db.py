@@ -194,3 +194,16 @@ def init_db() -> None:
             "ALTER TABLE classifications"
             " ADD COLUMN IF NOT EXISTS article_published TEXT"
         )
+        conn.execute(
+            "ALTER TABLE topic_clusters"
+            " ADD COLUMN IF NOT EXISTS domain TEXT"
+        )
+        conn.execute(
+            "UPDATE topic_clusters"
+            " SET domain = regexp_replace(slug, '-[0-9]+$', '')"
+            " WHERE domain IS NULL"
+        )
+        conn.execute(
+            "ALTER TABLE classification_jobs"
+            " ADD COLUMN IF NOT EXISTS domain TEXT"
+        )

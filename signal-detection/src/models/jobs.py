@@ -30,14 +30,15 @@ def create_job(
     status: str,
     callback_url: str | None,
     article_count: int,
+    domain: str,
 ) -> JobRow:
     """Insert a classification_jobs row and return it."""
     with get_db() as conn:
         row = conn.execute(
             """
             INSERT INTO classification_jobs
-                (run_id, status, callback_url, article_count)
-            VALUES (:run_id, :status, :callback_url, :article_count)
+                (run_id, status, callback_url, article_count, domain)
+            VALUES (:run_id, :status, :callback_url, :article_count, :domain)
             RETURNING *
             """,
             {
@@ -45,6 +46,7 @@ def create_job(
                 "status": status,
                 "callback_url": callback_url,
                 "article_count": article_count,
+                "domain": domain,
             },
         ).fetchone()
     return JobRow(row)
