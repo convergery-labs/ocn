@@ -69,8 +69,9 @@ Invoked via `python -m src bootstrap --domain <slug> [--days-back 180] [--k 8]`.
 
 1. **Fetch** — paginates `GET /runs?domain=<slug>&status=completed` then `GET /runs/{id}/articles` from `news-retrieval`; deduplicates by URL; skips articles with no body.
 2. **Embed** — batches of 50 articles sent to OpenRouter (`openai/text-embedding-3-large`, 3072 dimensions). Bodies are truncated to 30,000 characters to stay within the model's 8,191-token limit. Point IDs are deterministic `uuid5(NAMESPACE_URL, url)` so re-runs skip already-embedded documents.
-3. **Cluster** — all vectors scrolled from Qdrant; `MiniBatchKMeans(n_clusters=k)` run locally.
-4. **Persist** — one Qdrant collection per cluster (`corpus_{domain}_{i}`); `topic_clusters` and `corpus_centroids` rows upserted to Postgres.
+3. **Claims** — for each article not already represented in the `claims` Qdrant collection (checked via `article_qdrant_id` payload), extracts 3–5 factual claims via LLM (`OPENROUTER_MODEL`) and embeds them with `CLAIM_EMBEDDING_MODEL` (`openai/text-embedding-3-small`, 1536 dims). Upserts to the shared `claims` collection (same collection used by live classification). Idempotent: re-runs skip articles whose claims are already stored. Failures are logged and skipped without aborting bootstrap.
+4. **Cluster** — all vectors scrolled from Qdrant; `MiniBatchKMeans(n_clusters=k)` run locally.
+5. **Persist** — one Qdrant collection per cluster (`corpus_{domain}_{i}`); `topic_clusters` and `corpus_centroids` rows upserted to Postgres.
 
 ## Agent Loop (Classification Pipeline)
 

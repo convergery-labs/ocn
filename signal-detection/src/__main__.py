@@ -46,7 +46,13 @@ def serve(host: str, port: int) -> None:
     help="Number of topic clusters (k-means k).",
 )
 def bootstrap(domain: str, days_back: int, k: int) -> None:
-    """Embed and cluster historical articles to seed the corpus."""
+    """Seed the corpus from historical articles.
+
+    Fetches articles from news-retrieval, embeds them, extracts and stores
+    claims in Qdrant, then clusters embeddings into topic groups.
+    Idempotent: already-embedded articles and already-stored claims are
+    skipped on re-runs.
+    """
     from controllers.bootstrap import run_bootstrap
 
     logger.info("Initialising database...")

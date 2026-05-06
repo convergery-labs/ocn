@@ -1042,6 +1042,12 @@ def _extract_claims(
             messages=[{"role": "user", "content": prompt}],
         )
         raw = response.choices[0].message.content or ""
+        raw = raw.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```", 2)[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+            raw = raw.strip()
         claims = json.loads(raw)
         if not isinstance(claims, list):
             raise ValueError("LLM did not return a JSON array")
