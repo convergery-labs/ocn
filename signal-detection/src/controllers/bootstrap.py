@@ -179,6 +179,7 @@ def _populate_claims(
     articles: list[dict],
     openai_client: OpenAI,
     qdrant: QdrantClient,
+    domain: str,
 ) -> None:
     """Extract and embed claims for articles not yet in the claims collection.
 
@@ -237,6 +238,7 @@ def _populate_claims(
                         "article_qdrant_id": article_qdrant_id,
                         "article_url": url,
                         "claim_text": claim_text,
+                        "domain": domain,
                     },
                 )
                 for claim_text, emb in zip(claims, embeddings)
@@ -325,7 +327,7 @@ def run_bootstrap(
     logger.info(
         "Extracting and embedding claims for bootstrapped articles..."
     )
-    _populate_claims(articles, openai_client, qdrant)
+    _populate_claims(articles, openai_client, qdrant, domain)
 
     logger.info("Scrolling all vectors for clustering...")
     all_ids: list[str] = []

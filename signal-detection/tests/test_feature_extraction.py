@@ -314,6 +314,7 @@ class TestRunFeatureExtraction:
         )
         for point in points:
             assert point.payload["article_qdrant_id"] == expected_article_qdrant_id
+            assert point.payload["domain"] == "ai_news"
 
     @pytest.mark.asyncio
     async def test_claims_stored_in_postgres(self, job) -> None:

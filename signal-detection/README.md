@@ -71,7 +71,7 @@ docker compose run --rm signal-detection python -m src bootstrap \
 
 The command:
 1. Fetches completed runs from `news-retrieval` and embeds article bodies via OpenRouter (`text-embedding-3-large`, truncated to 30,000 characters).
-2. Extracts 3–5 factual claims per article via LLM (`OPENROUTER_MODEL`) and stores claim embeddings in the Qdrant `claims` collection (`text-embedding-3-small`, 1536 dims). This seeds claim novelty scoring so the first classification run produces results across all three labels rather than defaulting to cold-start scores. Failures are logged and skipped without aborting bootstrap.
+2. Extracts 3–5 factual claims per article via LLM (`OPENROUTER_MODEL`) and stores claim embeddings in the Qdrant `claims` collection (`text-embedding-3-small`, 1536 dims) with the bootstrap `domain` in the payload. This seeds domain-scoped claim novelty scoring so the first classification run produces results across all three labels rather than defaulting to cold-start scores. Failures are logged and skipped without aborting bootstrap.
 3. Clusters article embeddings with MiniBatchKMeans and writes `topic_clusters` + `corpus_centroids` rows to Postgres with one Qdrant collection per cluster.
 
 ## Historical Ingest CLI
@@ -234,8 +234,9 @@ pipeline that extracts named entities and noun chunks, maps them against
 array on the `classifications` row, and feeds the bridge score (Sub-score B).
 
 **Bridge score (Sub-score B):** After concept extraction, all canonical concept
-pairs are upserted into the `concept_cooccurrences` Postgres table. The bridge
-score rewards articles that connect rarely co-occurring concept pairs:
+pairs are upserted into the `concept_cooccurrences` Postgres table scoped to the
+article's domain. The bridge score rewards articles that connect rarely
+co-occurring concept pairs within that domain:
 `mean(1 / (1 + log(1 + count)))` across all pairs. When ≥ 2 concepts are
 present the composite formula switches to Phase 4 weights
 (`0.25 * A + 0.30 * B + 0.45 * C`); articles with fewer than 2 concepts fall

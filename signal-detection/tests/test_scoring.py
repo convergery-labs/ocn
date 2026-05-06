@@ -114,7 +114,7 @@ class TestComputeClaimNovelty:
     def test_empty_claim_ids_returns_cold_start(self) -> None:
         """No claims → cold-start score returned without Qdrant call."""
         qdrant = MagicMock()
-        score = _compute_claim_novelty([], "article-id", qdrant)
+        score = _compute_claim_novelty([], "article-id", qdrant, "ai_news")
         qdrant.retrieve.assert_not_called()
         assert score == pytest.approx(0.5)
 
@@ -123,7 +123,7 @@ class TestComputeClaimNovelty:
         qdrant = MagicMock()
         qdrant.retrieve.side_effect = RuntimeError("qdrant down")
         score = _compute_claim_novelty(
-            ["claim-1"], "article-id", qdrant
+            ["claim-1"], "article-id", qdrant, "ai_news"
         )
         assert score == pytest.approx(0.5)
 
@@ -135,7 +135,7 @@ class TestComputeClaimNovelty:
         qdrant.retrieve.return_value = [point]
         qdrant.query_points.return_value = MagicMock(points=[])
         score = _compute_claim_novelty(
-            ["claim-1"], "article-id", qdrant
+            ["claim-1"], "article-id", qdrant, "ai_news"
         )
         assert score == pytest.approx(0.5)
 
@@ -153,7 +153,7 @@ class TestComputeClaimNovelty:
         qdrant.query_points.return_value = MagicMock(points=[nn1, nn2])
 
         score = _compute_claim_novelty(
-            ["claim-1"], "article-id", qdrant
+            ["claim-1"], "article-id", qdrant, "ai_news"
         )
         # distances = [0.2, 0.4]; mean = 0.3
         assert score == pytest.approx(0.3, abs=1e-5)
@@ -168,7 +168,7 @@ class TestComputeClaimNovelty:
         qdrant.retrieve.return_value = [point]
         qdrant.query_points.return_value = MagicMock(points=[])
 
-        _compute_claim_novelty(["c1"], "my-article-id", qdrant)
+        _compute_claim_novelty(["c1"], "my-article-id", qdrant, "ai_news")
 
         _, kwargs = qdrant.query_points.call_args
         q_filter = kwargs.get("query_filter")
@@ -181,6 +181,62 @@ class TestComputeClaimNovelty:
         }
         assert "article_qdrant_id" in keys
         assert "deferred" in keys
+
+
+# ---------------------------------------------------------------------------
+# _compute_claim_novelty — domain scoping
+# ---------------------------------------------------------------------------
+
+
+class TestDomainScopedClaimNovelty:
+    """_compute_claim_novelty filters Qdrant search by domain."""
+
+    def test_domain_filter_included_in_must(self) -> None:
+        """Filter must list includes a domain condition matching the slug."""
+        from qdrant_client.models import FieldCondition, Filter
+
+        qdrant = MagicMock()
+        point = MagicMock()
+        point.vector = [1.0, 0.0]
+        qdrant.retrieve.return_value = [point]
+        qdrant.query_points.return_value = MagicMock(points=[])
+
+        _compute_claim_novelty(["c1"], "article-id", qdrant, "ai_news")
+
+        _, kwargs = qdrant.query_points.call_args
+        q_filter = kwargs.get("query_filter")
+        assert isinstance(q_filter, Filter)
+        assert q_filter.must is not None
+        must_keys = {
+            c.key
+            for c in q_filter.must
+            if isinstance(c, FieldCondition)
+        }
+        assert "domain" in must_keys
+
+    def test_different_domain_filter_respected(self) -> None:
+        """Domain slug in filter matches the slug passed to the function."""
+        from qdrant_client.models import FieldCondition, Filter
+
+        qdrant = MagicMock()
+        point = MagicMock()
+        point.vector = [1.0, 0.0]
+        qdrant.retrieve.return_value = [point]
+        qdrant.query_points.return_value = MagicMock(points=[])
+
+        _compute_claim_novelty(
+            ["c1"], "article-id", qdrant, "biotech_research"
+        )
+
+        _, kwargs = qdrant.query_points.call_args
+        q_filter = kwargs.get("query_filter")
+        assert isinstance(q_filter, Filter)
+        domain_conditions = [
+            c for c in q_filter.must
+            if isinstance(c, FieldCondition) and c.key == "domain"
+        ]
+        assert len(domain_conditions) == 1
+        assert domain_conditions[0].match.value == "biotech_research"
 
 
 # ---------------------------------------------------------------------------
@@ -567,3 +623,56 @@ class TestDomainClusterLookup:
             )
 
         assert "SiliconANGLE" not in captured
+
+
+# ---------------------------------------------------------------------------
+# Domain-scoped co-occurrence repository
+# ---------------------------------------------------------------------------
+
+
+class TestDomainScopedCooccurrences:
+    """upsert_cooccurrences and get_cooccurrence_counts are domain-scoped."""
+
+    def test_upsert_cooccurrences_passes_domain(self) -> None:
+        """Domain slug is included in the INSERT params."""
+        from unittest.mock import patch
+
+        from models.cooccurrences import upsert_cooccurrences
+
+        conn_mock = MagicMock()
+        with patch("models.cooccurrences.get_db") as mock_get_db:
+            mock_get_db.return_value.__enter__ = MagicMock(
+                return_value=conn_mock
+            )
+            mock_get_db.return_value.__exit__ = MagicMock(
+                return_value=False
+            )
+            upsert_cooccurrences(["ai", "biotech"], "ai_news")
+
+        assert conn_mock.execute.called
+        # call_args[0] is the positional args tuple: (sql, params_dict)
+        params = conn_mock.execute.call_args[0][1]
+        assert params.get("domain") == "ai_news"
+
+    def test_get_cooccurrence_counts_filters_by_domain(self) -> None:
+        """Domain slug is added to the WHERE clause params."""
+        from unittest.mock import patch
+
+        from models.cooccurrences import get_cooccurrence_counts
+
+        conn_mock = MagicMock()
+        conn_mock.execute.return_value.fetchall.return_value = []
+        with patch("models.cooccurrences.get_db") as mock_get_db:
+            mock_get_db.return_value.__enter__ = MagicMock(
+                return_value=conn_mock
+            )
+            mock_get_db.return_value.__exit__ = MagicMock(
+                return_value=False
+            )
+            get_cooccurrence_counts(
+                [("ai", "biotech")], "biotech_research"
+            )
+
+        assert conn_mock.execute.called
+        params = conn_mock.execute.call_args[0][1]
+        assert params.get("domain") == "biotech_research"

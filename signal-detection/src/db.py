@@ -159,9 +159,10 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS concept_cooccurrences (
                 concept_a           TEXT NOT NULL,
                 concept_b           TEXT NOT NULL,
+                domain              TEXT NOT NULL DEFAULT '',
                 co_occurrence_count INTEGER NOT NULL DEFAULT 1,
                 last_updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-                PRIMARY KEY (concept_a, concept_b),
+                PRIMARY KEY (concept_a, concept_b, domain),
                 CHECK (concept_a < concept_b)
             )
         """)
@@ -206,4 +207,34 @@ def init_db() -> None:
         conn.execute(
             "ALTER TABLE classification_jobs"
             " ADD COLUMN IF NOT EXISTS domain TEXT"
+        )
+        conn.execute(
+            "ALTER TABLE concept_cooccurrences"
+            " ADD COLUMN IF NOT EXISTS domain TEXT NOT NULL DEFAULT ''"
+        )
+        conn.execute(
+            """
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.table_constraints
+                    WHERE constraint_name =
+                        'concept_cooccurrences_pkey'
+                      AND constraint_type = 'PRIMARY KEY'
+                ) AND NOT EXISTS (
+                    SELECT 1 FROM
+                        information_schema.key_column_usage
+                    WHERE constraint_name =
+                        'concept_cooccurrences_pkey'
+                      AND column_name = 'domain'
+                ) THEN
+                    ALTER TABLE concept_cooccurrences
+                        DROP CONSTRAINT
+                            concept_cooccurrences_pkey;
+                    ALTER TABLE concept_cooccurrences
+                        ADD PRIMARY KEY
+                            (concept_a, concept_b, domain);
+                END IF;
+            END $$
+            """
         )
