@@ -316,8 +316,8 @@ class TestCooccurrenceUpsert:
         from models.cooccurrences import upsert_cooccurrences
 
         concepts = ["ai", "biotech"]
-        upsert_cooccurrences(concepts)
-        upsert_cooccurrences(concepts)
+        upsert_cooccurrences(concepts, "ai_news")
+        upsert_cooccurrences(concepts, "ai_news")
 
         with get_db() as conn:
             row = conn.execute(
@@ -337,7 +337,7 @@ class TestCooccurrenceUpsert:
         from db import get_db
         from models.cooccurrences import upsert_cooccurrences
 
-        upsert_cooccurrences(["solo-concept"])
+        upsert_cooccurrences(["solo-concept"], "ai_news")
 
         with get_db() as conn:
             row = conn.execute(
@@ -401,7 +401,7 @@ class TestDeferredCorpusGuard:
         )
 
         if label_override != "Signal":
-            upsert_cooccurrences(concepts)
+            upsert_cooccurrences(concepts, "ai_news")
         else:
             _defer_claims_in_qdrant(qdrant, ["claim-uuid-1"])
 

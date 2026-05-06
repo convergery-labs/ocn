@@ -3,6 +3,7 @@ import logging
 import os
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
 from typing import Iterator
 
@@ -175,6 +176,55 @@ def _ensure_collection(
         )
 
 
+_CLAIM_POPULATE_CONCURRENCY = 10
+
+
+def _process_article_claims(
+    article: dict,
+    domain: str,
+    openai_client: OpenAI,
+    qdrant: QdrantClient,
+    chat_model: str,
+    claim_model: str,
+) -> None:
+    """Extract, embed, and upsert claims for a single article.
+
+    Failures are logged and swallowed so one bad article does not abort
+    the concurrent batch.
+    """
+    from controllers.classify import _extract_claims
+
+    url = article["url"]
+    body = article.get("body", "")
+    article_qdrant_id = _url_to_point_id(url)
+    try:
+        claims = _extract_claims(openai_client, chat_model, body)
+        if not claims:
+            return
+        embeddings = _embed_batch(openai_client, claims, claim_model)
+        points = [
+            PointStruct(
+                id=_url_to_point_id(claim_text),
+                vector=emb,
+                payload={
+                    "article_qdrant_id": article_qdrant_id,
+                    "article_url": url,
+                    "claim_text": claim_text,
+                    "domain": domain,
+                },
+            )
+            for claim_text, emb in zip(claims, embeddings)
+        ]
+        qdrant.upsert(collection_name="claims", points=points)
+        logger.info("Stored %d claims for %s", len(claims), url)
+    except Exception:
+        logger.warning(
+            "Claim extraction/embedding failed for %s; skipping",
+            url,
+            exc_info=True,
+        )
+
+
 def _populate_claims(
     articles: list[dict],
     openai_client: OpenAI,
@@ -183,12 +233,11 @@ def _populate_claims(
 ) -> None:
     """Extract and embed claims for articles not yet in the claims collection.
 
+    Processes up to _CLAIM_POPULATE_CONCURRENCY articles concurrently.
     Idempotent: articles whose article_qdrant_id already appears in the
     claims collection payload are skipped. Extraction or embedding failures
     are logged and skipped without aborting the overall bootstrap.
     """
-    from controllers.classify import _extract_claims
-
     _ensure_collection(qdrant, "claims", size=_CLAIM_VECTOR_SIZE)
 
     existing_article_ids: set[str] = set()
@@ -221,36 +270,30 @@ def _populate_claims(
     chat_model = _openrouter_model()
     claim_model = _claim_embedding_model()
 
-    for article in to_process:
-        url = article["url"]
-        body = article.get("body", "")
-        article_qdrant_id = _url_to_point_id(url)
-        try:
-            claims = _extract_claims(openai_client, chat_model, body)
-            if not claims:
-                continue
-            embeddings = _embed_batch(openai_client, claims, claim_model)
-            points = [
-                PointStruct(
-                    id=_url_to_point_id(claim_text),
-                    vector=emb,
-                    payload={
-                        "article_qdrant_id": article_qdrant_id,
-                        "article_url": url,
-                        "claim_text": claim_text,
-                        "domain": domain,
-                    },
+    with ThreadPoolExecutor(
+        max_workers=_CLAIM_POPULATE_CONCURRENCY
+    ) as executor:
+        futures = {
+            executor.submit(
+                _process_article_claims,
+                article,
+                domain,
+                openai_client,
+                qdrant,
+                chat_model,
+                claim_model,
+            ): article["url"]
+            for article in to_process
+        }
+        for future in as_completed(futures):
+            try:
+                future.result()
+            except Exception:
+                logger.warning(
+                    "Unexpected thread error for %s",
+                    futures[future],
+                    exc_info=True,
                 )
-                for claim_text, emb in zip(claims, embeddings)
-            ]
-            qdrant.upsert(collection_name="claims", points=points)
-            logger.info("Stored %d claims for %s", len(claims), url)
-        except Exception:
-            logger.warning(
-                "Claim extraction/embedding failed for %s; skipping",
-                url,
-                exc_info=True,
-            )
 
 
 def run_bootstrap(
