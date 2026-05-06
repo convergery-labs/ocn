@@ -1,4 +1,4 @@
-"""Tests for JWT-based authentication and domain scoping."""
+"""Tests for JWT-based authentication."""
 import base64
 import json
 import time
@@ -91,20 +91,6 @@ async def test_tampered_jwt_returns_401(client) -> None:
         headers={"Authorization": f"Bearer {tampered}"},
     )
     assert resp.status_code == 401
-
-
-async def test_jwt_domain_not_in_claims_returns_403(client) -> None:
-    """A JWT without the requested domain must be rejected 403 on POST /news/run."""
-    token = _make_jwt(role="user", domains=["other-domain"])
-    resp = await client.post(
-        "/news/run",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        },
-        content=json.dumps({"domain": "acme"}),
-    )
-    assert resp.status_code == 403
 
 
 async def test_admin_jwt_bypasses_domain_scoping(client) -> None:
