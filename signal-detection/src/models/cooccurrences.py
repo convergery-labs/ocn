@@ -4,11 +4,12 @@ from itertools import combinations
 from db import get_db
 
 
-def upsert_cooccurrences(concepts: list[str]) -> None:
+def upsert_cooccurrences(concepts: list[str], domain: str) -> None:
     """Upsert all canonical concept pairs extracted from one article.
 
     Increments co_occurrence_count by 1 for each pair on conflict.
-    No-ops when fewer than 2 concepts are provided.
+    Counts are partitioned by domain. No-ops when fewer than 2 concepts
+    are provided.
     """
     if len(concepts) < 2:
         return
@@ -18,25 +19,27 @@ def upsert_cooccurrences(concepts: list[str]) -> None:
             conn.execute(
                 """
                 INSERT INTO concept_cooccurrences
-                    (concept_a, concept_b, co_occurrence_count,
-                     last_updated_at)
-                VALUES (:a, :b, 1, now())
-                ON CONFLICT (concept_a, concept_b)
+                    (concept_a, concept_b, domain,
+                     co_occurrence_count, last_updated_at)
+                VALUES (:a, :b, :domain, 1, now())
+                ON CONFLICT (concept_a, concept_b, domain)
                 DO UPDATE SET
                     co_occurrence_count =
                         concept_cooccurrences.co_occurrence_count + 1,
                     last_updated_at = now()
                 """,
-                {"a": concept_a, "b": concept_b},
+                {"a": concept_a, "b": concept_b, "domain": domain},
             )
 
 
 def get_cooccurrence_counts(
     pairs: list[tuple[str, str]],
+    domain: str,
 ) -> dict[tuple[str, str], int]:
     """Return co-occurrence counts for the given canonical concept pairs.
 
-    Pairs must be in canonical order (a < b). Missing pairs return 0.
+    Pairs must be in canonical order (a < b). Only counts within the
+    given domain are returned. Missing pairs return 0.
     """
     if not pairs:
         return {}
@@ -50,8 +53,9 @@ def get_cooccurrence_counts(
             FROM concept_cooccurrences
             WHERE concept_a = ANY(:a_values)
               AND concept_b = ANY(:b_values)
+              AND domain = :domain
             """,
-            {"a_values": a_values, "b_values": b_values},
+            {"a_values": a_values, "b_values": b_values, "domain": domain},
         ).fetchall()
     counts = {
         (r["concept_a"], r["concept_b"]): r["co_occurrence_count"]

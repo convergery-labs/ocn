@@ -291,12 +291,13 @@ async def _run_scoring_phase(
                     claim_ids,
                     article_qdrant_id,
                     qdrant,
+                    domain,
                 ),
             )
 
             concepts = row.get("concepts") or []
             pairs = list(combinations(sorted(concepts), 2))
-            counts = get_cooccurrence_counts(pairs)
+            counts = get_cooccurrence_counts(pairs, domain)
             bridge = _compute_bridge_score(concepts, counts)
             if bridge is None:
                 logger.info(
@@ -356,7 +357,7 @@ async def _run_scoring_phase(
             # Signal articles are deferred: co-occurrences and claim
             # vectors are withheld until promotion confirms the label.
             if label != "Signal":
-                upsert_cooccurrences(concepts)
+                upsert_cooccurrences(concepts, domain)
 
             update_classification_scores(
                 classification_id=classification_id,
@@ -409,6 +410,7 @@ async def _embed_and_store(
     classification_id: int,
     article_url: str,
     claims: list[str],
+    domain: str,
     oai: OpenAI,
     claim_embedding_model: str,
     qdrant: QdrantClient,
@@ -421,6 +423,8 @@ async def _embed_and_store(
         classification_id: DB row id for the article's classification.
         article_url: Source URL of the article.
         claims: List of factual claim strings to embed and store.
+        domain: Domain slug; stored in the Qdrant payload for scoped
+            novelty searches.
         oai: OpenAI-compatible client.
         claim_embedding_model: Model identifier for claim embeddings.
         qdrant: Qdrant client.
@@ -441,6 +445,7 @@ async def _embed_and_store(
                 "article_qdrant_id": article_qdrant_id,
                 "article_url": article_url,
                 "claim_text": claim_text,
+                "domain": domain,
             },
         )
         for claim_text, claim_emb in zip(claims, claim_embeddings)
@@ -621,6 +626,7 @@ async def _run_feature_extraction(
                     classification_id=cid,
                     article_url=url,
                     claims=claims,
+                    domain=domain,
                     oai=oai,
                     claim_embedding_model=claim_embedding_model,
                     qdrant=qdrant,
@@ -706,12 +712,14 @@ def _compute_claim_novelty(
     claim_ids: list[str],
     article_qdrant_id: str,
     qdrant: QdrantClient,
+    domain: str,
 ) -> float:
     """Score claim novelty as mean cosine distance to k nearest neighbours.
 
-    Excludes the article's own claims from the search results using a
-    Qdrant filter. Returns _COLD_START_CLAIM_SCORE when the claims
-    collection is empty or all NN searches return no results.
+    Searches only within claims from the same domain. Excludes the
+    article's own claims from the search results. Returns
+    _COLD_START_CLAIM_SCORE when the claims collection is empty or all
+    NN searches return no results.
     """
     if not claim_ids:
         return _COLD_START_CLAIM_SCORE
@@ -732,6 +740,12 @@ def _compute_claim_novelty(
         return _COLD_START_CLAIM_SCORE
 
     exclude_own = Filter(
+        must=[
+            FieldCondition(
+                key="domain",
+                match=MatchValue(value=domain),
+            ),
+        ],
         must_not=[
             FieldCondition(
                 key="article_qdrant_id",
@@ -741,7 +755,7 @@ def _compute_claim_novelty(
                 key="deferred",
                 match=MatchValue(value=True),
             ),
-        ]
+        ],
     )
 
     distances: list[float] = []
