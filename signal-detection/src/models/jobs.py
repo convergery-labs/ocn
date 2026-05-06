@@ -199,14 +199,19 @@ def list_job_results(
     job_id: int,
     after_id: int,
     limit: int,
+    flagged: bool | None = None,
 ) -> tuple[list[ClassificationRow], str | None]:
     """Return a page of classifications for a job.
 
     Returns (rows, next_cursor). next_cursor is None when no more pages.
+    When flagged=True, only rows with flagged_for_review=TRUE are returned.
     """
+    flagged_clause = (
+        "AND flagged_for_review = TRUE" if flagged is True else ""
+    )
     with get_db() as conn:
         rows = conn.execute(
-            """
+            f"""
             SELECT id, job_id, article_url, source, label,
                    composite_score, trajectory_score, bridge_score,
                    claim_novelty_score, plausibility_score,
@@ -214,7 +219,7 @@ def list_job_results(
                    flagged_for_review,
                    model_embedding, model_llm, cluster_id, created_at
             FROM classifications
-            WHERE job_id = :job_id AND id > :after_id
+            WHERE job_id = :job_id AND id > :after_id {flagged_clause}
             ORDER BY id ASC
             LIMIT :fetch
             """,
