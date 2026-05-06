@@ -448,3 +448,138 @@ class TestDeferredCorpusGuard:
         )
 
         qdrant.set_payload.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# flagged=true filter (CON-151)
+# ---------------------------------------------------------------------------
+
+
+class TestFlaggedFilter:
+    """GET /classifications/{job_id}/results?flagged=true filter tests."""
+
+    async def test_flagged_filter_returns_only_flagged(
+        self, client: AsyncClient, user_key: str
+    ) -> None:
+        """?flagged=true returns only rows with flagged_for_review=True."""
+        from models.jobs import (
+            create_job,
+            insert_classification,
+            update_classification_plausibility,
+            update_classification_scores,
+        )
+
+        job = create_job(
+            run_id="flagged-filter-run",
+            status="completed",
+            callback_url=None,
+            article_count=2,
+        )
+        job_id = job["id"]
+
+        cid_flagged = insert_classification(
+            job_id=job_id,
+            article_url="https://example.com/flagged",
+            article_embedding=[0.1] * 3072,
+            model_embedding="test-embed",
+            model_llm="test-llm",
+            source="example.com",
+        )
+        update_classification_scores(
+            classification_id=cid_flagged,
+            label="Weak Signal",
+            composite_score=0.5,
+            trajectory_score=0.5,
+            claim_novelty_score=0.5,
+            cluster_id=None,
+        )
+        update_classification_plausibility(
+            classification_id=cid_flagged,
+            plausibility_score=0.2,
+            plausibility_flags=["low_evidence"],
+            plausibility_reasoning="Dubious claim.",
+            flagged_for_review=True,
+        )
+
+        cid_clean = insert_classification(
+            job_id=job_id,
+            article_url="https://example.com/clean",
+            article_embedding=[0.2] * 3072,
+            model_embedding="test-embed",
+            model_llm="test-llm",
+            source="example.com",
+        )
+        update_classification_scores(
+            classification_id=cid_clean,
+            label="Signal",
+            composite_score=0.8,
+            trajectory_score=0.7,
+            claim_novelty_score=0.9,
+            cluster_id=None,
+        )
+
+        resp = await client.get(
+            f"/classifications/{job_id}/results?flagged=true",
+            headers={"x-ocn-caller": user_key},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["results"]) == 1
+        assert data["results"][0]["article_url"] == "https://example.com/flagged"
+        assert data["results"][0]["flagged_for_review"] is True
+
+    async def test_no_flagged_param_returns_all(
+        self, client: AsyncClient, user_key: str
+    ) -> None:
+        """Without ?flagged, all results are returned regardless of flag."""
+        from models.jobs import (
+            create_job,
+            insert_classification,
+            update_classification_plausibility,
+            update_classification_scores,
+        )
+
+        job = create_job(
+            run_id="no-flagged-param-run",
+            status="completed",
+            callback_url=None,
+            article_count=2,
+        )
+        job_id = job["id"]
+
+        for url, flagged in [
+            ("https://example.com/a", True),
+            ("https://example.com/b", False),
+        ]:
+            cid = insert_classification(
+                job_id=job_id,
+                article_url=url,
+                article_embedding=[0.1] * 3072,
+                model_embedding="test-embed",
+                model_llm="test-llm",
+                source="example.com",
+            )
+            update_classification_scores(
+                classification_id=cid,
+                label="Noise",
+                composite_score=0.3,
+                trajectory_score=0.3,
+                claim_novelty_score=0.3,
+                cluster_id=None,
+            )
+            if flagged:
+                update_classification_plausibility(
+                    classification_id=cid,
+                    plausibility_score=0.1,
+                    plausibility_flags=[],
+                    plausibility_reasoning="Unreliable.",
+                    flagged_for_review=True,
+                )
+
+        resp = await client.get(
+            f"/classifications/{job_id}/results",
+            headers={"x-ocn-caller": user_key},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["results"]) == 2

@@ -135,6 +135,7 @@ def get_classification_results(
     job_id: int,
     limit: int = 20,
     cursor: str | None = None,
+    flagged: bool | None = None,
     caller: dict[str, Any] = Depends(require_auth),
 ) -> dict:
     """Return paginated classification results for a job."""
@@ -156,7 +157,7 @@ def get_classification_results(
                 status_code=422, detail="Invalid cursor."
             )
     results, next_cursor = list_job_results(
-        job_id=job_id, after_id=after_id, limit=limit
+        job_id=job_id, after_id=after_id, limit=limit, flagged=flagged
     )
     return {
         "results": [
