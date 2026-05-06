@@ -545,6 +545,10 @@ async def _run_feature_extraction(
                 model_embedding=embedding_model,
                 model_llm=llm_model,
                 source=article.get("source"),
+                title=article.get("title"),
+                summary=article.get("summary"),
+                body=article.get("body"),
+                published=article.get("published"),
             )
             classification_ids.append(classification_id)
             article_urls.append(article_url)

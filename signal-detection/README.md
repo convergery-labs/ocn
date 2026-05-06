@@ -39,7 +39,9 @@ docker compose run --rm signal-detection python -m src bootstrap \
 | `SIGNAL_POSTGRES_HOST` | No | `localhost` | PostgreSQL host |
 | `QDRANT_HOST` | No | `qdrant` | Qdrant hostname |
 | `QDRANT_PORT` | No | `6333` | Qdrant port |
-| `NEWS_RETRIEVAL_URL` | Yes | — | news-retrieval base URL for run validation |
+| `NEWS_RETRIEVAL_URL` | Yes | — | news-retrieval base URL for run triggering, polling, and article fetching |
+| `NEWS_RETRIEVAL_SERVICE_CALLER` | No | pre-encoded admin identity | Base64-encoded `x-ocn-caller` JSON used for service-to-service calls to news-retrieval |
+| `PIPELINE_POLL_TIMEOUT_SECS` | No | `600` | Max seconds to wait for a news-retrieval run to complete before failing |
 | `AUTH_SERVICE_URL` | Yes | — | auth-service base URL for token validation |
 | `OPENROUTER_API_KEY` | Yes | — | OpenRouter API key for embeddings and LLM calls |
 | `OPENROUTER_MODEL` | No | `openai/gpt-4o-mini` | LLM model used for claim extraction |
@@ -118,9 +120,28 @@ All endpoints require `Authorization: Bearer <api-key>`.
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/health` | Liveness check |
-| `POST` | `/classify` | Submit a classification job (returns 202) |
+| `POST` | `/run` | Unified fetch-and-classify pipeline (returns 202) |
+| `POST` | `/classify` | Submit a classification job directly (returns 202) |
 | `GET` | `/classifications/{job_id}` | Job status and aggregate stats |
 | `GET` | `/classifications/{job_id}/results` | Paginated per-article results |
+
+### POST /run
+
+Triggers the full end-to-end pipeline: fetches articles from news-retrieval, then classifies them. Returns a `job_id` immediately (202); the pipeline runs in the background. Use `GET /classifications/{job_id}` to poll for completion.
+
+```json
+{
+  "domain": "ai_news",
+  "days_back": 7,
+  "max_articles": 200,
+  "focus": "optional topic narrowing instruction",
+  "force": false,
+  "callback_url": "https://example.com/webhook"
+}
+```
+
+Returns `{"job_id": 1, "status": "processing"}`. On completion, POSTs
+`{"job_id": 1, "status": "completed"}` to `callback_url` if provided.
 
 ### POST /classify
 

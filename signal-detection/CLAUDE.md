@@ -4,7 +4,7 @@ Part of the [ocn monorepo](../CLAUDE.md).
 
 ## Overview
 
-`signal-detection` is a FastAPI service (port 8002) that classifies news articles as **Signal**, **Weak Signal**, or **Noise** using vector similarity against a rolling reference corpus stored in Qdrant. It is a downstream consumer of `news-retrieval` — it never ingests articles directly.
+`signal-detection` is a FastAPI service (port 8002) that classifies news articles as **Signal**, **Weak Signal**, or **Noise** using vector similarity against a rolling reference corpus stored in Qdrant. It can be used as a downstream consumer of `news-retrieval` (passing a `run_id` to `POST /classify`), or as a unified pipeline entry point via `POST /run`, which triggers news-retrieval, fetches all articles, and classifies them in one call.
 
 The corpus is bootstrapped via a CLI command that fetches historical articles from `news-retrieval`, embeds them with `text-embedding-3-large` (via OpenRouter), clusters them into topic groups with MiniBatchKMeans, and writes `topic_clusters` + `corpus_centroids` rows to Postgres.
 
@@ -56,6 +56,7 @@ signal-detection/
 │   ├── seed.py              Seed classification_statuses
 │   ├── controllers/
 │   │   ├── classify.py      Classification job orchestration
+│   │   ├── run.py           Unified pipeline: trigger news-retrieval → poll → fetch → classify
 │   │   ├── bootstrap.py     Corpus bootstrap pipeline
 │   │   └── promote.py       Nightly deferred corpus promotion job
 │   ├── models/
@@ -64,7 +65,8 @@ signal-detection/
 │   │   └── clusters.py      topic_clusters / corpus_centroids (incl. EWMA update)
 │   ├── routes/
 │   │   ├── health.py        GET /health
-│   │   └── classify.py      POST /classify, GET /classifications/*
+│   │   ├── classify.py      POST /classify, GET /classifications/*
+│   │   └── run.py           POST /run (unified fetch-and-classify pipeline)
 │   └── historical_ingestion/
 │       ├── schema.py        HistoricalDocument dataclass
 │       ├── pipeline.py      Orchestrator (fetch, deduplicate, embed, upsert)

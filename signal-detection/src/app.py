@@ -1,7 +1,7 @@
 """FastAPI application factory."""
 from fastapi import FastAPI
 
-from routes import classify, health
+from routes import classify, health, run
 
 
 def create_app() -> FastAPI:
@@ -9,6 +9,7 @@ def create_app() -> FastAPI:
     application = FastAPI(title="Signal Detection")
     application.include_router(health.router)
     application.include_router(classify.router)
+    application.include_router(run.router)
     return application
 
 
