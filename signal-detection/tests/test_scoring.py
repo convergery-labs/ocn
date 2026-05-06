@@ -449,3 +449,121 @@ class TestDeferClaimsInQdrant:
         qdrant = MagicMock()
         qdrant.set_payload.side_effect = RuntimeError("qdrant down")
         _defer_claims_in_qdrant(qdrant, ["id-1"])  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# domain → cluster lookup path
+# ---------------------------------------------------------------------------
+
+
+class TestDomainClusterLookup:
+    """Domain slug is passed correctly through the scoring pipeline."""
+
+    def test_run_scoring_phase_uses_domain_not_source(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """_run_scoring_phase calls get_clusters_for_domain with domain, not
+        the article source field.
+        """
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        captured: list[str] = []
+
+        def fake_get_clusters(domain: str) -> list:
+            captured.append(domain)
+            return []
+
+        # Minimal DB row shape expected by the scoring loop
+        fake_row = {
+            "id": 1,
+            "article_url": "https://example.com/article",
+            "source": "SiliconANGLE",
+            "article_embedding": [1.0, 0.0],
+            "concepts": [],
+            "claim_ids": [],
+        }
+
+        import controllers.classify as classify_mod
+
+        with (
+            patch.object(
+                classify_mod, "get_clusters_for_domain", side_effect=fake_get_clusters
+            ),
+            patch("db.get_db") as mock_get_db,
+            patch.object(classify_mod, "_compute_claim_novelty", return_value=0.5),
+            patch.object(classify_mod, "get_cooccurrence_counts", return_value={}),
+            patch.object(classify_mod, "update_classification_scores"),
+            patch.object(classify_mod, "update_classification_plausibility"),
+            patch.object(classify_mod, "_langfuse_client", return_value=None),
+        ):
+            conn_mock = MagicMock()
+            conn_mock.execute.return_value.fetchall.return_value = [fake_row]
+            mock_get_db.return_value.__enter__ = MagicMock(return_value=conn_mock)
+            mock_get_db.return_value.__exit__ = MagicMock(return_value=False)
+
+            qdrant = MagicMock()
+            asyncio.run(
+                classify_mod._run_scoring_phase(
+                    job_id=1,
+                    qdrant=qdrant,
+                    articles=[],
+                    domain="ai_news",
+                )
+            )
+
+        assert captured == ["ai_news"], (
+            f"Expected get_clusters_for_domain('ai_news') but got {captured!r}"
+        )
+
+    def test_run_scoring_phase_does_not_use_source_field(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """source field ('SiliconANGLE') is never passed to cluster lookup."""
+        import asyncio
+        from unittest.mock import patch
+
+        captured: list[str] = []
+
+        def fake_get_clusters(domain: str) -> list:
+            captured.append(domain)
+            return []
+
+        fake_row = {
+            "id": 1,
+            "article_url": "https://example.com/article",
+            "source": "SiliconANGLE",
+            "article_embedding": [1.0, 0.0],
+            "concepts": [],
+            "claim_ids": [],
+        }
+
+        import controllers.classify as classify_mod
+
+        with (
+            patch.object(
+                classify_mod, "get_clusters_for_domain", side_effect=fake_get_clusters
+            ),
+            patch("db.get_db") as mock_get_db,
+            patch.object(classify_mod, "_compute_claim_novelty", return_value=0.5),
+            patch.object(classify_mod, "get_cooccurrence_counts", return_value={}),
+            patch.object(classify_mod, "update_classification_scores"),
+            patch.object(classify_mod, "update_classification_plausibility"),
+            patch.object(classify_mod, "_langfuse_client", return_value=None),
+        ):
+            conn_mock = MagicMock()
+            conn_mock.execute.return_value.fetchall.return_value = [fake_row]
+            mock_get_db.return_value.__enter__ = MagicMock(return_value=conn_mock)
+            mock_get_db.return_value.__exit__ = MagicMock(return_value=False)
+
+            qdrant = MagicMock()
+            asyncio.run(
+                classify_mod._run_scoring_phase(
+                    job_id=1,
+                    qdrant=qdrant,
+                    articles=[],
+                    domain="ai_news",
+                )
+            )
+
+        assert "SiliconANGLE" not in captured

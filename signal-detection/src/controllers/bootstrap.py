@@ -374,6 +374,7 @@ def run_bootstrap(
             name=f"{domain} cluster {cluster_i}",
             slug=slug,
             collection=cluster_collection,
+            domain=domain,
         )
         upsert_corpus_centroid(
             cluster_id=cluster_id,

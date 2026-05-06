@@ -132,6 +132,8 @@ All endpoints require `Authorization: Bearer <api-key>`.
 
 Triggers the full end-to-end pipeline: fetches articles from news-retrieval, then classifies them. Returns a `job_id` immediately (202); the pipeline runs in the background. Use `GET /classifications/{job_id}` to poll for completion.
 
+`domain` must be a slug registered in news-retrieval. The request is rejected with 422 if the slug is unknown.
+
 ```json
 {
   "domain": "ai_news",
@@ -149,11 +151,15 @@ Returns `{"job_id": 1, "status": "processing"}`. On completion, POSTs
 ### POST /classify
 
 Accepts either a `run_id` (fetches articles from news-retrieval) or an inline
-`articles` list — not both.
+`articles` list — not both. `domain` is required and must be a slug registered
+in news-retrieval (i.e. appears in `GET /domains`). The service validates this
+before creating a job and returns 422 if the slug is unknown — classification
+cannot proceed without a bootstrapped corpus to compare articles against.
 
 ```json
 {
   "run_id": 42,
+  "domain": "ai_news",
   "callback_url": "https://example.com/webhook"
 }
 ```
@@ -163,6 +169,7 @@ Accepts either a `run_id` (fetches articles from news-retrieval) or an inline
   "articles": [
     {"url": "...", "title": "...", "body": "...", "source": "...", "published": "..."}
   ],
+  "domain": "ai_news",
   "callback_url": "https://example.com/webhook"
 }
 ```

@@ -29,7 +29,10 @@ src/
 │   ├── classify.py      Route — POST /classify, GET /classifications/*
 │   └── run.py           Route — POST /run (unified fetch-and-classify pipeline)
 ├── controllers/
-│   ├── classify.py      Controller — job submission and background execution
+│   ├── classify.py      Controller — job submission and background execution;
+│   │                                 validate_domain() checks slug against
+│   │                                 news-retrieval GET /domains before job
+│   │                                 creation (raises DomainNotFoundError → 422)
 │   ├── run.py           Controller — unified pipeline: trigger news-retrieval run,
 │   │                                 poll until complete, fetch articles, classify
 │   ├── bootstrap.py     Controller — corpus bootstrap pipeline orchestration
@@ -166,9 +169,9 @@ collection with no Postgres involvement. Used to widen corpus coverage beyond wh
 
 | Table | Key columns |
 |-------|-------------|
-| `topic_clusters` | `id`, `slug`, `centroid_qdrant_collection`, `alpha` |
+| `topic_clusters` | `id`, `slug`, `domain`, `centroid_qdrant_collection`, `alpha` |
 | `corpus_centroids` | `cluster_id`, `centroid_vector REAL[]`, `document_count`, `embedding_model` |
-| `classification_jobs` | `id`, `run_id`, `status`, `article_count`, `callback_url` |
+| `classification_jobs` | `id`, `run_id`, `domain`, `status`, `article_count`, `callback_url` |
 | `classifications` | `id`, `job_id`, `article_url`, `source`, `label`, `composite_score`, `trajectory_score`, `bridge_score`, `claim_novelty_score`, `plausibility_score`, `plausibility_flags JSONB`, `plausibility_reasoning`, `flagged_for_review`, `article_embedding REAL[]`, `cluster_id`, `concepts JSONB`, `article_title`, `article_summary`, `article_body`, `article_published` |
 | `concept_cooccurrences` | `concept_a`, `concept_b` (PRIMARY KEY pair, a < b), `co_occurrence_count`, `last_updated_at` |
 | `deferred_promotions` | `id`, `classification_id`, `promote_at`, `promoted_at`, `final_label` |

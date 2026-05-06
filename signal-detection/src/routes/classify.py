@@ -7,10 +7,12 @@ from pydantic import BaseModel, Field
 
 from auth import require_auth
 from controllers.classify import (
+    DomainNotFoundError,
     DuplicateJobError,
     RunNotFoundError,
     run_agent_loop,
     submit_classify_job,
+    validate_domain,
 )
 from models.jobs import _decode_cursor, get_job, get_job_stats, list_job_results
 
@@ -37,6 +39,7 @@ class ClassifyRequest(BaseModel):
     article_ids: list[int] | None = Field(default=None)
     articles: list[ArticleIn] | None = Field(default=None)
     callback_url: str | None = Field(default=None)
+    domain: str = Field(...)
 
     def mode_a_articles(self) -> list[dict]:
         """Return stub article dicts for Mode A (article_ids or empty)."""
@@ -75,11 +78,15 @@ async def post_classify(
     run_id_str = str(body.run_id) if has_run_id else None
 
     try:
+        await validate_domain(body.domain)
         job = await submit_classify_job(
             run_id=run_id_str,
             articles=articles,
             callback_url=body.callback_url,
+            domain=body.domain,
         )
+    except DomainNotFoundError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     except RunNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except DuplicateJobError as exc:
@@ -90,6 +97,7 @@ async def post_classify(
         job["id"],
         articles,
         body.callback_url,
+        job["domain"],
     )
     return JSONResponse(
         status_code=202,
