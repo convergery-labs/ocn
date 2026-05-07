@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 _ARXIV_API = "http://export.arxiv.org/api/query"
 _PAGE_SIZE = 100
 _MAX_RESULTS = 1000   # hard cap across all pages
-_RETRY_DELAY = 3.0    # arXiv asks for polite crawling
+_RETRY_DELAY = 15.0   # arXiv rate-limits aggressive pagination; 15s avoids 429s
 _MAX_RETRIES = 5
 _BACKOFF_BASE = 60.0  # seconds; doubles each retry
 
@@ -36,15 +36,18 @@ class ArXivAdapter(AbstractHistoricalAdapter):
 
         Paginates until exhausted or _MAX_RESULTS is reached.
         """
-        # Quote multi-word queries so the Lucene parser doesn't split the
-        # boolean AND on spaces within the phrase.
-        quoted = f'"{query}"' if " " in query else query
         from_str = date_from.strftime("%Y%m%d")
         to_str = date_to.strftime("%Y%m%d")
-        search_query = (
-            f"all:{quoted}"
-            f" AND submittedDate:[{from_str} TO {to_str}]"
-        )
+        # If the query contains a colon it is already a Lucene expression
+        # (e.g. "cat:cs.AI OR cat:cs.LG") and should be passed through as-is.
+        # Plain keyword phrases are wrapped in all:"..." so the Lucene parser
+        # doesn't treat spaces as implicit AND across fields.
+        if ":" in query:
+            expr = query
+        else:
+            quoted = f'"{query}"' if " " in query else query
+            expr = f"all:{quoted}"
+        search_query = f"{expr} AND submittedDate:[{from_str} TO {to_str}]"
 
         docs: list[HistoricalDocument] = []
         start = 0
