@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 _ARXIV_API = "http://export.arxiv.org/api/query"
 _PAGE_SIZE = 100
-_MAX_RESULTS = 1000   # hard cap across all pages
+_MAX_RESULTS = 100_000  # safety cap; early-stop logic handles termination
 _RETRY_DELAY = 15.0   # arXiv rate-limits aggressive pagination; 15s avoids 429s
 _MAX_RETRIES = 5
 _BACKOFF_BASE = 60.0  # seconds; doubles each retry
