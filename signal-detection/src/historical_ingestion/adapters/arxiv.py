@@ -36,20 +36,25 @@ class ArXivAdapter(AbstractHistoricalAdapter):
 
         Paginates until exhausted or _MAX_RESULTS is reached.
         """
-        from_str = date_from.strftime("%Y%m%d")
-        to_str = date_to.strftime("%Y%m%d")
-        # If the query contains a colon it is already a Lucene expression
-        # (e.g. "cat:cs.AI OR cat:cs.LG") and should be passed through as-is.
-        # Plain keyword phrases are wrapped in all:"..." so the Lucene parser
-        # doesn't treat spaces as implicit AND across fields.
+        # For Lucene expressions (contain ":"), omit the server-side date filter
+        # so arXiv can serve the query from cache. Date filtering is applied
+        # client-side: entries outside [date_from, date_to] are dropped, and
+        # pagination stops as soon as a page contains entries older than
+        # date_from (results are sorted descending by submittedDate).
+        #
+        # For plain keyword queries, keep the server-side date filter — the
+        # query is simple enough that arXiv handles it efficiently.
         if ":" in query:
-            # Wrap in parens so AND submittedDate binds to the whole expression,
-            # not just the last OR clause (Lucene: AND > OR precedence).
-            expr = f"({query})"
+            search_query = f"({query})"
+            client_side_filter = True
         else:
+            from_str = date_from.strftime("%Y%m%d")
+            to_str = date_to.strftime("%Y%m%d")
             quoted = f'"{query}"' if " " in query else query
-            expr = f"all:{quoted}"
-        search_query = f"{expr} AND submittedDate:[{from_str} TO {to_str}]"
+            search_query = (
+                f"all:{quoted} AND submittedDate:[{from_str} TO {to_str}]"
+            )
+            client_side_filter = False
 
         docs: list[HistoricalDocument] = []
         start = 0
@@ -64,15 +69,35 @@ class ArXivAdapter(AbstractHistoricalAdapter):
             if not entries:
                 break
 
+            page_docs = []
+            oldest_on_page: date | None = None
             for entry in entries:
                 doc = _entry_to_document(entry)
-                if doc is not None:
-                    docs.append(doc)
+                if doc is None:
+                    continue
+                if oldest_on_page is None or doc.published_date < oldest_on_page:
+                    oldest_on_page = doc.published_date
+                if client_side_filter:
+                    if doc.published_date < date_from:
+                        continue
+                    if doc.published_date > date_to:
+                        continue
+                page_docs.append(doc)
 
+            docs.extend(page_docs)
             logger.info(
                 "arXiv: fetched %d entries (offset %d, total so far: %d)",
                 len(entries), start, len(docs),
             )
+
+            # Stop paginating once results have passed the start of our window.
+            if client_side_filter and oldest_on_page is not None and oldest_on_page < date_from:
+                logger.info(
+                    "arXiv: oldest entry on page (%s) is before date_from (%s)"
+                    " — stopping pagination",
+                    oldest_on_page, date_from,
+                )
+                break
 
             if len(entries) < _PAGE_SIZE:
                 break
