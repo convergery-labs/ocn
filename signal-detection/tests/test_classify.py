@@ -645,7 +645,7 @@ class TestFlaggedFilter:
 
 
 class TestDomainValidation:
-    """Unknown domain slugs are rejected before a job is created."""
+    """Domain slug validation: synchronous for /classify, async for /run."""
 
     async def test_422_unknown_domain_on_classify(
         self, client: AsyncClient, user_key: str
@@ -660,18 +660,23 @@ class TestDomainValidation:
         assert resp.status_code == 422
         assert "nonexistent_domain" in resp.json()["detail"]
 
-    async def test_422_unknown_domain_on_run(
+    async def test_202_accepted_on_run_with_unknown_domain(
         self, client: AsyncClient, user_key: str
     ) -> None:
-        """POST /run with an unregistered domain returns 422."""
+        """POST /run with an unregistered domain still returns 202.
+
+        Domain validation is deferred to the background job, so the
+        caller always gets a job_id immediately and discovers the failure
+        by polling GET /classifications/{job_id}.
+        """
         with _mock_domain_unknown():
             resp = await client.post(
                 "/run",
                 headers={"x-ocn-caller": user_key},
                 json={"domain": "nonexistent_domain", "days_back": 1},
             )
-        assert resp.status_code == 422
-        assert "nonexistent_domain" in resp.json()["detail"]
+        assert resp.status_code == 202
+        assert "job_id" in resp.json()
 
     async def test_no_job_created_on_invalid_domain(
         self, client: AsyncClient, user_key: str

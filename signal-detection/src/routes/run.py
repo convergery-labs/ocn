@@ -1,16 +1,12 @@
 """Route for POST /run — unified fetch-and-classify pipeline."""
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from auth import require_auth
-from controllers.classify import (
-    DomainNotFoundError,
-    submit_classify_job,
-    validate_domain,
-)
+from controllers.classify import submit_classify_job
 from controllers.run import fetch_and_classify
 
 router = APIRouter()
@@ -34,10 +30,6 @@ async def post_run(
     caller: dict[str, Any] = Depends(require_auth),
 ) -> JSONResponse:
     """Trigger a full fetch-and-classify pipeline run (202 Accepted)."""
-    try:
-        await validate_domain(body.domain)
-    except DomainNotFoundError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
     job = await submit_classify_job(
         run_id=None,
         articles=[],
