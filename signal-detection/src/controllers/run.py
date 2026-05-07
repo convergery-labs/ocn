@@ -5,7 +5,11 @@ import os
 
 import httpx
 
-from controllers.classify import _fire_callback, run_agent_loop
+from controllers.classify import (
+    _fire_callback,
+    run_agent_loop,
+    validate_domain,
+)
 from models.jobs import update_job_article_count, update_job_status
 
 logger = logging.getLogger(__name__)
@@ -157,6 +161,7 @@ async def fetch_and_classify(
     errors are handled by run_agent_loop itself.
     """
     try:
+        await validate_domain(request.domain)
         news_run_id = await _trigger_news_run(request)
         await _poll_news_run(news_run_id)
         articles = await _fetch_articles(news_run_id)
