@@ -185,6 +185,7 @@ collection with no Postgres involvement. Used to widen corpus coverage beyond wh
 | `GET` | `/health` | None | Liveness check — Postgres, Qdrant, auth-service |
 | `POST` | `/run` | Bearer | Unified pipeline: fetch from news-retrieval + classify (202 Accepted) |
 | `POST` | `/classify` | Bearer | Submit a classification job directly (202 Accepted) |
+| `GET` | `/classifications` | Bearer | Completed jobs, newest-first; cursor-paginated (`limit`, `cursor`); returns `{"jobs": [...], "next_cursor": str\|null}` |
 | `GET` | `/classifications/{job_id}` | Bearer | Job status and aggregate stats |
 | `GET` | `/classifications/{job_id}/results` | Bearer | Paginated per-article results (includes `claims` array) |
 

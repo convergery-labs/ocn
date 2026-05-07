@@ -98,6 +98,20 @@ infra/
 | `GATEWAY_SIGNAL_URL` | hardcoded | `http://signal-detection.{env}.ocn.internal:8002` |
 | `GATEWAY_CORS_ORIGINS` | Terraform (`gateway_cors_origins` var) | Comma-separated list of allowed CORS origins; set to CloudFront URL in staging |
 
+### lucky-clarke
+| Variable | Source | Notes |
+|----------|--------|-------|
+| `SIGNAL_DETECTION_URL` | hardcoded | `http://signal-detection.{env}.ocn.internal:8002` |
+| `LUCKY_CLARKE_URL` | hardcoded | `http://lucky-clarke.{env}.ocn.internal:8005` |
+| `SIGNAL_CALLER_SUB` | hardcoded | `1` — internal service identity used in x-ocn-caller header |
+| `OPENROUTER_MODEL` | hardcoded | `openai/gpt-4o-mini` |
+| `AWS_REGION` | hardcoded | `eu-north-1` |
+| `OPENROUTER_API_KEY` | Secrets Manager | `ocn/{env}/lucky-clarke:OPENROUTER_API_KEY` |
+| `SMTP_HOST` | Secrets Manager | `ocn/{env}/lucky-clarke:SMTP_HOST` |
+| `SMTP_USER` | Secrets Manager | `ocn/{env}/lucky-clarke:SMTP_USER` |
+| `SMTP_PASSWORD` | Secrets Manager | `ocn/{env}/lucky-clarke:SMTP_PASSWORD` |
+| `SMTP_FROM` | Secrets Manager | `ocn/{env}/lucky-clarke:SMTP_FROM` |
+
 ## Maintenance
 
 - Do not modify the Jira Board, Guidance, or Maintenance sections unless explicitly asked

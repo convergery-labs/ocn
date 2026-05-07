@@ -375,3 +375,43 @@ def find_processing_job(run_id: str) -> JobRow | None:
             {"run_id": run_id},
         ).fetchone()
     return JobRow(row) if row else None
+
+
+def list_completed_jobs(
+    after_id: int,
+    limit: int,
+) -> tuple[list[JobRow], str | None]:
+    """Return completed classification jobs ordered by completed_at DESC.
+
+    Keyset cursor encodes the row id of the last item on the current
+    page (jobs are fetched with id < after_id when after_id is set).
+    """
+    if after_id == 0:
+        with get_db() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM classification_jobs
+                WHERE status = 'completed'
+                ORDER BY completed_at DESC, id DESC
+                LIMIT :fetch
+                """,
+                {"fetch": limit + 1},
+            ).fetchall()
+    else:
+        with get_db() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM classification_jobs
+                WHERE status = 'completed'
+                  AND id < :after_id
+                ORDER BY completed_at DESC, id DESC
+                LIMIT :fetch
+                """,
+                {"after_id": after_id, "fetch": limit + 1},
+            ).fetchall()
+    if len(rows) > limit:
+        next_cursor = _encode_cursor(rows[limit - 1]["id"])
+        rows = rows[:limit]
+    else:
+        next_cursor = None
+    return [JobRow(r) for r in rows], next_cursor

@@ -21,6 +21,7 @@ Confluence space: `Projects` — Cloud: `opengrowthventures.atlassian.net`
 | `news-retrieval` | [news-retrieval/](news-retrieval/) | [news-retrieval/CLAUDE.md](news-retrieval/CLAUDE.md) | RSS feed fetching and LLM-based relevance filtering |
 | `signal-detection` | [signal-detection/](signal-detection/) | [signal-detection/CLAUDE.md](signal-detection/CLAUDE.md) | Signal detection and vector-similarity pipelines |
 | `api-gateway` | [api-gateway/](api-gateway/) | [api-gateway/CLAUDE.md](api-gateway/CLAUDE.md) | Async HTTP reverse proxy to OCN upstream services |
+| `lucky-clarke` | [lucky-clarke/](lucky-clarke/) | [lucky-clarke/CLAUDE.md](lucky-clarke/CLAUDE.md) | A2A-compatible daily AI news digest agent — classifies articles into 12 categories, generates summaries, and emails recipients |
 | `infra` | [infra/](infra/) | [infra/CLAUDE.md](infra/CLAUDE.md) | Terraform infrastructure (VPC, RDS, ECS, ALB, IAM) |
 | `frontend` | [frontend/](frontend/) | [frontend/CLAUDE.md](frontend/CLAUDE.md) | React + Vite SPA — article feed UI |
 
@@ -69,6 +70,14 @@ ocn/
 │   ├── src/
 │   └── tests/
 ├── api-gateway/              # see api-gateway/STRUCTURE.md
+│   ├── CLAUDE.md
+│   ├── STRUCTURE.md
+│   ├── README.md
+│   ├── Dockerfile
+│   ├── requirements.txt
+│   ├── src/
+│   └── tests/
+├── lucky-clarke/             # see lucky-clarke/STRUCTURE.md
 │   ├── CLAUDE.md
 │   ├── STRUCTURE.md
 │   ├── README.md

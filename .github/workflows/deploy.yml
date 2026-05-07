@@ -18,6 +18,7 @@ jobs:
       auth:   ${{ steps.filter.outputs.auth }}
       news:   ${{ steps.filter.outputs.news }}
       signal: ${{ steps.filter.outputs.signal }}
+      lucky:  ${{ steps.filter.outputs.lucky }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -27,6 +28,7 @@ jobs:
             auth:   ['auth-service/**']
             news:   ['news-retrieval/**']
             signal: ['signal-detection/**']
+            lucky:  ['lucky-clarke/**']
 
 
   test:
@@ -113,6 +115,17 @@ jobs:
           OPENROUTER_API_KEY: mock-key
           OPENROUTER_MODEL:   mock-model
           PYTHONPATH:         ${{ github.workspace }}/shared/src
+
+      - name: Test lucky-clarke
+        if: needs.changes.outputs.lucky == 'true'
+        working-directory: lucky-clarke
+        run: |
+          pip install -r requirements.txt -r requirements-test.txt pytest-mock
+          pytest tests/ -v
+        env:
+          SIGNAL_DETECTION_URL: http://localhost:8002
+          OPENROUTER_API_KEY:   mock-key
+          PYTHONPATH:           ${{ github.workspace }}/lucky-clarke/src
 
 
   deploy-auth:
@@ -234,4 +247,44 @@ jobs:
             --cluster staging-ocn-cluster \
             --service staging-signal-detection \
             --task-definition staging-signal-detection \
+            --force-new-deployment
+
+  deploy-lucky:
+    needs: [changes, test]
+    if: needs.changes.outputs.lucky == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region:     eu-north-1
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: login-ecr
+      - name: Build and push
+        env:
+          IMAGE: ${{ secrets.ECR_REGISTRY }}/ocn/lucky-clarke
+          TAG:   ${{ github.sha }}
+        run: |
+          docker build --target base -t $IMAGE:$TAG -t $IMAGE:latest \
+            -f lucky-clarke/Dockerfile .
+          docker push $IMAGE:$TAG
+          docker push $IMAGE:latest
+      - name: Deploy
+        env:
+          IMAGE: ${{ secrets.ECR_REGISTRY }}/ocn/lucky-clarke
+          TAG:   ${{ github.sha }}
+        run: |
+          TASK_DEF=$(aws ecs describe-task-definition \
+            --task-definition staging-lucky-clarke \
+            --query taskDefinition)
+          NEW_TASK=$(echo $TASK_DEF | jq \
+            --arg img "$IMAGE:$TAG" \
+            'del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy)
+            | .containerDefinitions[0].image = $img')
+          aws ecs register-task-definition --cli-input-json "$NEW_TASK"
+          aws ecs update-service \
+            --cluster staging-ocn-cluster \
+            --service staging-lucky-clarke \
+            --task-definition staging-lucky-clarke \
             --force-new-deployment

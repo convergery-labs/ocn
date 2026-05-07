@@ -60,12 +60,15 @@ signal-detection/
 │   │   ├── bootstrap.py     Corpus bootstrap pipeline
 │   │   └── promote.py       Nightly deferred corpus promotion job
 │   ├── models/
-│   │   ├── jobs.py          classification_jobs / classifications / deferred_promotions
+│   │   ├── jobs.py          classification_jobs / classifications / deferred_promotions;
+│   │   │                    list_completed_jobs() for cursor-paginated job listing
 │   │   ├── claims.py        claims
 │   │   └── clusters.py      topic_clusters / corpus_centroids (incl. EWMA update)
 │   ├── routes/
 │   │   ├── health.py        GET /health
-│   │   ├── classify.py      POST /classify, GET /classifications/*
+│   │   ├── classify.py      POST /classify, GET /classifications,
+│   │   │                    GET /classifications/{job_id},
+│   │   │                    GET /classifications/{job_id}/results
 │   │   └── run.py           POST /run (unified fetch-and-classify pipeline)
 │   └── historical_ingestion/
 │       ├── schema.py        HistoricalDocument dataclass

@@ -1,6 +1,6 @@
 ECR ?= 340482407167.dkr.ecr.eu-north-1.amazonaws.com
 PLATFORM := linux/amd64
-SERVICES := auth-service news-retrieval signal-detection api-gateway
+SERVICES := auth-service news-retrieval signal-detection api-gateway lucky-clarke
 BASTION_ID ?= i-08490aaab61a822d2
 RDS_HOST ?= staging-ocn-postgres.c506a00ggbbn.eu-north-1.rds.amazonaws.com
 RDS_LOCAL_PORT ?= 5433
@@ -8,8 +8,8 @@ FRONTEND_BUCKET ?= ocn-staging-frontend
 CLOUDFRONT_DISTRIBUTION_ID ?= EGJ8FLEL3FECL
 VITE_API_BASE_URL ?= https://d27leazxx8pioq.cloudfront.net
 
-.PHONY: ecr-login build-auth build-news build-signal build-gateway build-all \
-        push-auth push-news push-signal push-gateway push-all tunnel-rds \
+.PHONY: ecr-login build-auth build-news build-signal build-gateway build-lucky build-all \
+        push-auth push-news push-signal push-gateway push-lucky push-all tunnel-rds \
         build-frontend deploy-frontend
 
 # Authenticate Docker to ECR
@@ -38,7 +38,12 @@ build-gateway:
 	  -f api-gateway/Dockerfile \
 	  -t $(ECR)/ocn/api-gateway:latest .
 
-build-all: build-auth build-news build-signal build-gateway
+build-lucky:
+	docker build --platform $(PLATFORM) --target base \
+	  -f lucky-clarke/Dockerfile \
+	  -t $(ECR)/ocn/lucky-clarke:latest .
+
+build-all: build-auth build-news build-signal build-gateway build-lucky
 
 # Per-service push targets (build + push)
 push-auth: ecr-login build-auth
@@ -53,11 +58,15 @@ push-signal: ecr-login build-signal
 push-gateway: ecr-login build-gateway
 	docker push $(ECR)/ocn/api-gateway:latest
 
+push-lucky: ecr-login build-lucky
+	docker push $(ECR)/ocn/lucky-clarke:latest
+
 push-all: ecr-login build-all
 	docker push $(ECR)/ocn/auth-service:latest
 	docker push $(ECR)/ocn/news-retrieval:latest
 	docker push $(ECR)/ocn/signal-detection:latest
 	docker push $(ECR)/ocn/api-gateway:latest
+	docker push $(ECR)/ocn/lucky-clarke:latest
 
 # Build and deploy frontend to S3 + invalidate CloudFront cache
 build-frontend:
