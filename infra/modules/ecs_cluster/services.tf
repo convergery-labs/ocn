@@ -412,6 +412,10 @@ resource "aws_ecs_service" "api_gateway" {
 }
 
 
+data "aws_secretsmanager_secret" "lucky_clarke" {
+  name = "ocn/${var.env}/lucky-clarke"
+}
+
 resource "aws_ecs_task_definition" "lucky_clarke" {
   family                   = "${var.env}-lucky-clarke"
   network_mode             = "awsvpc"
@@ -438,23 +442,23 @@ resource "aws_ecs_task_definition" "lucky_clarke" {
       secrets = [
         {
           name      = "OPENROUTER_API_KEY"
-          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:ocn/${var.env}/lucky-clarke:OPENROUTER_API_KEY::"
+          valueFrom = "${data.aws_secretsmanager_secret.lucky_clarke.arn}:OPENROUTER_API_KEY::"
         },
         {
           name      = "SMTP_HOST"
-          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:ocn/${var.env}/lucky-clarke:SMTP_HOST::"
+          valueFrom = "${data.aws_secretsmanager_secret.lucky_clarke.arn}:SMTP_HOST::"
         },
         {
           name      = "SMTP_USER"
-          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:ocn/${var.env}/lucky-clarke:SMTP_USER::"
+          valueFrom = "${data.aws_secretsmanager_secret.lucky_clarke.arn}:SMTP_USER::"
         },
         {
           name      = "SMTP_PASSWORD"
-          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:ocn/${var.env}/lucky-clarke:SMTP_PASSWORD::"
+          valueFrom = "${data.aws_secretsmanager_secret.lucky_clarke.arn}:SMTP_PASSWORD::"
         },
         {
           name      = "SMTP_FROM"
-          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:ocn/${var.env}/lucky-clarke:SMTP_FROM::"
+          valueFrom = "${data.aws_secretsmanager_secret.lucky_clarke.arn}:SMTP_FROM::"
         },
       ]
       logConfiguration = {
