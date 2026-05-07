@@ -52,6 +52,45 @@ docker compose run --rm signal-detection python -m src bootstrap \
 | `LANGFUSE_SECRET_KEY` | No | — | Langfuse secret key |
 | `LANGFUSE_HOST` | No | `https://cloud.langfuse.com` | Langfuse host |
 
+## Scoring Model
+
+Every article is scored on three orthogonal dimensions, then combined into a single composite score. The composite determines the final label: **Signal** (> 0.70), **Weak Signal** (0.40–0.70), **Noise** (< 0.40).
+
+### Sub-score A — Trajectory Deviation
+
+Measures how far an article's semantic embedding is from the centroid of its assigned topic cluster. A high score means the article is semantically distant from the established "centre of gravity" of its topic — i.e. it is exploring new ground rather than rehashing what the corpus has already mapped.
+
+Computed as cosine distance between the article embedding and the nearest cluster centroid, normalised to [0, 1].
+
+Cold start: if no clusters exist for the domain (bootstrap not run), trajectory score defaults to 0.5.
+
+### Sub-score B — Bridge Score
+
+Measures how unusual it is for the concepts in an article to appear together. It rewards articles that connect concept domains that rarely co-occur within the domain — a proxy for cross-domain synthesis, which is a common early-signal pattern.
+
+Computed as `mean(1 / (1 + log(1 + count)))` across all canonical concept pairs extracted by NER. A pair seen together for the first time scores 1.0; a pair that always co-occurs approaches 0. Co-occurrence counts are domain-scoped so a concept pair common in `biotech_research` does not deflate the bridge score for an `ai_news` article.
+
+Requires ≥ 2 concepts to be extracted. Articles with fewer than 2 matched concepts fall back to Phase 3 weights (Sub-score B omitted).
+
+### Sub-score C — Claim Novelty
+
+Measures how novel an article's specific factual claims are relative to everything the corpus has already seen for that domain. An article making claims that have not appeared in any prior article in the same domain scores highly; an article restating well-documented facts scores low.
+
+Computed per claim as mean cosine distance to the 10 nearest neighbours in the Qdrant `claims` collection, filtered to the same domain. The article's own claims and any deferred claims are excluded. Score is averaged across all claims in the article.
+
+Cold start: articles in a domain with no prior claims receive `COLD_START_CLAIM_SCORE` (default 0.5).
+
+### Composite Formula
+
+| Condition | Formula |
+|-----------|---------|
+| ≥ 2 concepts extracted (Phase 4) | `0.25 * A + 0.30 * B + 0.45 * C` |
+| < 2 concepts (Phase 3 fallback) | `0.40 * A + 0.60 * C` |
+
+All weights are env-configurable. Claim novelty (C) carries the most weight because it is the most direct indicator of new information entering the domain.
+
+---
+
 ## Bootstrap CLI
 
 Seeds the Qdrant corpus before the service can classify articles. Idempotent — re-runs skip already-embedded documents and articles whose claims are already stored.
