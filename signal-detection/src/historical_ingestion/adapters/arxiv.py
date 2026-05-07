@@ -43,7 +43,9 @@ class ArXivAdapter(AbstractHistoricalAdapter):
         # Plain keyword phrases are wrapped in all:"..." so the Lucene parser
         # doesn't treat spaces as implicit AND across fields.
         if ":" in query:
-            expr = query
+            # Wrap in parens so AND submittedDate binds to the whole expression,
+            # not just the last OR clause (Lucene: AND > OR precedence).
+            expr = f"({query})"
         else:
             quoted = f'"{query}"' if " " in query else query
             expr = f"all:{quoted}"
