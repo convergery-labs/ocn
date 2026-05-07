@@ -56,7 +56,7 @@ One security group per service. Ingress rules enforce least-privilege service-to
 
 | File | Purpose |
 |------|---------|
-| `main.tf` | `alb` (80 public), `api-gateway` (8004 from ALB), `news-retrieval` (8000 from gateway), `signal-detection` (8002 from gateway), `auth-service` (8001 from gateway + news + signal), `rds` (5432 from auth + news + signal) |
+| `main.tf` | `alb` (80 public), `api-gateway` (8004 from ALB), `news-retrieval` (8000 from gateway + signal-detection), `signal-detection` (8002 from gateway), `auth-service` (8001 from gateway + news + signal), `rds` (5432 from auth + news + signal) |
 | `outputs.tf` | `{alb,gateway,auth,news,signal,rds}_sg_id` |
 | `variables.tf` | `env`, `vpc_id` |
 
