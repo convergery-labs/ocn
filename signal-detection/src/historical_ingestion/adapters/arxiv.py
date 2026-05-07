@@ -15,6 +15,8 @@ _ARXIV_API = "http://export.arxiv.org/api/query"
 _PAGE_SIZE = 100
 _MAX_RESULTS = 1000   # hard cap across all pages
 _RETRY_DELAY = 3.0    # arXiv asks for polite crawling
+_MAX_RETRIES = 5
+_BACKOFF_BASE = 60.0  # seconds; doubles each retry
 
 
 class ArXivAdapter(AbstractHistoricalAdapter):
@@ -48,23 +50,8 @@ class ArXivAdapter(AbstractHistoricalAdapter):
         start = 0
 
         while len(docs) < _MAX_RESULTS:
-            try:
-                resp = requests.get(
-                    _ARXIV_API,
-                    params={
-                        "search_query": search_query,
-                        "start": start,
-                        "max_results": _PAGE_SIZE,
-                        "sortBy": "submittedDate",
-                        "sortOrder": "descending",
-                    },
-                    timeout=30,
-                )
-                resp.raise_for_status()
-            except Exception:
-                logger.exception(
-                    "arXiv API request failed at offset %d", start
-                )
+            resp = _fetch_page_with_retry(search_query, start)
+            if resp is None:
                 break
 
             feed = feedparser.parse(resp.text)
@@ -97,6 +84,56 @@ class ArXivAdapter(AbstractHistoricalAdapter):
 
         logger.info("arXiv: %d documents in date range", len(docs))
         return docs
+
+
+def _fetch_page_with_retry(
+    search_query: str,
+    start: int,
+) -> requests.Response | None:
+    """Fetch one page from arXiv, retrying on 429 with exponential backoff.
+
+    Returns the response on success, or None after all retries are exhausted.
+    """
+    delay = _BACKOFF_BASE
+    for attempt in range(_MAX_RETRIES):
+        try:
+            resp = requests.get(
+                _ARXIV_API,
+                params={
+                    "search_query": search_query,
+                    "start": start,
+                    "max_results": _PAGE_SIZE,
+                    "sortBy": "submittedDate",
+                    "sortOrder": "descending",
+                },
+                timeout=30,
+            )
+            resp.raise_for_status()
+            return resp
+        except requests.HTTPError as exc:
+            if exc.response is not None and exc.response.status_code == 429:
+                if attempt < _MAX_RETRIES - 1:
+                    logger.warning(
+                        "arXiv 429 at offset %d; retrying in %.0fs "
+                        "(attempt %d/%d)",
+                        start, delay, attempt + 1, _MAX_RETRIES,
+                    )
+                    time.sleep(delay)
+                    delay *= 2
+                    continue
+            logger.exception(
+                "arXiv API request failed at offset %d", start
+            )
+            return None
+        except Exception:
+            logger.exception(
+                "arXiv API request failed at offset %d", start
+            )
+            return None
+    logger.error(
+        "arXiv: exhausted %d retries at offset %d", _MAX_RETRIES, start
+    )
+    return None
 
 
 def _entry_to_document(entry: dict) -> HistoricalDocument | None:
