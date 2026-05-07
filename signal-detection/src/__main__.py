@@ -94,9 +94,14 @@ def promote_corpus() -> None:
     help="Inclusive end date (YYYY-MM-DD).",
 )
 @click.option(
+    "--domain",
+    required=True,
+    help="Domain slug (e.g. ai_news). Writes into bootstrap_{domain}.",
+)
+@click.option(
     "--collection",
     default=None,
-    help="Qdrant collection name (default: historical_{adapter}).",
+    help="Override Qdrant collection name (default: bootstrap_{domain}).",
 )
 @click.option(
     "--dry-run",
@@ -109,6 +114,7 @@ def historical_ingest(
     query: str,
     date_from: object,
     date_to: object,
+    domain: str,
     collection: str | None,
     dry_run: bool,
 ) -> None:
@@ -118,7 +124,7 @@ def historical_ingest(
     from historical_ingestion.pipeline import run_ingestion
 
     adapter_map = {"gdelt": GDELTAdapter(), "arxiv": ArXivAdapter()}
-    col = collection or f"historical_{adapter}"
+    col = collection or f"bootstrap_{domain}"
     stats = run_ingestion(
         adapter=adapter_map[adapter],
         query=query,

@@ -83,13 +83,15 @@ docker compose run --rm signal-detection python -m src historical-ingest \
     --adapter gdelt \
     --query "large language model" \
     --from 2023-01-01 \
-    --to 2023-03-31
+    --to 2023-03-31 \
+    --domain ai_news
 
 docker compose run --rm signal-detection python -m src historical-ingest \
     --adapter arxiv \
     --query "attention mechanism" \
     --from 2017-06-01 \
     --to 2017-12-31 \
+    --domain ai_news \
     --dry-run
 ```
 
@@ -99,7 +101,8 @@ docker compose run --rm signal-detection python -m src historical-ingest \
 | `--query` | required | Keyword or phrase to search for |
 | `--from` | required | Inclusive start date (`YYYY-MM-DD`) |
 | `--to` | required | Inclusive end date (`YYYY-MM-DD`) |
-| `--collection` | `historical_{adapter}` | Target Qdrant collection name |
+| `--domain` | required | Domain slug (e.g. `ai_news`). Writes into `bootstrap_{domain}` to seed the corpus for that domain |
+| `--collection` | `bootstrap_{domain}` | Override the target Qdrant collection name |
 | `--dry-run` | `false` | Report document count without embedding |
 
 **GDELT**: returns up to 250 articles per call (API hard limit). Narrow the date range for more targeted results. Article bodies are fetched via Trafilatura; articles with no extractable body are skipped.
