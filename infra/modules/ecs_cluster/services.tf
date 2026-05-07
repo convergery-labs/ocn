@@ -297,9 +297,12 @@ resource "aws_iam_role_policy" "ecs_events_run_task" {
     Version = "2012-10-17"
     Statement = [
       {
-        Effect   = "Allow"
-        Action   = ["ecs:RunTask"]
-        Resource = [aws_ecs_task_definition.signal_detection.arn]
+        Effect = "Allow"
+        Action = ["ecs:RunTask"]
+        Resource = [
+          aws_ecs_task_definition.signal_detection.arn,
+          aws_ecs_task_definition.lucky_clarke.arn,
+        ]
       },
       {
         Effect   = "Allow"
@@ -406,4 +409,124 @@ resource "aws_ecs_service" "api_gateway" {
   service_registries {
     registry_arn = aws_service_discovery_service.api_gateway.arn
   }
+}
+
+
+resource "aws_ecs_task_definition" "lucky_clarke" {
+  family                   = "${var.env}-lucky-clarke"
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = "512"
+  memory                   = "1024"
+  execution_role_arn       = aws_iam_role.ecs_task_execution.arn
+
+
+  container_definitions = jsonencode([
+    {
+      name  = "lucky-clarke"
+      image = "${var.ecr_registry}/ocn/lucky-clarke:${var.image_tag}"
+      portMappings = [
+        { containerPort = 8005 }
+      ]
+      environment = [
+        { name = "SIGNAL_DETECTION_URL",  value = "http://signal-detection.${var.env}.ocn.internal:8002" },
+        { name = "LUCKY_CLARKE_URL",      value = "http://lucky-clarke.${var.env}.ocn.internal:8005" },
+        { name = "SIGNAL_CALLER_SUB",     value = "1" },
+        { name = "OPENROUTER_MODEL",      value = "openai/gpt-4o-mini" },
+        { name = "AWS_REGION",            value = var.aws_region },
+      ]
+      secrets = [
+        {
+          name      = "OPENROUTER_API_KEY"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:ocn/${var.env}/lucky-clarke:OPENROUTER_API_KEY::"
+        },
+        {
+          name      = "SMTP_HOST"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:ocn/${var.env}/lucky-clarke:SMTP_HOST::"
+        },
+        {
+          name      = "SMTP_USER"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:ocn/${var.env}/lucky-clarke:SMTP_USER::"
+        },
+        {
+          name      = "SMTP_PASSWORD"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:ocn/${var.env}/lucky-clarke:SMTP_PASSWORD::"
+        },
+        {
+          name      = "SMTP_FROM"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:ocn/${var.env}/lucky-clarke:SMTP_FROM::"
+        },
+      ]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = "/ecs/${var.env}/lucky-clarke"
+          "awslogs-region"        = var.aws_region
+          "awslogs-stream-prefix" = "ecs"
+        }
+      }
+    }
+  ])
+}
+
+
+resource "aws_service_discovery_service" "lucky_clarke" {
+  name = "lucky-clarke"
+  dns_config {
+    namespace_id = aws_service_discovery_private_dns_namespace.main.id
+    dns_records {
+      ttl  = 10
+      type = "A"
+    }
+  }
+}
+
+
+resource "aws_ecs_service" "lucky_clarke" {
+  name            = "${var.env}-lucky-clarke"
+  cluster         = aws_ecs_cluster.main.id
+  task_definition = aws_ecs_task_definition.lucky_clarke.arn
+  desired_count   = 1
+  launch_type     = "FARGATE"
+
+
+  network_configuration {
+    subnets          = var.private_subnet_ids
+    security_groups  = [var.lucky_clarke_sg_id]
+    assign_public_ip = false
+  }
+
+
+  service_registries {
+    registry_arn = aws_service_discovery_service.lucky_clarke.arn
+  }
+}
+
+
+resource "aws_cloudwatch_event_rule" "lucky_clarke_daily" {
+  name                = "${var.env}-lucky-clarke-daily"
+  schedule_expression = "cron(0 17 * * ? *)"
+}
+
+
+resource "aws_cloudwatch_event_target" "lucky_clarke_daily" {
+  rule     = aws_cloudwatch_event_rule.lucky_clarke_daily.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+  ecs_target {
+    task_definition_arn = aws_ecs_task_definition.lucky_clarke.arn
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets         = var.private_subnet_ids
+      security_groups = [var.lucky_clarke_sg_id]
+    }
+  }
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "lucky-clarke"
+        command = ["python", "-m", "src", "run"]
+      }
+    ]
+  })
 }

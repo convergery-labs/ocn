@@ -14,7 +14,13 @@ from controllers.classify import (
     submit_classify_job,
     validate_domain,
 )
-from models.jobs import _decode_cursor, get_job, get_job_stats, list_job_results
+from models.jobs import (
+    _decode_cursor,
+    get_job,
+    get_job_stats,
+    list_completed_jobs,
+    list_job_results,
+)
 
 router = APIRouter()
 
@@ -135,6 +141,53 @@ def get_classification(
         ),
         "article_count": job["article_count"],
         "stats": stats,
+    }
+
+
+@router.get("/classifications")
+def list_classifications(
+    limit: int = 20,
+    cursor: str | None = None,
+    caller: dict[str, Any] = Depends(require_auth),
+) -> dict:
+    """Return completed classification jobs, newest first.
+
+    Cursor-paginated; returns {"jobs": [...], "next_cursor": str|null}.
+    """
+    if limit < 1 or limit > 100:
+        raise HTTPException(
+            status_code=422, detail="limit must be between 1 and 100."
+        )
+    after_id = 0
+    if cursor:
+        try:
+            after_id = _decode_cursor(cursor)
+        except ValueError:
+            raise HTTPException(
+                status_code=422, detail="Invalid cursor."
+            )
+    jobs, next_cursor = list_completed_jobs(
+        after_id=after_id, limit=limit
+    )
+    return {
+        "jobs": [
+            {
+                "job_id": j["id"],
+                "run_id": j["run_id"],
+                "status": j["status"],
+                "article_count": j["article_count"],
+                "created_at": (
+                    j["created_at"].isoformat()
+                    if j.get("created_at") else None
+                ),
+                "completed_at": (
+                    j["completed_at"].isoformat()
+                    if j.get("completed_at") else None
+                ),
+            }
+            for j in jobs
+        ],
+        "next_cursor": next_cursor,
     }
 
 

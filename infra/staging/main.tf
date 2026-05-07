@@ -55,6 +55,7 @@ module "ecs_cluster" {
   auth_sg_id            = module.security_groups.auth_sg_id
   news_sg_id            = module.security_groups.news_sg_id
   signal_sg_id          = module.security_groups.signal_sg_id
+  lucky_clarke_sg_id    = module.security_groups.lucky_clarke_sg_id
   api_gateway_tg_arn    = module.alb.api_gateway_tg_arn
   qdrant_host           = var.qdrant_host
   gateway_cors_origins  = "https://${aws_cloudfront_distribution.frontend.domain_name}"
@@ -70,6 +71,15 @@ module "alb" {
 
 resource "aws_ecr_repository" "api_gateway" {
   name                 = "ocn/api-gateway"
+  image_tag_mutability = "MUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+}
+
+resource "aws_ecr_repository" "lucky_clarke" {
+  name                 = "ocn/lucky-clarke"
   image_tag_mutability = "MUTABLE"
 
   image_scanning_configuration {

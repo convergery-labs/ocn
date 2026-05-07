@@ -20,3 +20,9 @@ resource "aws_cloudwatch_log_group" "api_gateway" {
   name              = "/ecs/${var.env}/api-gateway"
   retention_in_days = 30
 }
+
+
+resource "aws_cloudwatch_log_group" "lucky_clarke" {
+  name              = "/ecs/${var.env}/lucky-clarke"
+  retention_in_days = 30
+}

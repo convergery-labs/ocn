@@ -63,6 +63,25 @@ services:
       - ocn-internal
 
   # ---------------------------------------------------------------------------
+  # lucky-clarke (port 8005)
+  # ---------------------------------------------------------------------------
+  lucky-clarke:
+    build:
+      context: .
+      dockerfile: lucky-clarke/Dockerfile
+      target: base
+    ports:
+      - "8005:8005"
+    env_file: lucky-clarke/.env
+    depends_on:
+      news-retrieval:
+        condition: service_started
+      signal-detection:
+        condition: service_started
+    networks:
+      - ocn-internal
+
+  # ---------------------------------------------------------------------------
   # api-gateway (port 8004)
   # ---------------------------------------------------------------------------
   api-gateway:

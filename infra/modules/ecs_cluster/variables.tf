@@ -76,3 +76,8 @@ variable "gateway_cors_origins" {
   type    = string
   default = "*"
 }
+
+
+variable "lucky_clarke_sg_id" {
+  type = string
+}
