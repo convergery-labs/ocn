@@ -19,6 +19,8 @@ from qdrant_client.models import (
 from sklearn.cluster import MiniBatchKMeans
 
 from models.clusters import upsert_corpus_centroid, upsert_topic_cluster
+from models.cooccurrences import upsert_cooccurrences
+from pipeline.ner import extract_concepts
 
 logger = logging.getLogger(__name__)
 
@@ -195,6 +197,7 @@ def _process_article_claims(
     from controllers.classify import _extract_claims
 
     url = article["url"]
+    title = article.get("title", "")
     body = article.get("body", "")
     article_qdrant_id = _url_to_point_id(url)
     try:
@@ -220,6 +223,16 @@ def _process_article_claims(
     except Exception:
         logger.warning(
             "Claim extraction/embedding failed for %s; skipping",
+            url,
+            exc_info=True,
+        )
+
+    try:
+        concepts = extract_concepts(f"{title} {body}")
+        upsert_cooccurrences(concepts, domain)
+    except Exception:
+        logger.warning(
+            "Co-occurrence seeding failed for %s; skipping",
             url,
             exc_info=True,
         )
