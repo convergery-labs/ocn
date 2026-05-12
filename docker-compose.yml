@@ -82,6 +82,20 @@ services:
       - ocn-internal
 
   # ---------------------------------------------------------------------------
+  # research-universe (port 8006)
+  # ---------------------------------------------------------------------------
+  research-universe:
+    build:
+      context: .
+      dockerfile: research-universe/Dockerfile
+      target: base
+    ports:
+      - "8006:8006"
+    env_file: research-universe/.env
+    networks:
+      - ocn-internal
+
+  # ---------------------------------------------------------------------------
   # api-gateway (port 8004)
   # ---------------------------------------------------------------------------
   api-gateway:

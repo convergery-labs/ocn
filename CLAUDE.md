@@ -22,6 +22,7 @@ Confluence space: `Projects` — Cloud: `opengrowthventures.atlassian.net`
 | `signal-detection` | [signal-detection/](signal-detection/) | [signal-detection/CLAUDE.md](signal-detection/CLAUDE.md) | Signal detection and vector-similarity pipelines |
 | `api-gateway` | [api-gateway/](api-gateway/) | [api-gateway/CLAUDE.md](api-gateway/CLAUDE.md) | Async HTTP reverse proxy to OCN upstream services |
 | `lucky-clarke` | [lucky-clarke/](lucky-clarke/) | [lucky-clarke/CLAUDE.md](lucky-clarke/CLAUDE.md) | A2A-compatible daily AI news digest agent — classifies articles into 12 categories, generates summaries, and emails recipients |
+| `research-universe` | [research-universe/](research-universe/) | [research-universe/CLAUDE.md](research-universe/CLAUDE.md) | Discovers, classifies, and maintains the AlphaStreet AI Research Universe via a queue-based pipeline |
 | `infra` | [infra/](infra/) | [infra/CLAUDE.md](infra/CLAUDE.md) | Terraform infrastructure (VPC, RDS, ECS, ALB, IAM) |
 | `frontend` | [frontend/](frontend/) | [frontend/CLAUDE.md](frontend/CLAUDE.md) | React + Vite SPA — article feed UI |
 
@@ -83,6 +84,15 @@ ocn/
 │   ├── README.md
 │   ├── Dockerfile
 │   ├── requirements.txt
+│   ├── src/
+│   └── tests/
+├── research-universe/        # see research-universe/STRUCTURE.md
+│   ├── CLAUDE.md
+│   ├── STRUCTURE.md
+│   ├── README.md
+│   ├── Dockerfile
+│   ├── requirements.txt
+│   ├── pyproject.toml
 │   ├── src/
 │   └── tests/
 ├── infra/                    # see infra/STRUCTURE.md
