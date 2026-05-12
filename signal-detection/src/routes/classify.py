@@ -18,6 +18,7 @@ from models.jobs import (
     _decode_cursor,
     get_job,
     get_job_stats,
+    list_all_results,
     list_completed_jobs,
     list_job_results,
 )
@@ -111,6 +112,43 @@ async def post_classify(
     )
 
 
+@router.get("/classifications/results")
+def get_all_classification_results(
+    limit: int = 20,
+    cursor: str | None = None,
+    label: str | None = None,
+    flagged: bool | None = None,
+    caller: dict[str, Any] = Depends(require_auth),
+) -> dict:
+    """Return paginated classification results across all jobs."""
+    if limit < 1 or limit > 100:
+        raise HTTPException(
+            status_code=422, detail="limit must be between 1 and 100."
+        )
+    after_id = 0
+    if cursor:
+        try:
+            after_id = _decode_cursor(cursor)
+        except ValueError:
+            raise HTTPException(
+                status_code=422, detail="Invalid cursor."
+            )
+    results, next_cursor = list_all_results(
+        after_id=after_id, limit=limit, label=label, flagged=flagged
+    )
+    return {
+        "results": [
+            {
+                k: (v.isoformat() if k == "created_at" and v else v)
+                for k, v in r.items()
+                if k != "article_embedding"
+            }
+            for r in results
+        ],
+        "next_cursor": next_cursor,
+    }
+
+
 @router.get("/classifications/{job_id}")
 def get_classification(
     job_id: int,
@@ -197,6 +235,7 @@ def get_classification_results(
     limit: int = 20,
     cursor: str | None = None,
     flagged: bool | None = None,
+    label: str | None = None,
     caller: dict[str, Any] = Depends(require_auth),
 ) -> dict:
     """Return paginated classification results for a job."""
@@ -218,7 +257,7 @@ def get_classification_results(
                 status_code=422, detail="Invalid cursor."
             )
     results, next_cursor = list_job_results(
-        job_id=job_id, after_id=after_id, limit=limit, flagged=flagged
+        job_id=job_id, after_id=after_id, limit=limit, flagged=flagged, label=label
     )
     return {
         "results": [

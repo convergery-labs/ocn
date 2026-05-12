@@ -213,15 +213,21 @@ def list_job_results(
     after_id: int,
     limit: int,
     flagged: bool | None = None,
+    label: str | None = None,
 ) -> tuple[list[ClassificationRow], str | None]:
     """Return a page of classifications for a job.
 
     Returns (rows, next_cursor). next_cursor is None when no more pages.
     When flagged=True, only rows with flagged_for_review=TRUE are returned.
+    When label is set, only rows with that label are returned.
     """
     flagged_clause = (
         "AND c.flagged_for_review = TRUE" if flagged is True else ""
     )
+    label_clause = "AND c.label = :label" if label else ""
+    params: dict = {"job_id": job_id, "after_id": after_id, "fetch": limit + 1}
+    if label:
+        params["label"] = label
     with get_db() as conn:
         rows = conn.execute(
             f"""
@@ -240,12 +246,60 @@ def list_job_results(
                  ) AS claims
             FROM classifications c
             LEFT JOIN claims cl ON cl.classification_id = c.id
-            WHERE c.job_id = :job_id AND c.id > :after_id {flagged_clause}
+            WHERE c.job_id = :job_id AND c.id > :after_id {flagged_clause} {label_clause}
             GROUP BY c.id
             ORDER BY c.id ASC
             LIMIT :fetch
             """,
-            {"job_id": job_id, "after_id": after_id, "fetch": limit + 1},
+            params,
+        ).fetchall()
+    if len(rows) > limit:
+        next_cursor = _encode_cursor(rows[limit - 1]["id"])
+        rows = rows[:limit]
+    else:
+        next_cursor = None
+    return [ClassificationRow(r) for r in rows], next_cursor
+
+
+def list_all_results(
+    after_id: int,
+    limit: int,
+    label: str | None = None,
+    flagged: bool | None = None,
+) -> tuple[list[ClassificationRow], str | None]:
+    """Return a page of classifications across all jobs, newest first.
+
+    Optionally filtered by label and/or flagged_for_review.
+    """
+    flagged_clause = "AND c.flagged_for_review = TRUE" if flagged is True else ""
+    label_clause = "AND c.label = :label" if label else ""
+    params: dict = {"after_id": after_id, "fetch": limit + 1}
+    if label:
+        params["label"] = label
+    with get_db() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT c.id, c.job_id, c.article_url, c.source, c.label,
+                 c.article_title, c.article_summary,
+                 c.article_body, c.article_published,
+                 c.composite_score, c.trajectory_score, c.bridge_score,
+                 c.claim_novelty_score, c.plausibility_score,
+                 c.plausibility_flags, c.plausibility_reasoning,
+                 c.flagged_for_review,
+                 c.model_embedding, c.model_llm, c.cluster_id, c.created_at,
+                 COALESCE(
+                     array_agg(cl.claim_text)
+                         FILTER (WHERE cl.id IS NOT NULL),
+                         ARRAY[]::TEXT[]
+                 ) AS claims
+            FROM classifications c
+            LEFT JOIN claims cl ON cl.classification_id = c.id
+            WHERE c.id > :after_id {flagged_clause} {label_clause}
+            GROUP BY c.id
+            ORDER BY c.id DESC
+            LIMIT :fetch
+            """,
+            params,
         ).fetchall()
     if len(rows) > limit:
         next_cursor = _encode_cursor(rows[limit - 1]["id"])
