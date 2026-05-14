@@ -322,7 +322,7 @@ async def _run_scoring_phase(
                         oai,
                         _plausibility_model(),
                         article.get("title", ""),
-                        article.get("body", ""),
+                        article.get("body") or article.get("summary", ""),
                         composite,
                     ),
                 )
@@ -511,7 +511,7 @@ async def _run_feature_extraction(
         # Step 2 — Language filter
         english = []
         for article in deduped:
-            lang = _detect_language(article.get("body", ""))
+            lang = _detect_language(article.get("body") or article.get("summary", ""))
             if span:
                 span.start_observation(
                     name="language-filter",
@@ -531,7 +531,7 @@ async def _run_feature_extraction(
             return
 
         # Step 3 — Embed article bodies in batches
-        bodies = [a.get("body", "") for a in english]
+        bodies = [a.get("body") or a.get("summary", "") for a in english]
         total_chars = sum(len(b) for b in bodies)
         if span:
             span.start_observation(
@@ -591,7 +591,7 @@ async def _run_feature_extraction(
             )
             classification_ids.append(classification_id)
             article_urls.append(article_url)
-            article_bodies.append(article.get("body", ""))
+            article_bodies.append(article.get("body") or article.get("summary", ""))
 
         # Step 6 — Extract claims for all articles concurrently
         all_claims: list[list[str]] = await asyncio.gather(
@@ -1031,7 +1031,7 @@ def _dedup_indices(articles: list[dict]) -> list[int]:
     lsh = MinHashLSH(threshold=_MINHASH_THRESHOLD, num_perm=_MINHASH_PERMS)
     keep: list[int] = []
     for idx, article in enumerate(articles):
-        body = article.get("body", "")
+        body = article.get("body") or article.get("summary", "")
         tokens = body.lower().split()
         mh = MinHash(num_perm=_MINHASH_PERMS)
         for token in tokens:

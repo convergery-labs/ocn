@@ -13,7 +13,7 @@
 | `tests/` | Automated test suite — see Testing section below |
 | `src/__main__.py` | CLI entry point — `click` + `uvicorn.run` |
 | `src/app.py` | FastAPI app factory and lifespan hook |
-| `src/pipeline.py` | Fetch and relevance-filter pipeline (RSS + SerpAPI Google News fetch → Pass 1 LLM relevance filter); returns list of relevant articles |
+| `src/pipeline.py` | Fetch and relevance-filter pipeline (RSS + SerpAPI Google News + NewsAPI fetch → Pass 1 LLM relevance filter); returns list of relevant articles |
 | `src/db.py` | Thin adapter: `_new_connection()` (reads `POSTGRES_*` env vars), `init_db()`, and `db_utils.configure()`; re-exports `get_db`, `transaction`, and `DuplicateError` from `shared/src/db_utils.py` so all other imports are unaffected |
 | `src/auth.py` | FastAPI dependency functions: `require_auth` (validate Bearer token), `require_admin` (role gate) |
 | `src/seed.py` | Idempotent batch seed for `run_statuses`, `frequencies`, `domains`, `sources`, and admin API key |
@@ -31,7 +31,7 @@ The application is a single FastAPI process. `POST /run` uses FastAPI `Backgroun
 | **Routes** | `src/routes/` | Thin HTTP adapters: one `APIRouter` per resource, maps domain exceptions to status codes |
 | **Controllers** | `src/controllers/` | Business logic and multi-step orchestration; owns transaction boundaries for composite operations |
 | **Repository** | `src/models/` | SQL query functions + Pydantic input models; no HTTP concepts; cursor encode/decode delegated to `shared/src/cursor_utils.py` (`encode_cursor` / `decode_cursor`) |
-| **Pipeline** | `src/pipeline.py` | Stateless pipeline: parallel RSS fetch + SerpAPI Google News fetch (branched by `source_type`), title-based relevance filter (Pass 1 LLM); returns list of relevant article dicts |
+| **Pipeline** | `src/pipeline.py` | Stateless pipeline: parallel RSS fetch + SerpAPI Google News fetch + NewsAPI top-headlines fetch (branched by `source_type`), title-based relevance filter (Pass 1 LLM); returns list of relevant article dicts |
 | **Database** | `src/db.py` + `shared/src/db_utils.py` | `db.py` is a thin adapter: supplies `_new_connection()` and calls `db_utils.configure()`; the `_Connection` wrapper, `DuplicateError`, `get_db()`, and `transaction()` live in the repo-level `shared/src/db_utils.py` and are re-exported from `db.py` for backward compatibility |
 | **Auth** | `src/auth.py` | `require_auth` / `require_admin` FastAPI dependencies; delegates all token validation to `POST {AUTH_SERVICE_URL}/validate`; returns 503 if unconfigured |
 | **Seed data** | `src/seed.py` | Idempotent batch seed for `run_statuses`, `frequencies`, `domains`, and `sources` |
@@ -67,7 +67,7 @@ run_pipeline()  (background, after response is sent)
   └─ get_domain_config()        # load domain name + description from DB
   └─ pl.run()
        ├─ load_sources()        # query sources WHERE min_days_back <= days_back
-       ├─ _fetch_articles()     # branches by source_type: _fetch_rss() (feedparser, 10 workers) + _fetch_serpapi() (SerpAPI Google News, 5 workers); SERPAPI_KEY unset → google_news sources skipped
+       ├─ _fetch_articles()     # branches by source_type: _fetch_rss() (feedparser, 10 workers) + _fetch_serpapi() (SerpAPI Google News, 5 workers) + _fetch_newsapi() (NewsAPI top-headlines, 5 workers); respective KEY unset → sources skipped
        └─ _filter_articles()    # Pass 1 — LLM: title-only relevance filter
   └─ create_articles()          # batch INSERT relevant articles
   └─ complete_run() / fail_run() # UPDATE runs SET status='completed'|'failed'
@@ -145,6 +145,7 @@ pytest news-retrieval/tests/
 | `POSTGRES_USER` | `news-retrieval` | Database user |
 | `POSTGRES_PASSWORD` | — | Database password |
 | `SERPAPI_KEY` | — | Optional. SerpAPI API key for `google_news` sources. If unset, sources with `source_type = 'google_news'` are skipped with a warning log. |
+| `NEWSAPI_KEY` | — | Optional. NewsAPI API key for `newsapi` sources. If unset, sources with `source_type = 'newsapi'` are skipped with a warning log. |
 
 ### External services
 
@@ -153,6 +154,7 @@ pytest news-retrieval/tests/
 | OpenRouter (`openrouter.ai/api/v1`) | LLM inference — relevance filtering, tag generation, cluster naming, embeddings |
 | RSS feeds (various) | Source articles — managed via `POST /sources` API or seed data in `src/seed.py` |
 | SerpAPI (`serpapi.com/search?engine=google_news`) | Google News article fetch for sources with `source_type = 'google_news'` |
+| NewsAPI (`newsapi.org/v2`) | Top-headlines article fetch for sources with `source_type = 'newsapi'` |
 
 ### Database schema
 
@@ -164,6 +166,6 @@ Seven normalized tables. `run_statuses`, `frequencies`, `domains`, and `sources`
 | `run_statuses` | `name` (PK) | Lookup table: `running`, `completed`, `failed` |
 | `frequencies` | `name`, `min_days_back` | e.g. daily=1, weekly=7, monthly=30 |
 | `domains` | `name`, `slug`, `description`, `created_by` | `created_by` is audit-only (plain integer, no FK); access control uses `api_key_domains`; null = globally accessible |
-| `sources` | `url`, `domain_id`, `frequency_id`, `name`, `description`, `source_type`, `config` | FK to `domains` and `frequencies`; `source_type` is `rss` (default) or `google_news`; `config` is JSONB for source-type-specific params |
+| `sources` | `url`, `domain_id`, `frequency_id`, `name`, `description`, `source_type`, `config` | FK to `domains` and `frequencies`; `source_type` is `rss` (default), `google_news`, or `newsapi`; `config` is JSONB for source-type-specific params |
 | `runs` | `name`, `domain`, `started_at`, `completed_at`, `status`, `article_count`, `summary`, `callback_url`, `model` | One row per `POST /run`; `status` FK to `run_statuses`; `model` records the LLM used |
 | `articles` | `run_id`, `url`, `title`, `summary`, `body`, `source`, `published` | FK to `runs` |

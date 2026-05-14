@@ -125,6 +125,14 @@ resource "aws_ecs_task_definition" "news_retrieval" {
         {
           name      = "OPENROUTER_API_KEY"
           valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:ocn/${var.env}/news-retrieval:OPENROUTER_API_KEY::"
+        },
+        {
+          name      = "SERPAPI_KEY"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:ocn/${var.env}/news-retrieval:SERPAPI_KEY::"
+        },
+        {
+          name      = "NEWSAPI_KEY"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:ocn/${var.env}/news-retrieval:NEWSAPI_KEY::"
         }
       ]
       logConfiguration = {

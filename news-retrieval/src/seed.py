@@ -49,16 +49,41 @@ DOMAINS: list[dict[str, Any]] = [
 ]
 
 
-SERPAPI_QUERIES: list[tuple[str, str, str]] = [
-    # (query, display_name, domain_slug)
-    ("artificial intelligence", "Artificial Intelligence", "ai_news"),
-    ("generative AI LLM", "Generative AI & LLMs", "ai_news"),
-    ("machine learning deep learning", "Machine Learning", "ai_news"),
-    ("AI chips GPU semiconductors", "AI Chips & Semiconductors", "ai_news"),
-    ("AI regulation policy", "AI Policy & Regulation", "ai_news"),
-    ("foundation models AI startups", "AI Models & Startups", "ai_news"),
-    ("AI data training datasets", "AI Data & Training", "ai_news"),
+NEWSAPI_SOURCES: list[dict[str, Any]] = [
+    {
+        "domain_slug": "ai_news",
+        "url": "newsapi:top-headlines",
+        "name": "NewsAPI",
+        "source_type": "newsapi",
+        "frequency_name": "daily",
+        "description": "Top headlines from technology, science, and business categories.",
+        "config": {
+            "endpoint": "top-headlines",
+            "categories": ["technology", "science", "business"],
+            "language": "en",
+        },
+    },
 ]
+
+GOOGLE_NEWS_SOURCE: dict[str, Any] = {
+    "domain_slug": "ai_news",
+    "url": "google_news",
+    "name": "Google News",
+    "source_type": "google_news",
+    "frequency_name": "daily",
+    "description": "Google News search across AI topics via SerpAPI.",
+    "config": {
+        "queries": [
+            "artificial intelligence",
+            "generative AI LLM",
+            "machine learning deep learning",
+            "AI chips GPU semiconductors",
+            "AI regulation policy",
+            "foundation models AI startups",
+            "AI data training datasets",
+        ],
+    },
+}
 
 SOURCES: list[dict[str, Any]] = [
     # ------------------------------------------------------------------
@@ -359,19 +384,13 @@ SOURCES: list[dict[str, Any]] = [
         ),
     },
     # ------------------------------------------------------------------
-    # SerpAPI Google News (generated from SERPAPI_QUERIES)
+    # SerpAPI Google News
     # ------------------------------------------------------------------
-    *[
-        {
-            "domain_slug": domain_slug,
-            "url": query,
-            "name": "Google News",
-            "source_type": "google_news",
-            "frequency_name": "daily",
-            "description": f"Google News search for {name.lower()} coverage.",
-        }
-        for query, name, domain_slug in SERPAPI_QUERIES
-    ],
+    GOOGLE_NEWS_SOURCE,
+    # ------------------------------------------------------------------
+    # NewsAPI top-headlines
+    # ------------------------------------------------------------------
+    *NEWSAPI_SOURCES,
 ]
 
 # ---------------------------------------------------------------------------

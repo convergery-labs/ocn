@@ -65,6 +65,7 @@ infra/
 | `OPENROUTER_API_KEY` | Secrets Manager | `ocn/{env}/news-retrieval:OPENROUTER_API_KEY` |
 | `OPENROUTER_MODEL` | hardcoded | `openrouter/elephant-alpha` |
 | `SERPAPI_KEY` | Secrets Manager | `ocn/{env}/news-retrieval:SERPAPI_KEY` — optional; SerpAPI key for `google_news` sources |
+| `NEWSAPI_KEY` | Secrets Manager | `ocn/{env}/news-retrieval:NEWSAPI_KEY` — optional; NewsAPI key for `newsapi` sources |
 
 ### signal-detection
 | Variable | Source | Notes |

@@ -82,14 +82,16 @@ Runs as the background task for each `/classify` job (`run_agent_loop()` in `con
 
 ### Phase 1 — Feature Extraction (`_run_feature_extraction`)
 
-1. **MinHash LSH dedup** — tokenises the body, builds a `MinHashLSH` index (threshold = 0.85, 128 permutations); near-duplicate articles are skipped and logged.
-2. **Language filter** — `langdetect.detect()`; non-English articles are skipped and logged with their detected language code.
-3. **Article embedding** — batch of 50 bodies sent to OpenRouter (`EMBEDDING_MODEL`, default `text-embedding-3-large`, 3072 dims); upserted to Qdrant `articles` collection with payload `{url, domain, published_date, label: null}`.
+All steps that read article text use `body` with a fallback to `summary` when body is null/empty (e.g. SerpAPI articles where Trafilatura scraping failed).
+
+1. **MinHash LSH dedup** — tokenises `body or summary`, builds a `MinHashLSH` index (threshold = 0.85, 128 permutations); near-duplicate articles are skipped and logged.
+2. **Language filter** — `langdetect.detect(body or summary)`; non-English articles are skipped and logged with their detected language code.
+3. **Article embedding** — batch of 50 `body or summary` texts sent to OpenRouter (`EMBEDDING_MODEL`, default `text-embedding-3-large`, 3072 dims); upserted to Qdrant `articles` collection with payload `{url, domain, published_date, label: null}`.
 4. **Placeholder classification row** — `classifications` row inserted with `label='Noise'` and `composite_score=0.0`; updated by Phase 2.
-5. **Claim extraction** — LLM prompt (model: `OPENROUTER_MODEL`) returns 3–5 factual claims as a JSON array; malformed JSON falls back to no claims with a warning log.
+5. **Claim extraction** — LLM prompt (model: `OPENROUTER_MODEL`) receives `body or summary`; returns 3–5 factual claims as a JSON array; malformed JSON falls back to no claims with a warning log.
 6. **Claim embedding** — each claim embedded with `CLAIM_EMBEDDING_MODEL` (default `openai/text-embedding-3-small`, 1536 dims); upserted to Qdrant `claims` collection.
 7. **Claim storage** — `claims` Postgres rows inserted with `claim_text`, `claim_embedding_id` (Qdrant UUID), and `embedding_model`.
-8. **NER concept extraction** — spaCy `en_core_web_lg` extracts named entities and noun chunks from `title + body`; matched against `taxonomy_mappings.json` keyword patterns; deduplicated concept slugs written to `classifications.concepts` (JSONB). Articles with no matches log a warning and store an empty array.
+8. **NER concept extraction** — spaCy `en_core_web_lg` extracts named entities and noun chunks from `title + (body or summary)`; matched against `taxonomy_mappings.json` keyword patterns; deduplicated concept slugs written to `classifications.concepts` (JSONB). Articles with no matches log a warning and store an empty array.
 
 All steps emit Langfuse spans when `LANGFUSE_PUBLIC_KEY` is set; tracing is silently disabled if absent.
 
@@ -103,7 +105,7 @@ For each article classified in Phase 1:
 4. **Sub-score C — claim novelty** (`_compute_claim_novelty`) — for each extracted claim, Qdrant `search` against the `claims` collection (k=10) filtered to the same domain and excluding the article's own claims; score = mean cosine distance. `COLD_START_CLAIM_SCORE` (default 0.5) used when the claim store is empty.
 5. **Composite score** (`_compute_composite`) — Phase 4 (bridge available): `0.25 * A + 0.30 * B + 0.45 * C`; Phase 3 fallback (bridge=null): `0.40 * A + 0.60 * C`. All weights env-configurable (`W_TRAJECTORY`, `W_CLAIM_NOVELTY`, `W_TRAJECTORY_P4`, `W_BRIDGE`, `W_CLAIM_NOVELTY_P4`).
 6. **Label** (`_assign_label`) — High Signal ≥ 0.70, Weak Signal 0.40–0.70, Noise < 0.40. Thresholds env-configurable (`SIGNAL_THRESHOLD`, `WEAK_SIGNAL_THRESHOLD`).
-7. **Plausibility filter** (`_call_plausibility_llm` + `_apply_plausibility_downgrade`) — runs for articles with `composite_score > PLAUSIBILITY_THRESHOLD` (default 0.40). A single Claude Sonnet call via OpenRouter returns `{plausibility_score, flags, reasoning}`. If `plausibility_score < PLAUSIBILITY_DOWNGRADE_THRESHOLD` (default 0.30): Signal is downgraded to Weak Signal and `flagged_for_review` is set. Noise articles skip this step; LLM failures are logged and the label is unchanged.
+7. **Plausibility filter** (`_call_plausibility_llm` + `_apply_plausibility_downgrade`) — runs for articles with `composite_score > PLAUSIBILITY_THRESHOLD` (default 0.40). A single Claude Sonnet call via OpenRouter receives `title + (body or summary)` and returns `{plausibility_score, flags, reasoning}`. If `plausibility_score < PLAUSIBILITY_DOWNGRADE_THRESHOLD` (default 0.30): Signal is downgraded to Weak Signal and `flagged_for_review` is set. Noise articles skip this step; LLM failures are logged and the label is unchanged.
 8. **DB update** — `classifications` row updated with label, scores, cluster_id, and plausibility fields.
 9. **Deferred promotion** — Signal articles inserted into `deferred_promotions` with `promote_at = now() + 30 days`.
 

@@ -53,6 +53,15 @@ _ARTICLE_DUP = {
     "source": "example.com",
     "published": "2026-01-03",
 }
+# SerpAPI-style article where Trafilatura scraping failed — body is None
+_ARTICLE_NO_BODY = {
+    "url": "https://example.com/no-body",
+    "title": "AI startup raises $50M Series B",
+    "body": None,
+    "summary": "An AI startup focused on enterprise automation raised $50M in a Series B round led by Accel.",
+    "source": "TechCrunch",
+    "published": "2026-01-04",
+}
 
 _FAKE_ARTICLE_EMBEDDING = [0.1] * 3072
 _FAKE_CLAIM_EMBEDDING = [0.2] * 1536
@@ -402,3 +411,31 @@ class TestRunFeatureExtraction:
             await _run_feature_extraction(job["id"], [_ARTICLE_EN], domain="ai_news")
 
         mock_lf_class.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_null_body_falls_back_to_summary(self, job) -> None:
+        """Article with null body uses summary text for embedding, not empty string."""
+        qdrant = _mock_qdrant()
+        oai = _mock_openai()
+        with (
+            patch("controllers.classify.QdrantClient", return_value=qdrant),
+            patch("controllers.classify.OpenAI", return_value=oai),
+        ):
+            await _run_feature_extraction(job["id"], [_ARTICLE_NO_BODY], domain="ai_news")
+
+        # Article should reach Qdrant — pipeline completed without skipping
+        article_upsert_calls = [
+            c for c in qdrant.upsert.call_args_list
+            if c.kwargs.get("collection_name") == "articles"
+            or (c.args and c.args[0] == "articles")
+        ]
+        assert len(article_upsert_calls) == 1
+
+        # Embedding must have received the summary text, not an empty string
+        embed_inputs = [
+            call.kwargs.get("input") or call.args[1]
+            for call in oai.embeddings.create.call_args_list
+        ]
+        article_embed_input = embed_inputs[0]
+        assert isinstance(article_embed_input, list)
+        assert _ARTICLE_NO_BODY["summary"] in article_embed_input[0]
