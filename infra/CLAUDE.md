@@ -64,6 +64,7 @@ infra/
 | `AUTH_SERVICE_URL` | hardcoded | `http://auth-service.{env}.ocn.internal:8001` |
 | `OPENROUTER_API_KEY` | Secrets Manager | `ocn/{env}/news-retrieval:OPENROUTER_API_KEY` |
 | `OPENROUTER_MODEL` | hardcoded | `openrouter/elephant-alpha` |
+| `SERPAPI_KEY` | Secrets Manager | `ocn/{env}/news-retrieval:SERPAPI_KEY` — optional; SerpAPI key for `google_news` sources |
 
 ### signal-detection
 | Variable | Source | Notes |

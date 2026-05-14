@@ -1,4 +1,5 @@
 """Source data models and database access functions."""
+import json
 from datetime import datetime
 from typing import Optional, TypedDict
 
@@ -16,6 +17,8 @@ class SourceIn(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     no_fetch: bool = False
+    source_type: str = "rss"
+    config: Optional[dict] = None
 
 
 class SourceBase(TypedDict):
@@ -28,6 +31,8 @@ class SourceBase(TypedDict):
     name: Optional[str]
     description: Optional[str]
     no_fetch: bool
+    source_type: str
+    config: Optional[dict]
     created_at: datetime
 
 
@@ -44,6 +49,8 @@ class SourceRef(TypedDict):
     url: str
     min_days_back: int
     no_fetch: bool
+    source_type: str
+    config: Optional[dict]
 
 
 def load_sources(domain_slug: str, days_back: int) -> list[SourceRef]:
@@ -54,7 +61,8 @@ def load_sources(domain_slug: str, days_back: int) -> list[SourceRef]:
     with get_db() as conn:
         rows = conn.execute(
             """
-            SELECT s.url, f.min_days_back, s.no_fetch
+            SELECT s.url, f.min_days_back, s.no_fetch,
+                   s.source_type, s.config
             FROM   sources     s
             JOIN   frequencies f ON f.id = s.frequency_id
             JOIN   domains     d ON d.id = s.domain_id
@@ -117,17 +125,20 @@ def create_source(body: SourceIn) -> SourceBase:
             raise ValueError(
                 f"frequency_id {body.frequency_id} not found."
             )
+        data = body.model_dump()
+        if data.get("config") is not None:
+            data["config"] = json.dumps(data["config"])
         cursor = conn.execute(
             """
             INSERT INTO sources
                 (url, domain_id, frequency_id, name, description,
-                 no_fetch)
+                 no_fetch, source_type, config)
             VALUES
                 (:url, :domain_id, :frequency_id, :name, :description,
-                 :no_fetch)
+                 :no_fetch, :source_type, :config)
             RETURNING id
             """,
-            body.model_dump(),
+            data,
         )
         new_id = cursor.fetchone()["id"]
         row = conn.execute(
