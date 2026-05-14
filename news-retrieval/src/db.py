@@ -164,3 +164,12 @@ def init_db() -> None:
             " ADD COLUMN IF NOT EXISTS no_fetch"
             " BOOLEAN NOT NULL DEFAULT FALSE"
         )
+        conn.execute(
+            "ALTER TABLE sources"
+            " ADD COLUMN IF NOT EXISTS source_type"
+            " TEXT NOT NULL DEFAULT 'rss'"
+        )
+        conn.execute(
+            "ALTER TABLE sources"
+            " ADD COLUMN IF NOT EXISTS config JSONB"
+        )

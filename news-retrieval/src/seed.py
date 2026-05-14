@@ -7,6 +7,7 @@ Run directly to populate a fresh database:
 The script is idempotent — rows that already exist (matched by slug
 or URL) are silently skipped.
 """
+import json
 import logging
 from typing import Any
 
@@ -47,6 +48,17 @@ DOMAINS: list[dict[str, Any]] = [
     },
 ]
 
+
+SERPAPI_QUERIES: list[tuple[str, str, str]] = [
+    # (query, display_name, domain_slug)
+    ("artificial intelligence", "Artificial Intelligence", "ai_news"),
+    ("generative AI LLM", "Generative AI & LLMs", "ai_news"),
+    ("machine learning deep learning", "Machine Learning", "ai_news"),
+    ("AI chips GPU semiconductors", "AI Chips & Semiconductors", "ai_news"),
+    ("AI regulation policy", "AI Policy & Regulation", "ai_news"),
+    ("foundation models AI startups", "AI Models & Startups", "ai_news"),
+    ("AI data training datasets", "AI Data & Training", "ai_news"),
+]
 
 SOURCES: list[dict[str, Any]] = [
     # ------------------------------------------------------------------
@@ -346,6 +358,20 @@ SOURCES: list[dict[str, Any]] = [
             " investing."
         ),
     },
+    # ------------------------------------------------------------------
+    # SerpAPI Google News (generated from SERPAPI_QUERIES)
+    # ------------------------------------------------------------------
+    *[
+        {
+            "domain_slug": domain_slug,
+            "url": query,
+            "name": "Google News",
+            "source_type": "google_news",
+            "frequency_name": "daily",
+            "description": f"Google News search for {name.lower()} coverage.",
+        }
+        for query, name, domain_slug in SERPAPI_QUERIES
+    ],
 ]
 
 # ---------------------------------------------------------------------------
@@ -410,13 +436,17 @@ def seed() -> None:
                 freq_id_map[s.get("frequency_name", "daily")],
                 s["name"],
                 s["description"],
+                s.get("no_fetch", False),
+                s.get("source_type", "rss"),
+                json.dumps(s["config"]) if s.get("config") else None,
             )
             for s in SOURCES
         ]
         with get_db() as conn:
             cur = conn.execute_values(
                 "INSERT INTO sources"
-                " (url, domain_id, frequency_id, name, description)"
+                " (url, domain_id, frequency_id, name, description,"
+                " no_fetch, source_type, config)"
                 " VALUES %s ON CONFLICT (url) DO NOTHING RETURNING id",
                 source_rows,
             )
