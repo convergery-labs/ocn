@@ -32,6 +32,14 @@ _SERPAPI_DATE_RE = re.compile(
 )
 
 
+def _parse_newsapi_date(date_str: str) -> datetime | None:
+    """Parse a NewsAPI ISO-8601 publishedAt string to a UTC datetime."""
+    try:
+        return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Pydantic models
 # ---------------------------------------------------------------------------
@@ -220,56 +228,66 @@ def _parse_serpapi_date(date_str: str) -> datetime | None:
 
 
 def _fetch_one_serpapi(source: dict, days_back: int, api_key: str) -> list[dict]:
-    """Fetch Google News results for a single SerpAPI query.
+    """Fetch Google News results for a SerpAPI source.
+
+    If ``config`` contains a ``queries`` list, all queries are fetched in
+    parallel and results are deduplicated by URL. Falls back to
+    ``source["url"]`` as a single query when ``queries`` is absent.
 
     Args:
-        source: Source dict; ``url`` is treated as the search query.
+        source: Source dict; ``config.queries`` is the preferred query list;
+            ``url`` is used as a single query when ``queries`` is absent.
         days_back: Used to set the SerpAPI tbs date-range filter.
         api_key: SerpAPI API key.
 
     Returns:
-        List of article dicts with ``_pub_date`` set to None.
+        List of article dicts with ``_pub_date`` set.
     """
-    query = source["url"]
-    params: dict = {
-        "engine": "google_news",
-        "q": query,
-        "api_key": api_key,
-    }
+    config = dict(source.get("config") or {})
+    queries: list[str] = config.pop("queries", None) or [source["url"]]
     tbs = _days_to_tbs(days_back)
-    if tbs:
-        params["tbs"] = tbs
-    config = source.get("config") or {}
-    params.update(config)
-
-    t0 = time.perf_counter()
-    try:
-        resp = httpx.get(
-            "https://serpapi.com/search",
-            params=params,
-            timeout=30.0,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as exc:
-        logger.warning("[SERPAPI] query=%r failed: %s", query, exc)
-        return []
-
     cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
 
-    candidates = []
-    for r in data.get("news_results", []):
-        pub_date = _parse_serpapi_date(r.get("date", ""))
-        if pub_date and pub_date < cutoff:
-            continue
-        candidates.append({
-            "title": r.get("title", ""),
-            "url": r.get("link", ""),
-            "published": r.get("date", ""),
-            "source": r.get("source", {}).get("name", ""),
-            "summary": _clean_summary(r.get("snippet", "")),
-            "_pub_date": pub_date,
-        })
+    def _fetch_query(query: str) -> list[dict]:
+        params: dict = {"engine": "google_news", "q": query, "api_key": api_key, **config}
+        if tbs:
+            params["tbs"] = tbs
+        try:
+            resp = httpx.get(
+                "https://serpapi.com/search",
+                params=params,
+                timeout=30.0,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:
+            logger.warning("[SERPAPI] query=%r failed: %s", query, exc)
+            return []
+        results = []
+        for r in data.get("news_results", []):
+            pub_date = _parse_serpapi_date(r.get("date", ""))
+            if pub_date and pub_date < cutoff:
+                continue
+            results.append({
+                "title": r.get("title", ""),
+                "url": r.get("link", ""),
+                "published": r.get("date", ""),
+                "source": r.get("source", {}).get("name", ""),
+                "summary": _clean_summary(r.get("snippet", "")),
+                "_pub_date": pub_date,
+            })
+        return results
+
+    t0 = time.perf_counter()
+    seen_urls: set[str] = set()
+    candidates: list[dict] = []
+
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        for query_results in executor.map(_fetch_query, queries):
+            for a in query_results:
+                if a["url"] and a["url"] not in seen_urls:
+                    seen_urls.add(a["url"])
+                    candidates.append(a)
 
     def _fetch_body(url: str) -> str | None:
         return trafilatura.extract(trafilatura.fetch_url(url)) if url else None
@@ -280,12 +298,11 @@ def _fetch_one_serpapi(source: dict, days_back: int, api_key: str) -> list[dict]
     for article, body in zip(candidates, bodies):
         article["body"] = body
 
-    results = candidates
     logger.info(
-        "[TIMER] serpapi query=%r articles=%d elapsed=%.2fs",
-        query, len(results), time.perf_counter() - t0,
+        "[TIMER] serpapi source=%r queries=%d articles=%d elapsed=%.2fs",
+        source["url"], len(queries), len(candidates), time.perf_counter() - t0,
     )
-    return results
+    return candidates
 
 
 def _fetch_serpapi(
@@ -318,25 +335,128 @@ def _fetch_serpapi(
     return articles
 
 
+def _fetch_one_newsapi(source: dict, days_back: int, api_key: str) -> list[dict]:
+    """Fetch top-headlines articles for a single NewsAPI source.
+
+    If ``config`` contains a ``categories`` list, one HTTP request is made per
+    category and results are deduplicated by URL before body enrichment.
+
+    Args:
+        source: Source dict; ``config`` carries NewsAPI params (``endpoint``,
+            ``categories``, ``language``, etc.).
+        days_back: Exclude articles older than this many days.
+        api_key: NewsAPI API key.
+
+    Returns:
+        List of article dicts with ``_pub_date`` set.
+    """
+    config = dict(source.get("config") or {})
+    endpoint = config.pop("endpoint", "top-headlines")
+    categories: list[str | None] = config.pop("categories", [None])
+    from_date = (
+        datetime.now(timezone.utc) - timedelta(days=days_back)
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
+    base_url = f"https://newsapi.org/v2/{endpoint}"
+
+    t0 = time.perf_counter()
+    seen_urls: set[str] = set()
+    candidates: list[dict] = []
+
+    for category in categories:
+        params: dict = {**config, "pageSize": 100, "apiKey": api_key}
+        if endpoint == "everything":
+            params["from"] = from_date
+        if category is not None:
+            params["category"] = category
+        try:
+            resp = httpx.get(base_url, params=params, timeout=30.0)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:
+            logger.warning(
+                "[NEWSAPI] source=%r category=%r failed: %s",
+                source["url"], category, exc,
+            )
+            continue
+        for r in data.get("articles", []):
+            url = r.get("url", "")
+            if not url or url in seen_urls:
+                continue
+            pub_date = _parse_newsapi_date(r.get("publishedAt", ""))
+            if pub_date and pub_date < cutoff:
+                continue
+            seen_urls.add(url)
+            raw_content = r.get("content", "") or ""
+            candidates.append({
+                "title": r.get("title", ""),
+                "url": url,
+                "published": r.get("publishedAt", ""),
+                "source": (r.get("source") or {}).get("name", ""),
+                "summary": _clean_summary(r.get("description", "") or ""),
+                "body": _clean_summary(raw_content) or None,
+                "_pub_date": pub_date,
+            })
+
+    logger.info(
+        "[TIMER] newsapi source=%r articles=%d elapsed=%.2fs",
+        source["url"], len(candidates), time.perf_counter() - t0,
+    )
+    return candidates
+
+
+def _fetch_newsapi(
+    sources: list[dict],
+    days_back: int,
+    api_key: str,
+) -> list[dict]:
+    """Fetch articles from NewsAPI for multiple sources in parallel.
+
+    Args:
+        sources: List of NewsAPI source dicts with ``config`` carrying API params.
+        days_back: Exclude articles older than this many days.
+        api_key: NewsAPI API key.
+
+    Returns:
+        List of article dicts with ``_pub_date`` set.
+    """
+    articles: list[dict] = []
+    t0 = time.perf_counter()
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        for source_articles in executor.map(
+            partial(_fetch_one_newsapi, days_back=days_back, api_key=api_key),
+            sources,
+        ):
+            articles.extend(source_articles)
+    logger.info(
+        "[TIMER] newsapi total: sources=%d articles=%d elapsed=%.2fs",
+        len(sources), len(articles), time.perf_counter() - t0,
+    )
+    return articles
+
+
 def _fetch_articles(
     sources: list[dict],
     days_back: int,
     max_articles: int,
     serpapi_key: str | None = None,
+    newsapi_key: str | None = None,
 ) -> list[dict]:
     """Fetch articles from all sources, routing by source_type.
 
     Args:
-        sources: List of source dicts (RSS and/or SerpAPI).
+        sources: List of source dicts (RSS, SerpAPI, and/or NewsAPI).
         days_back: Exclude articles older than this many days.
         max_articles: Cap on total articles; 0 means no limit.
         serpapi_key: SerpAPI API key; SerpAPI sources are skipped if None.
+        newsapi_key: NewsAPI API key; NewsAPI sources are skipped if None.
 
     Returns:
         List of article dicts sorted newest-first.
     """
     rss_sources = [s for s in sources if s.get("source_type", "rss") == "rss"]
     serpapi_sources = [s for s in sources if s.get("source_type") == "google_news"]
+    newsapi_sources = [s for s in sources if s.get("source_type") == "newsapi"]
 
     articles: list[dict] = []
     t0 = time.perf_counter()
@@ -351,6 +471,15 @@ def _fetch_articles(
             logger.warning(
                 "SERPAPI_KEY not set — skipping %d serpapi source(s)",
                 len(serpapi_sources),
+            )
+
+    if newsapi_sources:
+        if newsapi_key:
+            articles.extend(_fetch_newsapi(newsapi_sources, days_back, newsapi_key))
+        else:
+            logger.warning(
+                "NEWSAPI_KEY not set — skipping %d newsapi source(s)",
+                len(newsapi_sources),
             )
 
     articles.sort(
@@ -534,12 +663,15 @@ def run(
     t0 = time.perf_counter()
     client = _make_client(openrouter_api_key)
     serpapi_key = os.environ.get("SERPAPI_KEY")
+    newsapi_key = os.environ.get("NEWSAPI_KEY")
 
     sources = load_sources(domain_slug, days_back)
     if not sources:
         return {"articles": []}
 
-    articles = _fetch_articles(sources, days_back, max_articles, serpapi_key)
+    articles = _fetch_articles(
+        sources, days_back, max_articles, serpapi_key, newsapi_key
+    )
     if not articles:
         return {"articles": []}
 
