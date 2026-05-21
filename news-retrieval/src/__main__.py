@@ -6,6 +6,7 @@ import uvicorn
 
 from app import app
 from db import init_db
+from models.runs import fail_orphaned_runs
 from seed import seed
 
 logging.basicConfig(level=logging.INFO)
@@ -22,6 +23,9 @@ if __name__ == "__main__":
         init_db()
         logger.info("Seeding database...")
         seed()
+        cleaned = fail_orphaned_runs()
+        if cleaned:
+            logger.info("Cleaned up %d orphaned run(s).", cleaned)
         logger.info("Startup complete.")
         uvicorn.run(app, host=host, port=port)
 

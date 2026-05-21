@@ -164,6 +164,26 @@ def list_runs(
     return rows, next_cursor  # type: ignore[return-value]
 
 
+def fail_orphaned_runs() -> int:
+    """Reset any runs stuck in 'running' to 'failed' on startup.
+
+    Called once at startup to clean up jobs whose background task was
+    killed by a previous process restart.  Returns the number of rows
+    updated.
+    """
+    with get_db() as conn:
+        cur = conn.execute(
+            """
+            UPDATE runs
+            SET status       = 'failed',
+                completed_at = CURRENT_TIMESTAMP,
+                summary      = 'Orphaned: process restarted'
+            WHERE status = 'running'
+            """
+        )
+        return cur.rowcount
+
+
 def get_running_run_for_domain(domain: str) -> Optional[int]:
     """Return the id of any currently running run for domain, or None."""
     with get_db() as conn:

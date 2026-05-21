@@ -70,7 +70,7 @@ async def _trigger_news_run(request) -> int:
     if resp.status_code == 202:
         return int(resp.json()["run_id"])
     if resp.status_code == 409:
-        return int(resp.json()["run_id"])
+        return int(resp.json()["detail"]["run_id"])
     raise RuntimeError(
         f"news-retrieval POST /run returned {resp.status_code}: {resp.text}"
     )
