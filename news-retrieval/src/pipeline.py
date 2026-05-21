@@ -364,7 +364,7 @@ def _fetch_one_newsapi(source: dict, days_back: int, api_key: str) -> list[dict]
     candidates: list[dict] = []
 
     for category in categories:
-        params: dict = {**config, "pageSize": 100, "apiKey": api_key}
+        params: dict = {**config, "pageSize": 50, "apiKey": api_key}
         if endpoint == "everything":
             params["from"] = from_date
         if category is not None:

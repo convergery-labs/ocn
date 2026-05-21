@@ -19,9 +19,7 @@ CATEGORIES: list[str] = [
 EMAIL_RECIPIENTS: list[str] = [
     "gunjan@opengrowth.com",
     "karan@nasiko.com",
-    "kajal.nain@opengrowth.com",
     "ayushi.shah@opengrowth.com",
-    "serhii.krutyholova@gmail.com",
     "aditya.jaiswal@opengrowth.com",
     "wasikul.islam@cern.ch",
 ]

@@ -50,7 +50,7 @@ logger = logging.getLogger(__name__)
 
 _MINHASH_PERMS = 128
 _MINHASH_THRESHOLD = 0.85
-_EMBED_BATCH_SIZE = 50
+_EMBED_BATCH_SIZE = 40
 _ARTICLE_VECTOR_SIZE = 3072
 _CLAIM_VECTOR_SIZE = 1536
 
@@ -546,8 +546,9 @@ async def _run_feature_extraction(
         all_embeddings: list[list[float]] = []
         for i in range(0, len(english), _EMBED_BATCH_SIZE):
             batch_bodies = bodies[i: i + _EMBED_BATCH_SIZE]
-            batch_embeddings = _embed_texts(
-                oai, embedding_model, batch_bodies
+            batch_embeddings = await loop.run_in_executor(
+                None,
+                partial(_embed_texts, oai, embedding_model, batch_bodies),
             )
             all_embeddings.extend(batch_embeddings)
 
@@ -565,7 +566,10 @@ async def _run_feature_extraction(
             )
             for a, emb in zip(english, all_embeddings)
         ]
-        qdrant.upsert(collection_name="articles", points=article_points)
+        await loop.run_in_executor(
+            None,
+            partial(qdrant.upsert, collection_name="articles", points=article_points),
+        )
         logger.info(
             "Job %d: upserted %d articles to Qdrant",
             job_id, len(article_points),
@@ -1063,7 +1067,7 @@ def _embed_texts(
     texts: list[str],
 ) -> list[list[float]]:
     """Embed *texts* in one batch via OpenRouter. Truncates to 30K chars."""
-    truncated = [t[:30_000] for t in texts]
+    truncated = [t[:20_000] for t in texts]
     response = client.embeddings.create(model=model, input=truncated)
     return [item.embedding for item in response.data]
 
