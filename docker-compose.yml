@@ -129,6 +129,25 @@ services:
       - ocn-internal
 
   # ---------------------------------------------------------------------------
+  # signal-detection-agent (port 8003)
+  # ---------------------------------------------------------------------------
+  signal-detection-agent:
+    build:
+      context: .
+      dockerfile: signal-detection-agent/Dockerfile
+      target: base
+    ports:
+      - "8003:8003"
+    env_file: signal-detection-agent/.env
+    depends_on:
+      postgres-signal:
+        condition: service_healthy
+      news-retrieval:
+        condition: service_started
+    networks:
+      - ocn-internal
+
+  # ---------------------------------------------------------------------------
   # signal-detection (port 8002)
   # ---------------------------------------------------------------------------
   signal-detection:

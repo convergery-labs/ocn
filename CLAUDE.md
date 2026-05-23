@@ -20,6 +20,7 @@ Confluence space: `Projects` — Cloud: `opengrowthventures.atlassian.net`
 | `auth-service` | [auth-service/](auth-service/) | [auth-service/CLAUDE.md](auth-service/CLAUDE.md) | Authentication and API key management |
 | `news-retrieval` | [news-retrieval/](news-retrieval/) | [news-retrieval/CLAUDE.md](news-retrieval/CLAUDE.md) | RSS feed fetching and LLM-based relevance filtering |
 | `signal-detection` | [signal-detection/](signal-detection/) | [signal-detection/CLAUDE.md](signal-detection/CLAUDE.md) | Signal detection and vector-similarity pipelines |
+| `signal-detection-agent` | [signal-detection-agent/](signal-detection-agent/) | [signal-detection-agent/CLAUDE.md](signal-detection-agent/CLAUDE.md) | LLM-driven signal detection agent — classifies articles via Claude with reasoning traces |
 | `api-gateway` | [api-gateway/](api-gateway/) | [api-gateway/CLAUDE.md](api-gateway/CLAUDE.md) | Async HTTP reverse proxy to OCN upstream services |
 | `lucky-clarke` | [lucky-clarke/](lucky-clarke/) | [lucky-clarke/CLAUDE.md](lucky-clarke/CLAUDE.md) | A2A-compatible daily AI news digest agent — classifies articles into 12 categories, generates summaries, and emails recipients |
 | `infra` | [infra/](infra/) | [infra/CLAUDE.md](infra/CLAUDE.md) | Terraform infrastructure (VPC, RDS, ECS, ALB, IAM) |
