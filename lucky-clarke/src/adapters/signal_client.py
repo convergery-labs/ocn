@@ -69,7 +69,7 @@ def poll_job_until_done(job_id: int) -> dict[str, Any]:
             resp = client.get(
                 f"/classifications/{job_id}",
                 headers=_headers(),
-                timeout=15,
+                timeout=60,
             )
         if resp.status_code != 200:
             raise SignalDetectionError(
