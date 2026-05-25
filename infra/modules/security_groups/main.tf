@@ -34,6 +34,26 @@ resource "aws_security_group" "api_gateway" {
 }
 
 
+resource "aws_security_group" "signal_detection_agent" {
+  name   = "${var.env}-signal-detection-agent"
+  vpc_id = var.vpc_id
+  ingress {
+    from_port = 8003
+    to_port   = 8003
+    protocol  = "tcp"
+    security_groups = [
+      aws_security_group.api_gateway.id,
+    ]
+  }
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+
 resource "aws_security_group" "news_retrieval" {
   name   = "${var.env}-news-retrieval"
   vpc_id = var.vpc_id
@@ -44,6 +64,7 @@ resource "aws_security_group" "news_retrieval" {
     security_groups = [
       aws_security_group.api_gateway.id,
       aws_security_group.signal_detection.id,
+      aws_security_group.signal_detection_agent.id,
       aws_security_group.lucky_clarke.id,
     ]
   }
@@ -133,6 +154,7 @@ resource "aws_security_group" "rds" {
       aws_security_group.auth_service.id,
       aws_security_group.news_retrieval.id,
       aws_security_group.signal_detection.id,
+      aws_security_group.signal_detection_agent.id,
       data.aws_security_group.bastion.id,
     ]
   }

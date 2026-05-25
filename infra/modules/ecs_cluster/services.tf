@@ -275,6 +275,89 @@ resource "aws_ecs_service" "signal_detection" {
   }
 }
 
+data "aws_secretsmanager_secret" "signal_detection_agent" {
+  name = "ocn/${var.env}/signal-detection-agent"
+}
+
+resource "aws_ecs_task_definition" "signal_detection_agent" {
+  family                   = "${var.env}-signal-detection-agent"
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = "1024"
+  memory                   = "2048"
+  execution_role_arn       = aws_iam_role.ecs_task_execution.arn
+
+  container_definitions = jsonencode([
+    {
+      name  = "signal-detection-agent"
+      image = "${var.ecr_registry}/ocn/signal-detection-agent:${var.image_tag}"
+      portMappings = [
+        { containerPort = 8003 }
+      ]
+      environment = [
+        { name = "POSTGRES_HOST",          value = var.rds_endpoint },
+        { name = "POSTGRES_PORT",          value = "5432" },
+        { name = "POSTGRES_DB",            value = "signal_detection_db" },
+        { name = "POSTGRES_USER",          value = "signal_user" },
+        { name = "PGSSLMODE",              value = "require" },
+        { name = "NEWS_RETRIEVAL_URL",     value = "http://news-retrieval.${var.env}.ocn.internal:8000" },
+        { name = "OPENAI_BASE_URL",        value = "https://openrouter.ai/api/v1" },
+        { name = "SIGNAL_DETECTION_MODEL", value = "gpt-4.1" }
+      ]
+      secrets = [
+        {
+          name      = "POSTGRES_PASSWORD"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:ocn/${var.env}/signal-detection:POSTGRES_PASSWORD::"
+        },
+        {
+          name      = "OPENAI_API_KEY"
+          valueFrom = "${data.aws_secretsmanager_secret.signal_detection_agent.arn}:OPENAI_API_KEY::"
+        }
+      ]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = "/ecs/${var.env}/signal-detection-agent"
+          "awslogs-region"        = var.aws_region
+          "awslogs-stream-prefix" = "ecs"
+        }
+      }
+    }
+  ])
+}
+
+
+resource "aws_service_discovery_service" "signal_detection_agent" {
+  name = "signal-detection-agent"
+  dns_config {
+    namespace_id = aws_service_discovery_private_dns_namespace.main.id
+    dns_records {
+      ttl  = 10
+      type = "A"
+    }
+  }
+}
+
+
+resource "aws_ecs_service" "signal_detection_agent" {
+  name            = "${var.env}-signal-detection-agent"
+  cluster         = aws_ecs_cluster.main.id
+  task_definition = aws_ecs_task_definition.signal_detection_agent.arn
+  desired_count   = 1
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = var.private_subnet_ids
+    security_groups  = [var.signal_detection_agent_sg_id]
+    assign_public_ip = false
+  }
+
+  service_registries {
+    registry_arn = aws_service_discovery_service.signal_detection_agent.arn
+  }
+}
+
+
 resource "aws_cloudwatch_event_rule" "promote_corpus" {
   name                = "${var.env}-promote-corpus-nightly"
   schedule_expression = "cron(0 0 * * ? *)"
@@ -362,10 +445,11 @@ resource "aws_ecs_task_definition" "api_gateway" {
         { containerPort = 8004 }
       ]
       environment = [
-        { name = "GATEWAY_AUTH_URL",      value = "http://auth-service.${var.env}.ocn.internal:8001" },
-        { name = "GATEWAY_NEWS_URL",      value = "http://news-retrieval.${var.env}.ocn.internal:8000" },
-        { name = "GATEWAY_SIGNAL_URL",    value = "http://signal-detection.${var.env}.ocn.internal:8002" },
-        { name = "GATEWAY_CORS_ORIGINS",  value = var.gateway_cors_origins }
+        { name = "GATEWAY_AUTH_URL",         value = "http://auth-service.${var.env}.ocn.internal:8001" },
+        { name = "GATEWAY_NEWS_URL",         value = "http://news-retrieval.${var.env}.ocn.internal:8000" },
+        { name = "GATEWAY_SIGNAL_URL",       value = "http://signal-detection.${var.env}.ocn.internal:8002" },
+        { name = "GATEWAY_SIGNAL_AGENT_URL", value = "http://signal-detection-agent.${var.env}.ocn.internal:8003" },
+        { name = "GATEWAY_CORS_ORIGINS",     value = var.gateway_cors_origins }
       ]
       logConfiguration = {
         logDriver = "awslogs"

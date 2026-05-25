@@ -30,7 +30,8 @@ def create_articles(articles: list[dict]) -> None:
         conn.execute_values(
             "INSERT INTO articles"
             " (run_id, url, title, summary, source, published, body)"
-            " VALUES %s",
+            " VALUES %s"
+            " ON CONFLICT (run_id, url) WHERE url IS NOT NULL DO NOTHING",
             [
                 (
                     a["run_id"],

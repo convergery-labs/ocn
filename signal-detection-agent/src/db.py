@@ -64,3 +64,30 @@ def init_db() -> None:
                 stored_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
         """)
+        conn.execute("""
+            ALTER TABLE agent_classifications
+                ADD COLUMN IF NOT EXISTS base_signal_detection TEXT,
+                ADD COLUMN IF NOT EXISTS base_signal_score FLOAT,
+                ADD COLUMN IF NOT EXISTS novelty_basis TEXT,
+                ADD COLUMN IF NOT EXISTS novelty TEXT,
+                ADD COLUMN IF NOT EXISTS confidence_basis TEXT,
+                ADD COLUMN IF NOT EXISTS confidence TEXT,
+                ADD COLUMN IF NOT EXISTS refinement_reason TEXT
+        """)
+        conn.execute("""
+            ALTER TABLE agent_classifications
+                ADD COLUMN IF NOT EXISTS entity_names_normalized TEXT[] DEFAULT '{}'
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_entity_names_gin
+                ON agent_classifications USING GIN(entity_names_normalized)
+        """)
+        conn.execute("""
+            UPDATE agent_classifications
+            SET entity_names_normalized = ARRAY(
+                SELECT LOWER(e->>'name')
+                FROM jsonb_array_elements(entities_json::jsonb) e
+                WHERE e->>'name' IS NOT NULL
+            )
+            WHERE entity_names_normalized IS NULL OR entity_names_normalized = '{}'
+        """)

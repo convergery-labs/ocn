@@ -64,14 +64,20 @@ def update_job_status(
 
 def insert_classification(job_id: int, article: dict[str, Any], result: dict[str, Any]) -> None:
     """Upsert one agent_classifications row."""
+    entity_names_normalized = [
+        e["name"].lower() for e in (result.get("entities") or []) if e.get("name")
+    ]
     with get_db() as conn:
         conn.execute(
             """
             INSERT INTO agent_classifications (
                 job_id, article_id, url, title,
                 signal_detection, signal_score, signal_reason,
-                materiality, category, entities_json
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                materiality, category, entities_json,
+                base_signal_detection, base_signal_score,
+                novelty, novelty_basis, confidence, confidence_basis,
+                refinement_reason, entity_names_normalized
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT DO NOTHING
             """,
             (
@@ -85,8 +91,53 @@ def insert_classification(job_id: int, article: dict[str, Any], result: dict[str
                 result["materiality"],
                 result["category"],
                 json.dumps(result.get("entities") or [], ensure_ascii=False),
+                result.get("base_signal_detection"),
+                result.get("base_signal_score"),
+                result.get("novelty"),
+                result.get("novelty_basis"),
+                result.get("confidence"),
+                result.get("confidence_basis"),
+                result.get("refinement_reason"),
+                entity_names_normalized,
             ),
         )
+
+
+def get_recent_entity_classifications(
+    entity_names: list[str],
+    *,
+    days: int = 90,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """Return recent signal/weak_signal rows that mention any of the given entity names."""
+    if not entity_names:
+        return []
+    normalized_names = [name.lower() for name in entity_names]
+    placeholders = ", ".join(["%s"] * len(normalized_names))
+    with get_db() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT signal_detection, signal_score, signal_reason, category,
+                   entities_json, title, url, stored_at
+            FROM agent_classifications
+            WHERE stored_at >= NOW() - INTERVAL '{days} days'
+              AND signal_detection IN ('signal', 'weak_signal')
+              AND entity_names_normalized && ARRAY[{placeholders}]::TEXT[]
+            ORDER BY stored_at DESC
+            LIMIT %s
+            """,
+            [*normalized_names, limit],
+        ).fetchall()
+    results = []
+    for r in rows:
+        rec = dict(r)
+        rec["entities"] = json.loads(rec.pop("entities_json", "[]") or "[]")
+        if rec.get("signal_score") is not None:
+            rec["signal_score"] = float(rec["signal_score"])
+        if rec.get("stored_at") is not None:
+            rec["stored_at"] = rec["stored_at"].isoformat()
+        results.append(rec)
+    return results
 
 
 def get_job(job_id: int) -> dict[str, Any] | None:
@@ -122,6 +173,42 @@ def list_jobs(limit: int = 20, cursor: str | None = None, status: str | None = "
         jobs = jobs[:limit]
         next_cursor = encode_cursor(jobs[-1]["id"])
     return {"jobs": jobs, "next_cursor": next_cursor}
+
+
+def list_all_results(
+    limit: int = 100, cursor: str | None = None, signal_detection: str | None = None
+) -> dict[str, Any]:
+    """Return cursor-paginated agent_classifications across all jobs, newest first."""
+    params: list[Any] = []
+    conditions = []
+    if signal_detection:
+        conditions.append("signal_detection = %s")
+        params.append(signal_detection)
+    if cursor:
+        after_id = decode_cursor(cursor)
+        conditions.append("id < %s")
+        params.append(after_id)
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    params.append(limit + 1)
+    with get_db() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT * FROM agent_classifications
+            {where}
+            ORDER BY id DESC LIMIT %s
+            """,
+            params,
+        ).fetchall()
+    results = []
+    for r in rows:
+        rec = dict(r)
+        rec["entities"] = json.loads(rec.pop("entities_json", "[]") or "[]")
+        results.append(rec)
+    next_cursor = None
+    if len(results) > limit:
+        results = results[:limit]
+        next_cursor = encode_cursor(results[-1]["id"])
+    return {"results": results, "next_cursor": next_cursor}
 
 
 def list_results(

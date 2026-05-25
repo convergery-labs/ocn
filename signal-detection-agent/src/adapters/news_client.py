@@ -32,7 +32,7 @@ async def trigger_run(domain: str) -> int:
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
                 f"{config.NEWS_RETRIEVAL_URL}/run",
-                json={"domain": domain},
+                json={"domain": domain, "days_back": 1},
                 headers=_headers(),
             )
     except httpx.HTTPError as exc:

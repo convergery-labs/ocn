@@ -16,5 +16,9 @@ NEWS_RETRIEVAL_SERVICE_CALLER: str = os.environ.get(
 )
 PIPELINE_POLL_TIMEOUT_SECS: int = int(os.environ.get("PIPELINE_POLL_TIMEOUT_SECS", "600"))
 
+WEB_SEARCH_PROVIDER: str = os.environ.get("WEB_SEARCH_PROVIDER", "duckduckgo")
+WEB_SEARCH_API_KEY: str | None = os.environ.get("WEB_SEARCH_API_KEY") or None
+
 PROMPTS_DIR: Path = Path(__file__).parent.parent / "prompts"
 DEFAULT_PROMPT: Path = PROMPTS_DIR / "ai_universe_signal_classifier_v1.txt"
+DEFAULT_PROMPT_V2: Path = PROMPTS_DIR / "ai_universe_signal_classifier_v2_refine.txt"

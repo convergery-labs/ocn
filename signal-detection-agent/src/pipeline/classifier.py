@@ -1,10 +1,11 @@
-"""LLM-based signal classifier — ported from signal_classifier.py (logic unchanged)."""
+"""LLM-based signal classifier — base pass + optional STORM-style second pass."""
 from __future__ import annotations
 
 import json
 import math
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 from urllib.request import Request, urlopen
@@ -13,11 +14,13 @@ ALLOWED_SIGNAL = {'signal', 'weak_signal', 'noise'}
 ALLOWED_MATERIALITY = {'high', 'medium', 'low', 'none'}
 SIGNAL_SCORE_THRESHOLD = 0.60
 WEAK_SIGNAL_SCORE_THRESHOLD = 0.40
+ALLOWED_NOVELTY = {'step_change', 'meaningful_update', 'incremental_update', 'repeated_coverage'}
+ALLOWED_CONFIDENCE = {'high', 'medium', 'low'}
 ALLOWED_CATEGORIES = {
     'Minerals & Raw Materials',
     'Energy',
     'Semiconductor Manufacturing',
-    'Compute Hardware',
+    'Computer Hardware',
     'Thermal & Cooling',
     'Data Center Infrastructure',
     'Cloud & Compute Market',
@@ -216,7 +219,11 @@ def classify_with_model(
     api_key: str,
     base_url: str,
     timeout: int,
+    *,
+    validator=None,
 ) -> dict[str, Any]:
+    if validator is None:
+        validator = validate_classification
     headers = {
         'Authorization': f'Bearer {api_key}',
         'Content-Type': 'application/json',
@@ -224,7 +231,8 @@ def classify_with_model(
     request_payload = {
         'model': model,
         'temperature': 0,
-        'max_tokens': 800,
+        'seed': 42,
+        'max_tokens': 1200,
         'messages': [
             {'role': 'system', 'content': system_prompt},
             {'role': 'user', 'content': user_prompt},
@@ -244,7 +252,7 @@ def classify_with_model(
     parsed = extract_json_object(content)
     if not parsed:
         raise ValueError('Model returned non-JSON or empty JSON response')
-    return validate_classification(parsed)
+    return validator(parsed)
 
 
 def classify_article(
@@ -276,3 +284,163 @@ def classify_article(
                 time.sleep(0.25)
                 continue
     raise RuntimeError('Classification failed: ' + ' | '.join(errors))
+
+
+def validate_classification_v2(payload: dict[str, Any]) -> dict[str, Any]:
+    """Extend validate_classification with novelty and confidence field checks."""
+    base = validate_classification(payload)
+
+    novelty = norm(str(payload.get('novelty', '')))
+    if novelty not in ALLOWED_NOVELTY:
+        raise ValueError(f'Invalid novelty: {novelty}')
+
+    novelty_basis = norm(str(payload.get('novelty_basis', '')))
+    if not novelty_basis:
+        raise ValueError('novelty_basis must be non-empty')
+
+    confidence = norm(str(payload.get('confidence', '')))
+    if confidence not in ALLOWED_CONFIDENCE:
+        raise ValueError(f'Invalid confidence: {confidence}')
+
+    confidence_basis = norm(str(payload.get('confidence_basis', '')))
+    if not confidence_basis:
+        raise ValueError('confidence_basis must be non-empty')
+
+    refinement_reason = norm(str(payload.get('refinement_reason', '')))
+    if not refinement_reason:
+        raise ValueError('refinement_reason must be non-empty')
+
+    return {
+        **base,
+        'novelty': novelty,
+        'novelty_basis': novelty_basis,
+        'confidence': confidence,
+        'confidence_basis': confidence_basis,
+        'refinement_reason': refinement_reason,
+    }
+
+
+def build_user_prompt_v2(
+    article: dict[str, Any],
+    *,
+    base_result: dict[str, Any],
+    entity_history: list[dict[str, Any]],
+    web_snippets: list[dict[str, Any]],
+    batch_context: list[dict[str, Any]] | None = None,
+    content_mode: str = 'smart',
+) -> str:
+    payload = build_article_payload(article, content_mode=content_mode)
+    parts = [
+        'Refine the classification of this article using the provided context.\n\n'
+        'Article:\n' + json.dumps(payload, ensure_ascii=False, indent=2),
+        '\n\nBase classification:\n' + json.dumps(base_result, ensure_ascii=False, indent=2),
+        '\n\nEntity history (recent signal/weak_signal rows, same entities):\n'
+        + json.dumps(entity_history or [], ensure_ascii=False, indent=2),
+        '\n\nWeb search snippets:\n'
+        + json.dumps(web_snippets or [], ensure_ascii=False, indent=2),
+        '\n\nOther articles in this news batch (titles only):\n'
+        + json.dumps(batch_context or [], ensure_ascii=False, indent=2),
+        '\n\nReturn strict JSON only.',
+    ]
+    return ''.join(parts)
+
+
+def classify_article_two_stage(
+    article: dict[str, Any],
+    *,
+    system_prompt_v1: str,
+    system_prompt_v2: str,
+    entity_history_fn,
+    web_search_fn,
+    models: list[str],
+    api_key: str,
+    base_url: str,
+    timeout: int,
+    max_attempts: int,
+    category_hints: list[dict[str, Any]] | None = None,
+    content_mode: str = 'smart',
+    batch_context: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    # Stage 1: base pass (existing logic unchanged)
+    base = classify_article(
+        article,
+        system_prompt=system_prompt_v1,
+        models=models,
+        api_key=api_key,
+        base_url=base_url,
+        timeout=timeout,
+        max_attempts=max_attempts,
+        category_hints=category_hints,
+        content_mode=content_mode,
+    )
+    base_signal_detection = base['signal_detection']
+    base_signal_score = base['signal_score']
+
+    if base_signal_detection == 'noise':
+        return {
+            **base,
+            'base_signal_detection': base_signal_detection,
+            'base_signal_score': base_signal_score,
+            'novelty': None,
+            'novelty_basis': None,
+            'confidence': None,
+            'confidence_basis': None,
+            'refinement_reason': None,
+        }
+
+    # Stage 2: gather context concurrently (DB history + web search)
+    entity_names = [e['name'] for e in base.get('entities', [])]
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        f_history = ex.submit(entity_history_fn, entity_names)
+        f_web = ex.submit(web_search_fn, entity_names[:2], base.get('signal_reason', ''))
+    history = f_history.result()
+    web_snips = f_web.result()  # [] on any failure — second pass still runs
+
+    # Stage 2: refined classification
+    user_prompt = build_user_prompt_v2(
+        article,
+        base_result=base,
+        entity_history=history,
+        web_snippets=web_snips,
+        batch_context=batch_context,
+        content_mode=content_mode,
+    )
+    errors: list[str] = []
+    for model in models:
+        for attempt in range(1, max_attempts + 1):
+            try:
+                final = classify_with_model(
+                    system_prompt_v2,
+                    user_prompt,
+                    model,
+                    api_key,
+                    base_url,
+                    timeout,
+                    validator=validate_classification_v2,
+                )
+                final['id'] = article.get('id')
+                if article.get('run_id') is not None:
+                    final['run_id'] = article.get('run_id')
+                final['url'] = article.get('url', '')
+                final['headline'] = article.get('title', '')
+                return {
+                    **final,
+                    'base_signal_detection': base_signal_detection,
+                    'base_signal_score': base_signal_score,
+                }
+            except Exception as exc:
+                errors.append(f'{model} attempt {attempt}: {exc}')
+                time.sleep(0.25)
+                continue
+
+    # Second pass failed — fall back to base with null novelty/confidence
+    return {
+        **base,
+        'base_signal_detection': base_signal_detection,
+        'base_signal_score': base_signal_score,
+        'novelty': None,
+        'novelty_basis': None,
+        'confidence': None,
+        'confidence_basis': None,
+        'refinement_reason': None,
+    }

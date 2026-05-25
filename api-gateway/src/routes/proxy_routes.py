@@ -47,3 +47,15 @@ async def proxy_signal(
     return await forward_request(
         os.environ.get("GATEWAY_SIGNAL_URL", ""), path, request, caller
     )
+
+
+@router.api_route("/agent/{path:path}", methods=_METHODS)
+async def proxy_signal_agent(
+    path: str,
+    request: Request,
+    caller: Optional[dict[str, Any]] = Depends(optional_auth),
+) -> Response:
+    """Proxy requests under /agent/* to signal-detection-agent."""
+    return await forward_request(
+        os.environ.get("GATEWAY_SIGNAL_AGENT_URL", ""), path, request, caller
+    )

@@ -6,9 +6,20 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from auth import require_auth
-from models.jobs import get_job, list_jobs, list_results
+from models.jobs import get_job, list_all_results, list_jobs, list_results
 
 router = APIRouter()
+
+
+@router.get("/results")
+async def get_all_results(
+    limit: int = Query(default=50, ge=1, le=500),
+    cursor: str | None = Query(default=None),
+    signal_detection: str | None = Query(default=None),
+    caller: dict[str, Any] = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return paginated classification results across all jobs, newest first."""
+    return list_all_results(limit=limit, cursor=cursor, signal_detection=signal_detection)
 
 
 @router.get("/jobs")
