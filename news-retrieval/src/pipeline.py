@@ -26,6 +26,8 @@ from models.sources import load_sources
 logger = logging.getLogger(__name__)
 
 _PASS1_BATCH_SIZE = 20
+_NEWSAPI_PAGE_SIZE = 30        # articles fetched per category per request
+_SERPAPI_RESULTS_PER_QUERY = 30  # articles fetched per query from Google News
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _SERPAPI_DATE_RE = re.compile(
     r"(\d{2}/\d{2}/\d{4}), (\d{1,2}:\d{2} [AP]M), \+0000 UTC"
@@ -249,7 +251,7 @@ def _fetch_one_serpapi(source: dict, days_back: int, api_key: str) -> list[dict]
     cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
 
     def _fetch_query(query: str) -> list[dict]:
-        params: dict = {"engine": "google_news", "q": query, "api_key": api_key, **config}
+        params: dict = {"engine": "google_news", "q": query, "api_key": api_key, "num": _SERPAPI_RESULTS_PER_QUERY, **config}
         if tbs:
             params["tbs"] = tbs
         try:
@@ -364,7 +366,7 @@ def _fetch_one_newsapi(source: dict, days_back: int, api_key: str) -> list[dict]
     candidates: list[dict] = []
 
     for category in categories:
-        params: dict = {**config, "pageSize": 50, "apiKey": api_key}
+        params: dict = {**config, "pageSize": _NEWSAPI_PAGE_SIZE, "apiKey": api_key}
         if endpoint == "everything":
             params["from"] = from_date
         if category is not None:

@@ -111,7 +111,7 @@ power, and energy storage linked to AI demand.
 Chip design, foundries, HBM/memory, EDA/IP, semiconductor equipment,
 advanced packaging, OSAT, wafers, and chip materials.
 
-4. "Compute Hardware"
+4. "Computer Hardware"
 AI servers, storage, OEM/ODM hardware, embedded compute, quantum hardware,
 edge hardware, and physical compute systems.
 
@@ -171,10 +171,21 @@ When an article could fit multiple categories, apply these rules in order:
    colocation deals, electrical buildout) -> "Data Center Infrastructure".
    If both are central, pick the one most material to the news.
 
-4. Chip vs system, if the news is about a chip itself (NVIDIA Blackwell GPU
-   launch, TSMC node, HBM supply) -> "Semiconductor Manufacturing". If it is
-   about a packaged system, server, rack, or appliance (DGX systems, Supermicro
-   server line, OEM AI appliances) -> "Compute Hardware".
+4. Chip vs system — classify by what the primary announcement is about:
+   - Chip itself (architecture, process node, die specs, memory config,
+     benchmark at chip level, chip pricing, chip launch) ->
+     "Semiconductor Manufacturing". Examples: NVIDIA Blackwell B200/B300 GPU,
+     NVIDIA Vera CPU, AMD MI400 GPU, TSMC N2 node, Micron HBM3E,
+     Alibaba Zhenwu chip.
+   - Packaged AI server, rack, appliance, or compute system (named server
+     SKU, rack config, compute appliance with chassis, full system specs) ->
+     "Computer Hardware". Examples: NVIDIA DGX GB200 NVL72 system,
+     Supermicro AI server line, Dell PowerEdge AI appliance,
+     AMD Ryzen AI Dev Mini-PC, Cerebras waferscale compute system.
+   - When an article covers both (platform announcement with chip + system):
+     if the chip specs or chip launch are the core claim ->
+     "Semiconductor Manufacturing". If the system config, rack density,
+     or appliance SKU is the core claim -> "Computer Hardware".
 
 5. Deals between two categories, pick the category of the supplier providing
    the new capability. NVIDIA selling Blackwell GPUs to Microsoft ->
@@ -203,6 +214,7 @@ RULES
 - Decide signal_score first, then set signal_detection from the score bands.
 - Decide materiality separately.
 - Be conservative. When in doubt, classify as noise.
+- When signal_detection is "noise", always set materiality to "none". Still assign the most fitting category.
 - Return signal_score as a JSON number between 0 and 1, not a string.
 - Use these score bands:
   - 0.00 to 0.40 -> "noise"
@@ -234,6 +246,9 @@ RULES
 - A valid signal must have an explicit, material connection to AI models, AI deployment, AI infrastructure, AI data pipelines, AI hardware, AI software, or AI company operations.
 - General digital-rights, surveillance, device-privacy, border-search, or broad internet-policy articles are usually noise unless the article explicitly shows a concrete effect on AI systems, AI companies, AI data access, or AI infrastructure.
 - General cybersecurity, software, or infrastructure incidents are only signal when they materially affect AI-relevant compute, model, data, cloud, or deployment environments. Otherwise classify them as noise.
+- Software supply-chain attacks, code-repository compromises, and developer-tool security incidents are noise unless the article shows they directly compromised AI model weights, AI training data, AI inference infrastructure, or caused material disruption to a named AI company's operations. A broad supply-chain attack that incidentally touches developer tooling without targeting AI systems specifically is noise.
+- Scholarship awards, AI workforce training programs, digital-skills initiatives, and education-grant campaigns are noise when they do not announce a concrete product launch, signed commercial deployment, or direct material change to AI infrastructure or model supply. A scholarship fund or training grant is not equivalent to an AI development event.
+- AI feature additions or product updates aimed at small or medium businesses in narrow industry verticals (retail, beauty, cosmetics, food service, hospitality) are noise unless the article names a large-scale commercial deployment, a material revenue change, or a significant market adoption event with a clear AI-universe transmission path. Do not classify as signal just because an AI feature was added to an SME-focused product.
 - Do not classify an article as "AI Models" just because it mentions training,
   inference, RL, or benchmarks. Use "AI Models" only when the core news is
   about the model or model provider itself. Use "Software / Infrastructure"
@@ -265,7 +280,7 @@ OUTPUT SCHEMA
   "signal_score": number,
   "signal_reason": "string",
   "materiality": "high" | "medium" | "low" | "none",
-  "category": "string (one of the 11 categories above)",
+  "category": "string (one of the 11 categories above — always assign a real category, including for noise)",
   "entities": [
     {
       "name": "string",
@@ -486,7 +501,7 @@ Output:
   "signal_score": 0.22,
   "signal_reason": "The article describes possible future AI oversight and political momentum, but no executive order, launched process, created body, or binding regulatory action has actually occurred.",
   "materiality": "none",
-  "category": "Applications & Economy",
+  "category": "AI Models",
   "entities": []
 }
 
@@ -504,6 +519,42 @@ Output:
     {"name": "Google", "type": "company"},
     {"name": "YouTube Premium Lite", "type": "product"}
   ]
+}
+
+Example 16, Noise:
+Article: "Tech company launches AI scholarship fund awarding 500 grants to underrepresented students studying machine learning and data science."
+Output:
+{
+  "signal_detection": "noise",
+  "signal_score": 0.18,
+  "signal_reason": "Scholarship program awards education grants to students but announces no product launch, commercial deployment, or material change to AI infrastructure or model supply.",
+  "materiality": "none",
+  "category": "Applications & Economy",
+  "entities": []
+}
+
+Example 17, Noise:
+Article: "Security researchers discover malicious packages in a popular GitHub registry targeting software developers, compromising thousands of open-source projects."
+Output:
+{
+  "signal_detection": "noise",
+  "signal_score": 0.20,
+  "signal_reason": "Supply-chain attack targets general developer tooling but does not compromise AI model weights, AI training pipelines, AI data infrastructure, or named AI company operations.",
+  "materiality": "none",
+  "category": "Software / Infrastructure",
+  "entities": []
+}
+
+Example 18, Noise:
+Article: "BeautyAI launches an AI-powered skin-tone matching feature in its salon booking app to help small cosmetics businesses personalise customer recommendations."
+Output:
+{
+  "signal_detection": "noise",
+  "signal_score": 0.22,
+  "signal_reason": "Minor AI feature update for SME cosmetics businesses with no named large-scale deployment, material revenue change, or clear AI-universe market transmission path.",
+  "materiality": "none",
+  "category": "Applications & Economy",
+  "entities": []
 }
 
 Return strict JSON only.

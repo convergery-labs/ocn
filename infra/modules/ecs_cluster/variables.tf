@@ -81,3 +81,8 @@ variable "gateway_cors_origins" {
 variable "lucky_clarke_sg_id" {
   type = string
 }
+
+
+variable "signal_detection_agent_sg_id" {
+  type = string
+}

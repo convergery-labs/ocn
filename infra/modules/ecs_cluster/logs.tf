@@ -26,3 +26,9 @@ resource "aws_cloudwatch_log_group" "lucky_clarke" {
   name              = "/ecs/${var.env}/lucky-clarke"
   retention_in_days = 30
 }
+
+
+resource "aws_cloudwatch_log_group" "signal_detection_agent" {
+  name              = "/ecs/${var.env}/signal-detection-agent"
+  retention_in_days = 30
+}

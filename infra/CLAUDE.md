@@ -92,12 +92,27 @@ infra/
 - All secrets must exist in Secrets Manager before `terraform apply` — ECS task launch fails at runtime if a `valueFrom` ARN cannot be resolved
 - When adding a new service, add its security group in `modules/security_groups`, its task definition and ECS service in `modules/ecs_cluster/services.tf`, and its log group in `modules/ecs_cluster/logs.tf`
 
+### signal-detection-agent
+| Variable | Source | Notes |
+|----------|--------|-------|
+| `POSTGRES_HOST` | `rds_endpoint` | |
+| `POSTGRES_PORT` | hardcoded | `5432` |
+| `POSTGRES_DB` | hardcoded | `signal_detection_db` — shared with signal-detection |
+| `POSTGRES_USER` | hardcoded | `signal_user` — shared with signal-detection |
+| `POSTGRES_PASSWORD` | Secrets Manager | `ocn/{env}/signal-detection:POSTGRES_PASSWORD` — shared with signal-detection |
+| `PGSSLMODE` | hardcoded | `require` |
+| `NEWS_RETRIEVAL_URL` | hardcoded | `http://news-retrieval.{env}.ocn.internal:8000` |
+| `OPENAI_BASE_URL` | hardcoded | `https://openrouter.ai/api/v1` |
+| `SIGNAL_DETECTION_MODEL` | hardcoded | `gpt-4.1` |
+| `OPENAI_API_KEY` | Secrets Manager | `ocn/{env}/signal-detection-agent:OPENAI_API_KEY` — OpenRouter key |
+
 ### api-gateway
 | Variable | Source | Notes |
 |----------|--------|-------|
 | `GATEWAY_AUTH_URL` | hardcoded | `http://auth-service.{env}.ocn.internal:8001` |
 | `GATEWAY_NEWS_URL` | hardcoded | `http://news-retrieval.{env}.ocn.internal:8000` |
 | `GATEWAY_SIGNAL_URL` | hardcoded | `http://signal-detection.{env}.ocn.internal:8002` |
+| `GATEWAY_SIGNAL_AGENT_URL` | hardcoded | `http://signal-detection-agent.{env}.ocn.internal:8003` |
 | `GATEWAY_CORS_ORIGINS` | Terraform (`gateway_cors_origins` var) | Comma-separated list of allowed CORS origins; set to CloudFront URL in staging |
 
 ### lucky-clarke

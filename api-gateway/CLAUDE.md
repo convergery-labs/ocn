@@ -35,7 +35,7 @@ api-gateway/
 │   ├── proxy.py            # Generic async HTTP proxy (httpx.AsyncClient)
 │   └── routes/
 │       ├── health.py       # GET /health
-│       └── proxy_routes.py # /auth/*, /news/*, /signal/* catch-alls
+│       └── proxy_routes.py # /auth/*, /news/*, /signal/*, /agent/* catch-alls
 └── tests/
     ├── conftest.py          # ASGI client fixture
     ├── test_health.py       # /health endpoint tests
