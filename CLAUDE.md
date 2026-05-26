@@ -23,6 +23,7 @@ Confluence space: `Projects` — Cloud: `opengrowthventures.atlassian.net`
 | `signal-detection-agent` | [signal-detection-agent/](signal-detection-agent/) | [signal-detection-agent/CLAUDE.md](signal-detection-agent/CLAUDE.md) | LLM-driven signal detection agent — classifies articles via Claude with reasoning traces |
 | `api-gateway` | [api-gateway/](api-gateway/) | [api-gateway/CLAUDE.md](api-gateway/CLAUDE.md) | Async HTTP reverse proxy to OCN upstream services |
 | `lucky-clarke` | [lucky-clarke/](lucky-clarke/) | [lucky-clarke/CLAUDE.md](lucky-clarke/CLAUDE.md) | A2A-compatible daily AI news digest agent — classifies articles into 12 categories, generates summaries, and emails recipients |
+| `signal-herald` | [signal-herald/](signal-herald/) | [signal-herald/CLAUDE.md](signal-herald/CLAUDE.md) | A2A-compatible daily digest agent — polls signal-detection-agent, summarises by AI-universe category via OpenRouter, emails recipients |
 | `infra` | [infra/](infra/) | [infra/CLAUDE.md](infra/CLAUDE.md) | Terraform infrastructure (VPC, RDS, ECS, ALB, IAM) |
 | `frontend` | [frontend/](frontend/) | [frontend/CLAUDE.md](frontend/CLAUDE.md) | React + Vite SPA — article feed UI |
 
@@ -86,6 +87,12 @@ ocn/
 │   ├── requirements.txt
 │   ├── src/
 │   └── tests/
+├── signal-herald/            # see signal-herald/STRUCTURE.md
+│   ├── CLAUDE.md
+│   ├── STRUCTURE.md
+│   ├── Dockerfile
+│   ├── requirements.txt
+│   └── src/
 ├── infra/                    # see infra/STRUCTURE.md
 │   ├── CLAUDE.md
 │   ├── STRUCTURE.md

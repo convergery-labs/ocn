@@ -32,3 +32,9 @@ resource "aws_cloudwatch_log_group" "signal_detection_agent" {
   name              = "/ecs/${var.env}/signal-detection-agent"
   retention_in_days = 30
 }
+
+
+resource "aws_cloudwatch_log_group" "signal_herald" {
+  name              = "/ecs/${var.env}/signal-herald"
+  retention_in_days = 30
+}

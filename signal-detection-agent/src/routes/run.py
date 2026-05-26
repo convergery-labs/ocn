@@ -16,6 +16,8 @@ class RunRequest(BaseModel):
     domain: str
     run_id: int | None = None
     limit: int | None = None
+    days_back: int = 7
+    use_latest_run: bool = False
 
 
 @router.post("/run", status_code=202)
@@ -25,5 +27,5 @@ async def trigger_run(
     caller: dict[str, Any] = Depends(require_auth),
 ) -> dict[str, Any]:
     job_id = await submit_run(domain=body.domain, run_id=body.run_id)
-    background_tasks.add_task(run_agent_pipeline, job_id, body.domain, body.run_id, body.limit)
+    background_tasks.add_task(run_agent_pipeline, job_id, body.domain, body.run_id, body.limit, body.days_back, body.use_latest_run)
     return {"job_id": job_id}

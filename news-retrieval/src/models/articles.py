@@ -31,7 +31,7 @@ def create_articles(articles: list[dict]) -> None:
             "INSERT INTO articles"
             " (run_id, url, title, summary, source, published, body)"
             " VALUES %s"
-            " ON CONFLICT (run_id, url) WHERE url IS NOT NULL DO NOTHING",
+            " ON CONFLICT DO NOTHING",
             [
                 (
                     a["run_id"],

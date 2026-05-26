@@ -36,3 +36,8 @@ output "lucky_clarke_sg_id" {
 output "signal_detection_agent_sg_id" {
   value = aws_security_group.signal_detection_agent.id
 }
+
+
+output "signal_herald_sg_id" {
+  value = aws_security_group.signal_herald.id
+}

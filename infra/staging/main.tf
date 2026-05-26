@@ -57,6 +57,7 @@ module "ecs_cluster" {
   signal_sg_id          = module.security_groups.signal_sg_id
   lucky_clarke_sg_id             = module.security_groups.lucky_clarke_sg_id
   signal_detection_agent_sg_id   = module.security_groups.signal_detection_agent_sg_id
+  signal_herald_sg_id            = module.security_groups.signal_herald_sg_id
   api_gateway_tg_arn    = module.alb.api_gateway_tg_arn
   qdrant_host           = var.qdrant_host
   gateway_cors_origins  = "https://${aws_cloudfront_distribution.frontend.domain_name}"
@@ -90,6 +91,15 @@ resource "aws_ecr_repository" "signal_detection_agent" {
 
 resource "aws_ecr_repository" "lucky_clarke" {
   name                 = "ocn/lucky-clarke"
+  image_tag_mutability = "MUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+}
+
+resource "aws_ecr_repository" "signal_herald" {
+  name                 = "ocn/signal-herald"
   image_tag_mutability = "MUTABLE"
 
   image_scanning_configuration {

@@ -43,6 +43,7 @@ resource "aws_security_group" "signal_detection_agent" {
     protocol  = "tcp"
     security_groups = [
       aws_security_group.api_gateway.id,
+      aws_security_group.signal_herald.id,
     ]
   }
   egress {
@@ -141,6 +142,23 @@ resource "aws_security_group" "lucky_clarke" {
 data "aws_security_group" "bastion" {
   name   = "${var.env}-bastion"
   vpc_id = var.vpc_id
+}
+
+resource "aws_security_group" "signal_herald" {
+  name   = "${var.env}-signal-herald"
+  vpc_id = var.vpc_id
+  ingress {
+    from_port   = 8006
+    to_port     = 8006
+    protocol    = "tcp"
+    cidr_blocks = ["10.0.0.0/16"]
+  }
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
 }
 
 resource "aws_security_group" "rds" {

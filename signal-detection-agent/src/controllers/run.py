@@ -37,20 +37,23 @@ async def submit_run(domain: str, run_id: int | None = None) -> int:
     return create_job(domain=domain, news_run_id=run_id)
 
 
-async def run_agent_pipeline(job_id: int, domain: str, news_run_id: int | None, limit: int | None = None) -> None:
+async def run_agent_pipeline(job_id: int, domain: str, news_run_id: int | None, limit: int | None = None, days_back: int = 7, use_latest_run: bool = False) -> None:
     """Background task: fetch → classify → persist."""
     update_job_status(job_id, "running")
     try:
         if news_run_id is not None:
             run_id = news_run_id
             await poll_run_until_done(run_id)
-        else:
+        elif use_latest_run:
             existing = await fetch_latest_run(domain)
             if existing is not None:
                 run_id = existing
             else:
-                run_id = await trigger_run(domain)
+                run_id = await trigger_run(domain, days_back)
                 await poll_run_until_done(run_id)
+        else:
+            run_id = await trigger_run(domain, days_back)
+            await poll_run_until_done(run_id)
 
         articles = await get_run_articles(run_id)
     except NewsRetrievalError:

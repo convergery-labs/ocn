@@ -189,3 +189,19 @@ def init_db() -> None:
             ON articles (run_id, url)
             WHERE url IS NOT NULL
         """)
+        # Deduplicate existing (run_id, title) pairs — keep lowest id per pair
+        conn.execute("""
+            DELETE FROM articles
+            WHERE id NOT IN (
+                SELECT MIN(id) FROM articles
+                WHERE title IS NOT NULL
+                GROUP BY run_id, LOWER(title)
+            )
+            AND title IS NOT NULL
+        """)
+        # One article per title (case-insensitive) per run
+        conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_articles_run_title
+            ON articles (run_id, LOWER(title))
+            WHERE title IS NOT NULL
+        """)
