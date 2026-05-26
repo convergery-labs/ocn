@@ -195,6 +195,23 @@ services:
     networks:
       - ocn-internal
 
+  # ---------------------------------------------------------------------------
+  # signal-herald (port 8006)
+  # ---------------------------------------------------------------------------
+  signal-herald:
+    build:
+      context: .
+      dockerfile: signal-herald/Dockerfile
+      target: base
+    ports:
+      - "8006:8006"
+    env_file: signal-herald/.env
+    depends_on:
+      signal-detection-agent:
+        condition: service_started
+    networks:
+      - ocn-internal
+
 networks:
   ocn-internal:
     driver: bridge

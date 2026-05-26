@@ -103,7 +103,7 @@ infra/
 | `PGSSLMODE` | hardcoded | `require` |
 | `NEWS_RETRIEVAL_URL` | hardcoded | `http://news-retrieval.{env}.ocn.internal:8000` |
 | `OPENAI_BASE_URL` | hardcoded | `https://openrouter.ai/api/v1` |
-| `SIGNAL_DETECTION_MODEL` | hardcoded | `gpt-4.1` |
+| `SIGNAL_DETECTION_MODEL` | hardcoded | `anthropic/claude-sonnet-4-6` |
 | `OPENAI_API_KEY` | Secrets Manager | `ocn/{env}/signal-detection-agent:OPENAI_API_KEY` — OpenRouter key |
 
 ### api-gateway
@@ -128,6 +128,19 @@ infra/
 | `SMTP_USER` | Secrets Manager | `ocn/{env}/lucky-clarke:SMTP_USER` |
 | `SMTP_PASSWORD` | Secrets Manager | `ocn/{env}/lucky-clarke:SMTP_PASSWORD` |
 | `SMTP_FROM` | Secrets Manager | `ocn/{env}/lucky-clarke:SMTP_FROM` |
+
+### signal-herald
+| Variable | Source | Notes |
+|----------|--------|-------|
+| `SIGNAL_AGENT_URL` | hardcoded | `http://signal-detection-agent.{env}.ocn.internal:8003` |
+| `SIGNAL_HERALD_URL` | hardcoded | `http://signal-herald.{env}.ocn.internal:8006` |
+| `SIGNAL_CALLER_SUB` | hardcoded | `1` — internal service identity used in x-ocn-caller header |
+| `OPENROUTER_MODEL` | hardcoded | `openai/gpt-4o-mini` |
+| `OPENROUTER_API_KEY` | Secrets Manager | `ocn/{env}/signal-herald:OPENROUTER_API_KEY` |
+| `SMTP_HOST` | Secrets Manager | `ocn/{env}/signal-herald:SMTP_HOST` |
+| `SMTP_USER` | Secrets Manager | `ocn/{env}/signal-herald:SMTP_USER` |
+| `SMTP_PASSWORD` | Secrets Manager | `ocn/{env}/signal-herald:SMTP_PASSWORD` |
+| `SMTP_FROM` | Secrets Manager | `ocn/{env}/signal-herald:SMTP_FROM` |
 
 ## Maintenance
 

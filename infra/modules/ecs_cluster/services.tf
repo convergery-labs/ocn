@@ -302,7 +302,7 @@ resource "aws_ecs_task_definition" "signal_detection_agent" {
         { name = "PGSSLMODE",              value = "require" },
         { name = "NEWS_RETRIEVAL_URL",     value = "http://news-retrieval.${var.env}.ocn.internal:8000" },
         { name = "OPENAI_BASE_URL",        value = "https://openrouter.ai/api/v1" },
-        { name = "SIGNAL_DETECTION_MODEL", value = "gpt-4.1" }
+        { name = "SIGNAL_DETECTION_MODEL", value = "anthropic/claude-sonnet-4-6" }
       ]
       secrets = [
         {
@@ -393,6 +393,7 @@ resource "aws_iam_role_policy" "ecs_events_run_task" {
         Resource = [
           aws_ecs_task_definition.signal_detection.arn,
           aws_ecs_task_definition.lucky_clarke.arn,
+          aws_ecs_task_definition.signal_herald.arn,
         ]
       },
       {
@@ -596,6 +597,126 @@ resource "aws_ecs_service" "lucky_clarke" {
   service_registries {
     registry_arn = aws_service_discovery_service.lucky_clarke.arn
   }
+}
+
+
+data "aws_secretsmanager_secret" "signal_herald" {
+  name = "ocn/${var.env}/signal-herald"
+}
+
+resource "aws_ecs_task_definition" "signal_herald" {
+  family                   = "${var.env}-signal-herald"
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = "512"
+  memory                   = "1024"
+  execution_role_arn       = aws_iam_role.ecs_task_execution.arn
+
+  container_definitions = jsonencode([
+    {
+      name  = "signal-herald"
+      image = "${var.ecr_registry}/ocn/signal-herald:${var.image_tag}"
+      portMappings = [
+        { containerPort = 8006 }
+      ]
+      environment = [
+        { name = "SIGNAL_AGENT_URL",   value = "http://signal-detection-agent.${var.env}.ocn.internal:8003" },
+        { name = "SIGNAL_HERALD_URL",  value = "http://signal-herald.${var.env}.ocn.internal:8006" },
+        { name = "SIGNAL_CALLER_SUB",  value = "1" },
+        { name = "OPENROUTER_MODEL",   value = "openai/gpt-4o-mini" },
+      ]
+      secrets = [
+        {
+          name      = "OPENROUTER_API_KEY"
+          valueFrom = "${data.aws_secretsmanager_secret.signal_herald.arn}:OPENROUTER_API_KEY::"
+        },
+        {
+          name      = "SMTP_HOST"
+          valueFrom = "${data.aws_secretsmanager_secret.signal_herald.arn}:SMTP_HOST::"
+        },
+        {
+          name      = "SMTP_USER"
+          valueFrom = "${data.aws_secretsmanager_secret.signal_herald.arn}:SMTP_USER::"
+        },
+        {
+          name      = "SMTP_PASSWORD"
+          valueFrom = "${data.aws_secretsmanager_secret.signal_herald.arn}:SMTP_PASSWORD::"
+        },
+        {
+          name      = "SMTP_FROM"
+          valueFrom = "${data.aws_secretsmanager_secret.signal_herald.arn}:SMTP_FROM::"
+        },
+      ]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = "/ecs/${var.env}/signal-herald"
+          "awslogs-region"        = var.aws_region
+          "awslogs-stream-prefix" = "ecs"
+        }
+      }
+    }
+  ])
+}
+
+
+resource "aws_service_discovery_service" "signal_herald" {
+  name = "signal-herald"
+  dns_config {
+    namespace_id = aws_service_discovery_private_dns_namespace.main.id
+    dns_records {
+      ttl  = 10
+      type = "A"
+    }
+  }
+}
+
+
+resource "aws_ecs_service" "signal_herald" {
+  name            = "${var.env}-signal-herald"
+  cluster         = aws_ecs_cluster.main.id
+  task_definition = aws_ecs_task_definition.signal_herald.arn
+  desired_count   = 1
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = var.private_subnet_ids
+    security_groups  = [var.signal_herald_sg_id]
+    assign_public_ip = false
+  }
+
+  service_registries {
+    registry_arn = aws_service_discovery_service.signal_herald.arn
+  }
+}
+
+
+resource "aws_cloudwatch_event_rule" "signal_herald_daily" {
+  name                = "${var.env}-signal-herald-daily"
+  schedule_expression = "cron(0 14 * * ? *)"
+}
+
+
+resource "aws_cloudwatch_event_target" "signal_herald_daily" {
+  rule     = aws_cloudwatch_event_rule.signal_herald_daily.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+  ecs_target {
+    task_definition_arn = aws_ecs_task_definition.signal_herald.arn
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets         = var.private_subnet_ids
+      security_groups = [var.signal_herald_sg_id]
+    }
+  }
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "signal-herald"
+        command = ["python", "-m", "src", "run", "--force"]
+      }
+    ]
+  })
 }
 
 

@@ -23,7 +23,7 @@ def _headers() -> dict[str, str]:
     return {"x-ocn-caller": config.NEWS_RETRIEVAL_SERVICE_CALLER}
 
 
-async def trigger_run(domain: str) -> int:
+async def trigger_run(domain: str, days_back: int = 7) -> int:
     """POST /run to news-retrieval; return run_id.
 
     Handles 202 (new run), 200 (cache hit), and 409 (conflict).
@@ -32,7 +32,7 @@ async def trigger_run(domain: str) -> int:
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
                 f"{config.NEWS_RETRIEVAL_URL}/run",
-                json={"domain": domain, "days_back": 1},
+                json={"domain": domain, "days_back": days_back},
                 headers=_headers(),
             )
     except httpx.HTTPError as exc:

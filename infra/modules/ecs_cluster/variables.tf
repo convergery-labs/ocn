@@ -86,3 +86,8 @@ variable "lucky_clarke_sg_id" {
 variable "signal_detection_agent_sg_id" {
   type = string
 }
+
+
+variable "signal_herald_sg_id" {
+  type = string
+}
