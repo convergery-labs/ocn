@@ -17,6 +17,7 @@ from adapters.news_client import (
 from adapters.web_search import search_entity_context
 from models.jobs import (
     create_job,
+    get_completed_job_for_run,
     get_recent_entity_classifications,
     insert_classification,
     update_job_status,
@@ -28,32 +29,51 @@ logger = logging.getLogger(__name__)
 _executor = ThreadPoolExecutor(max_workers=config.CLASSIFY_CONCURRENCY)
 
 
-async def submit_run(domain: str, run_id: int | None = None) -> int:
-    """Create an agent_jobs row and return job_id.
+async def resolve_news_run_id(
+    domain: str,
+    run_id: int | None,
+    days_back: int,
+    use_latest_run: bool,
+) -> int:
+    """Resolve which news-retrieval run to classify against."""
+    if run_id is not None:
+        await poll_run_until_done(run_id)
+        return run_id
+    if use_latest_run:
+        existing = await fetch_latest_run(domain)
+        if existing is not None:
+            return existing
+    resolved = await trigger_run(domain, days_back)
+    await poll_run_until_done(resolved)
+    return resolved
 
-    If run_id is provided the pipeline will reuse that news-retrieval run
-    (useful for testing without triggering a fresh fetch).
+
+async def submit_run(
+    domain: str,
+    run_id: int | None,
+    days_back: int,
+    use_latest_run: bool,
+    force: bool,
+) -> tuple[int, int, bool]:
+    """Resolve news_run_id, check cache, create job if needed.
+
+    Returns (job_id, news_run_id, cached) where cached=True means an existing
+    completed job was found and no new classification run is needed.
     """
-    return create_job(domain=domain, news_run_id=run_id)
+    news_run_id = await resolve_news_run_id(domain, run_id, days_back, use_latest_run)
+    if not force:
+        existing = get_completed_job_for_run(news_run_id)
+        if existing:
+            return int(existing["id"]), news_run_id, True
+    job_id = create_job(domain=domain, news_run_id=news_run_id)
+    return job_id, news_run_id, False
 
 
-async def run_agent_pipeline(job_id: int, domain: str, news_run_id: int | None, limit: int | None = None, days_back: int = 7, use_latest_run: bool = False) -> None:
+async def run_agent_pipeline(job_id: int, domain: str, news_run_id: int, limit: int | None = None) -> None:
     """Background task: fetch → classify → persist."""
     update_job_status(job_id, "running")
     try:
-        if news_run_id is not None:
-            run_id = news_run_id
-            await poll_run_until_done(run_id)
-        elif use_latest_run:
-            existing = await fetch_latest_run(domain)
-            if existing is not None:
-                run_id = existing
-            else:
-                run_id = await trigger_run(domain, days_back)
-                await poll_run_until_done(run_id)
-        else:
-            run_id = await trigger_run(domain, days_back)
-            await poll_run_until_done(run_id)
+        run_id = news_run_id
 
         articles = await get_run_articles(run_id)
     except NewsRetrievalError:
@@ -76,13 +96,15 @@ async def run_agent_pipeline(job_id: int, domain: str, news_run_id: int | None, 
     def web_search_fn(entity_names: list[str], signal_reason: str = "") -> list[dict]:
         results: list[dict] = []
         event_hint = signal_reason[:60].strip() if signal_reason else ""
-        for name in entity_names[:2]:
+        for i, name in enumerate(entity_names[:2]):
             query = f"{name} {event_hint}".strip() if event_hint else name
             results.extend(
                 search_entity_context(
                     query,
                     provider=config.WEB_SEARCH_PROVIDER,
                     api_key=config.WEB_SEARCH_API_KEY,
+                    # apply delay on 2nd+ query to avoid DuckDuckGo rate limiting
+                    rate_delay=(i > 0 and config.WEB_SEARCH_PROVIDER == "duckduckgo"),
                 )
             )
         return results

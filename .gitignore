@@ -32,6 +32,7 @@ reports/
 
 # Local notes / scratch docs (not for shared history)
 signal-detection-agent/TECHNICAL.md
+signal-detection-agent/DECK.md
 news-retrieval/SUBSTACK_SOURCES.md
 
 # Qdrant storage (if running locally outside Docker)
