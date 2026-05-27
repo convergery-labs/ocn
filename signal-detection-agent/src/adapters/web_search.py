@@ -2,10 +2,15 @@
 from __future__ import annotations
 
 import json
+import time
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from ddgs import DDGS
+
+# DuckDuckGo rate-limits aggressively on burst traffic.
+# This delay is applied between consecutive DuckDuckGo queries to avoid 202/timeout errors.
+_DDGS_INTER_QUERY_DELAY = 1.5  # seconds
 
 
 def search_entity_context(
@@ -14,13 +19,20 @@ def search_entity_context(
     provider: str = "duckduckgo",
     api_key: str | None = None,
     timeout: int = 5,
+    rate_delay: bool = False,
 ) -> list[dict]:
-    """Return [{title, snippet, url}] dicts. Returns [] on any failure."""
+    """Return [{title, snippet, url}] dicts. Returns [] on any failure.
+
+    Set rate_delay=True when making back-to-back DuckDuckGo calls (e.g. multiple
+    entity queries per article) to avoid hitting DuckDuckGo rate limits.
+    """
     try:
         if provider == "tavily":
             return _search_tavily(query, api_key=api_key, timeout=timeout)
         if provider == "brave":
             return _search_brave(query, api_key=api_key, timeout=timeout)
+        if rate_delay:
+            time.sleep(_DDGS_INTER_QUERY_DELAY)
         return _search_duckduckgo(query, timeout=timeout)
     except Exception:
         return []

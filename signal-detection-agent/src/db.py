@@ -83,6 +83,11 @@ def init_db() -> None:
                 ON agent_classifications USING GIN(entity_names_normalized)
         """)
         conn.execute("""
+            ALTER TABLE agent_classifications
+                ADD COLUMN IF NOT EXISTS pre_verification_score FLOAT,
+                ADD COLUMN IF NOT EXISTS verification_qa JSONB
+        """)
+        conn.execute("""
             UPDATE agent_classifications
             SET entity_names_normalized = ARRAY(
                 SELECT LOWER(e->>'name')
