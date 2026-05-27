@@ -70,7 +70,7 @@ def extract_json_object(text: str) -> dict[str, Any]:
     value = (text or '').strip()
     if not value:
         return {}
-    fenced = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', value, re.S)
+    fenced = re.search(r'```(?:json)?\s*(\{.*\})\s*```', value, re.S)
     if fenced:
         value = fenced.group(1)
     start = value.find('{')
@@ -221,6 +221,7 @@ def classify_with_model(
     timeout: int,
     *,
     validator=None,
+    max_tokens: int = 1200,
 ) -> dict[str, Any]:
     if validator is None:
         validator = validate_classification
@@ -232,7 +233,7 @@ def classify_with_model(
         'model': model,
         'temperature': 0,
         'seed': 42,
-        'max_tokens': 1200,
+        'max_tokens': max_tokens,
         'messages': [
             {'role': 'system', 'content': system_prompt},
             {'role': 'user', 'content': user_prompt},
@@ -310,6 +311,33 @@ def validate_classification_v2(payload: dict[str, Any]) -> dict[str, Any]:
     if not refinement_reason:
         raise ValueError('refinement_reason must be non-empty')
 
+    raw_pvs = payload.get('pre_verification_score')
+    try:
+        pvs = float(raw_pvs)
+    except (TypeError, ValueError):
+        raise ValueError(f'Invalid pre_verification_score: {raw_pvs}')
+    if not math.isfinite(pvs) or not 0.0 <= pvs <= 1.0:
+        raise ValueError(f'pre_verification_score must be between 0 and 1: {pvs}')
+
+    verification_qa = payload.get('verification_qa')
+    if not isinstance(verification_qa, list) or not (2 <= len(verification_qa) <= 3):
+        raise ValueError('verification_qa must be a list of 2–3 items')
+    for i, item in enumerate(verification_qa):
+        if not isinstance(item, dict):
+            raise ValueError(f'verification_qa[{i}] must be an object')
+        if not norm(str(item.get('question', ''))):
+            raise ValueError(f'verification_qa[{i}].question must be non-empty')
+        if not norm(str(item.get('answer', ''))):
+            raise ValueError(f'verification_qa[{i}].answer must be non-empty')
+        if not norm(str(item.get('evidence', ''))):
+            raise ValueError(f'verification_qa[{i}].evidence must be non-empty')
+        try:
+            adj = float(item.get('score_adjustment'))
+        except (TypeError, ValueError):
+            raise ValueError(f'verification_qa[{i}].score_adjustment must be a number')
+        if not -0.20 <= adj <= 0.10:
+            raise ValueError(f'verification_qa[{i}].score_adjustment must be between -0.20 and 0.10')
+
     return {
         **base,
         'novelty': novelty,
@@ -317,7 +345,42 @@ def validate_classification_v2(payload: dict[str, Any]) -> dict[str, Any]:
         'confidence': confidence,
         'confidence_basis': confidence_basis,
         'refinement_reason': refinement_reason,
+        'pre_verification_score': round(pvs, 4),
+        'verification_qa': verification_qa,
     }
+
+
+def apply_verification_adjustments(result: dict[str, Any]) -> dict[str, Any]:
+    pvs = result['pre_verification_score']
+    base_score = result.get('base_signal_score', pvs)
+    total_adj = sum(float(q['score_adjustment']) for q in result.get('verification_qa') or [])
+    score = round(max(0.0, min(1.0, pvs + total_adj)), 4)
+    if score >= SIGNAL_SCORE_THRESHOLD:
+        detection = 'signal'
+    elif score > WEAK_SIGNAL_SCORE_THRESHOLD:
+        detection = 'weak_signal'
+    else:
+        detection = 'noise'
+    trace = (
+        f"Score trace — base {base_score:.2f} → pre_verification {pvs:.2f}"
+        f" → QA net {total_adj:+.2f} → final {score:.2f}."
+    )
+    reason = result.get('refinement_reason') or ''
+    updated_reason = reason + f"\n{trace}" if reason else trace
+    return {**result, 'signal_score': score, 'signal_detection': detection, 'refinement_reason': updated_reason}
+
+
+def _format_web_snippets(snippets: list[dict[str, Any]] | None) -> str:
+    if not snippets:
+        return "[]"
+    items = []
+    for s in snippets:
+        entry: dict[str, Any] = {"title": s.get("title", ""), "snippet": s.get("snippet", "")}
+        url = s.get("url", "").strip()
+        if url:
+            entry["url"] = url
+        items.append(entry)
+    return json.dumps(items, ensure_ascii=False, indent=2)
 
 
 def build_user_prompt_v2(
@@ -337,7 +400,7 @@ def build_user_prompt_v2(
         '\n\nEntity history (recent signal/weak_signal rows, same entities):\n'
         + json.dumps(entity_history or [], ensure_ascii=False, indent=2),
         '\n\nWeb search snippets:\n'
-        + json.dumps(web_snippets or [], ensure_ascii=False, indent=2),
+        + _format_web_snippets(web_snippets),
         '\n\nOther articles in this news batch (titles only):\n'
         + json.dumps(batch_context or [], ensure_ascii=False, indent=2),
         '\n\nReturn strict JSON only.',
@@ -386,6 +449,8 @@ def classify_article_two_stage(
             'confidence': None,
             'confidence_basis': None,
             'refinement_reason': None,
+            'pre_verification_score': None,
+            'verification_qa': None,
         }
 
     # Stage 2: gather context concurrently (DB history + web search)
@@ -394,7 +459,7 @@ def classify_article_two_stage(
         f_history = ex.submit(entity_history_fn, entity_names)
         f_web = ex.submit(web_search_fn, entity_names[:2], base.get('signal_reason', ''))
     history = f_history.result()
-    web_snips = f_web.result()  # [] on any failure — second pass still runs
+    web_snips = f_web.result()[:3]  # cap at top 3; [] on any failure — second pass still runs
 
     # Stage 2: refined classification
     user_prompt = build_user_prompt_v2(
@@ -417,12 +482,16 @@ def classify_article_two_stage(
                     base_url,
                     timeout,
                     validator=validate_classification_v2,
+                    max_tokens=2000,
                 )
                 final['id'] = article.get('id')
                 if article.get('run_id') is not None:
                     final['run_id'] = article.get('run_id')
                 final['url'] = article.get('url', '')
                 final['headline'] = article.get('title', '')
+                if not history and not web_snips:
+                    final['pre_verification_score'] = base_signal_score
+                final = apply_verification_adjustments(final)
                 return {
                     **final,
                     'base_signal_detection': base_signal_detection,
@@ -433,7 +502,7 @@ def classify_article_two_stage(
                 time.sleep(0.25)
                 continue
 
-    # Second pass failed — fall back to base with null novelty/confidence
+    # Second pass failed — fall back to base with null second-pass fields
     return {
         **base,
         'base_signal_detection': base_signal_detection,
@@ -443,4 +512,6 @@ def classify_article_two_stage(
         'confidence': None,
         'confidence_basis': None,
         'refinement_reason': None,
+        'pre_verification_score': None,
+        'verification_qa': None,
     }

@@ -76,8 +76,9 @@ def insert_classification(job_id: int, article: dict[str, Any], result: dict[str
                 materiality, category, entities_json,
                 base_signal_detection, base_signal_score,
                 novelty, novelty_basis, confidence, confidence_basis,
-                refinement_reason, entity_names_normalized
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                refinement_reason, entity_names_normalized,
+                pre_verification_score, verification_qa
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT DO NOTHING
             """,
             (
@@ -99,6 +100,8 @@ def insert_classification(job_id: int, article: dict[str, Any], result: dict[str
                 result.get("confidence_basis"),
                 result.get("refinement_reason"),
                 entity_names_normalized,
+                result.get("pre_verification_score"),
+                json.dumps(result.get("verification_qa") or [], ensure_ascii=False),
             ),
         )
 
@@ -138,6 +141,20 @@ def get_recent_entity_classifications(
             rec["stored_at"] = rec["stored_at"].isoformat()
         results.append(rec)
     return results
+
+
+def get_completed_job_for_run(news_run_id: int) -> dict[str, Any] | None:
+    """Return the most recent completed job for a given news_run_id, or None."""
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM agent_jobs
+            WHERE news_run_id = %s AND status = 'completed'
+            ORDER BY id DESC LIMIT 1
+            """,
+            (news_run_id,),
+        ).fetchone()
+    return dict(row) if row else None
 
 
 def get_job(job_id: int) -> dict[str, Any] | None:

@@ -32,27 +32,33 @@ signal-detection-agent/
 ├── CLAUDE.md
 ├── STRUCTURE.md
 ├── prompts/
-│   └── ai_universe_signal_classifier_v1.txt
-└── src/
-    ├── __main__.py
-    ├── app.py
-    ├── auth.py
-    ├── config.py
-    ├── db.py
-    ├── seed.py
-    ├── routes/
-    │   ├── health.py
-    │   ├── run.py
-    │   └── jobs.py
-    ├── controllers/
-    │   └── run.py
-    ├── models/
-    │   └── jobs.py
-    ├── pipeline/
-    │   ├── classifier.py
-    │   └── category_candidates.py   (parked — not wired in v1)
-    └── adapters/
-        └── news_client.py
+│   ├── ai_universe_signal_classifier_v1.txt
+│   └── ai_universe_signal_classifier_v2_refine.txt
+├── src/
+│   ├── __main__.py
+│   ├── app.py
+│   ├── auth.py
+│   ├── config.py
+│   ├── db.py
+│   ├── seed.py
+│   ├── routes/
+│   │   ├── health.py
+│   │   ├── run.py
+│   │   └── jobs.py
+│   ├── controllers/
+│   │   └── run.py
+│   ├── models/
+│   │   └── jobs.py
+│   ├── pipeline/
+│   │   ├── classifier.py
+│   │   └── category_candidates.py   (parked — not wired in v1)
+│   └── adapters/
+│       ├── news_client.py
+│       └── web_search.py
+└── tests/
+    ├── conftest.py
+    ├── test_caching.py
+    └── test_smoke.py
 ```
 
 ## Key Environment Variables
@@ -65,6 +71,9 @@ signal-detection-agent/
 | `NEWS_RETRIEVAL_URL` | news-retrieval base URL (default: `http://news-retrieval:8000`) |
 | `POSTGRES_HOST/PORT/DB/USER/PASSWORD` | Signal-detection Postgres DB connection |
 | `PIPELINE_POLL_TIMEOUT_SECS` | Max seconds to wait for a news-retrieval run (default: 600) |
+| `WEB_SEARCH_PROVIDER` | Web search backend: `duckduckgo` (default), `tavily`, `brave` |
+| `WEB_SEARCH_API_KEY` | API key for Tavily or Brave (not required for DuckDuckGo) |
+| `CLASSIFY_CONCURRENCY` | Max concurrent article classifiers (default: 5) |
 
 ## Guidance
 
