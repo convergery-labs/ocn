@@ -4,7 +4,7 @@ Part of the [ocn monorepo](../CLAUDE.md).
 
 ## Overview
 
-Terraform infrastructure for the OCN platform. Provisions all AWS resources — VPC, RDS, ECS Fargate cluster, ALB, security groups, IAM roles, and CloudWatch logs — across environments. Remote state is stored in S3 with DynamoDB locking.
+Terraform infrastructure for the OCN platform. Provisions all AWS resources - VPC, RDS, ECS Fargate cluster, ALB, security groups, IAM roles, and CloudWatch logs - across environments. Remote state is stored in S3 with DynamoDB locking.
 
 ## Jira Board
 | Board | URL | Project Key |
@@ -48,10 +48,10 @@ infra/
 | `AUTH_POSTGRES_USER` | hardcoded | `auth_user` |
 | `AUTH_POSTGRES_PASSWORD` | Secrets Manager | `ocn/{env}/auth-service:POSTGRES_PASSWORD` |
 | `AUTH_ADMIN_API_KEY` | Secrets Manager | `ocn/{env}/auth-service:ADMIN_API_KEY` |
-| `AUTH_JWT_PRIVATE_KEY` | Secrets Manager | `ocn/{env}/auth-service:JWT_PRIVATE_KEY` — PEM-encoded RS256 private key |
-| `ADMIN_USERNAME` | Secrets Manager | `ocn/{env}/auth-service:ADMIN_USERNAME` — seed admin user |
-| `ADMIN_EMAIL` | Secrets Manager | `ocn/{env}/auth-service:ADMIN_EMAIL` — seed admin user |
-| `ADMIN_PASSWORD` | Secrets Manager | `ocn/{env}/auth-service:ADMIN_PASSWORD` — seed admin user |
+| `AUTH_JWT_PRIVATE_KEY` | Secrets Manager | `ocn/{env}/auth-service:JWT_PRIVATE_KEY` - PEM-encoded RS256 private key |
+| `ADMIN_USERNAME` | Secrets Manager | `ocn/{env}/auth-service:ADMIN_USERNAME` - seed admin user |
+| `ADMIN_EMAIL` | Secrets Manager | `ocn/{env}/auth-service:ADMIN_EMAIL` - seed admin user |
+| `ADMIN_PASSWORD` | Secrets Manager | `ocn/{env}/auth-service:ADMIN_PASSWORD` - seed admin user |
 
 ### news-retrieval
 | Variable | Source | Notes |
@@ -64,8 +64,8 @@ infra/
 | `AUTH_SERVICE_URL` | hardcoded | `http://auth-service.{env}.ocn.internal:8001` |
 | `OPENROUTER_API_KEY` | Secrets Manager | `ocn/{env}/news-retrieval:OPENROUTER_API_KEY` |
 | `OPENROUTER_MODEL` | hardcoded | `openrouter/elephant-alpha` |
-| `SERPAPI_KEY` | Secrets Manager | `ocn/{env}/news-retrieval:SERPAPI_KEY` — optional; SerpAPI key for `google_news` sources |
-| `NEWSAPI_KEY` | Secrets Manager | `ocn/{env}/news-retrieval:NEWSAPI_KEY` — optional; NewsAPI key for `newsapi` sources |
+| `SERPAPI_KEY` | Secrets Manager | `ocn/{env}/news-retrieval:SERPAPI_KEY` - optional; SerpAPI key for `google_news` sources |
+| `NEWSAPI_KEY` | Secrets Manager | `ocn/{env}/news-retrieval:NEWSAPI_KEY` - optional; NewsAPI key for `newsapi` sources |
 
 ### signal-detection
 | Variable | Source | Notes |
@@ -89,7 +89,7 @@ infra/
 
 - Read only the docs relevant to your task
 - Use the Jira board (project key `CON`) to track and reference cards
-- All secrets must exist in Secrets Manager before `terraform apply` — ECS task launch fails at runtime if a `valueFrom` ARN cannot be resolved
+- All secrets must exist in Secrets Manager before `terraform apply` - ECS task launch fails at runtime if a `valueFrom` ARN cannot be resolved
 - When adding a new service, add its security group in `modules/security_groups`, its task definition and ECS service in `modules/ecs_cluster/services.tf`, and its log group in `modules/ecs_cluster/logs.tf`
 
 ### signal-detection-agent
@@ -97,14 +97,14 @@ infra/
 |----------|--------|-------|
 | `POSTGRES_HOST` | `rds_endpoint` | |
 | `POSTGRES_PORT` | hardcoded | `5432` |
-| `POSTGRES_DB` | hardcoded | `signal_detection_db` — shared with signal-detection |
-| `POSTGRES_USER` | hardcoded | `signal_user` — shared with signal-detection |
-| `POSTGRES_PASSWORD` | Secrets Manager | `ocn/{env}/signal-detection:POSTGRES_PASSWORD` — shared with signal-detection |
+| `POSTGRES_DB` | hardcoded | `signal_detection_db` - shared with signal-detection |
+| `POSTGRES_USER` | hardcoded | `signal_user` - shared with signal-detection |
+| `POSTGRES_PASSWORD` | Secrets Manager | `ocn/{env}/signal-detection:POSTGRES_PASSWORD` - shared with signal-detection |
 | `PGSSLMODE` | hardcoded | `require` |
 | `NEWS_RETRIEVAL_URL` | hardcoded | `http://news-retrieval.{env}.ocn.internal:8000` |
 | `OPENAI_BASE_URL` | hardcoded | `https://openrouter.ai/api/v1` |
 | `SIGNAL_DETECTION_MODEL` | hardcoded | `anthropic/claude-sonnet-4-6` |
-| `OPENAI_API_KEY` | Secrets Manager | `ocn/{env}/signal-detection-agent:OPENAI_API_KEY` — OpenRouter key |
+| `OPENAI_API_KEY` | Secrets Manager | `ocn/{env}/signal-detection-agent:OPENAI_API_KEY` - OpenRouter key |
 
 ### api-gateway
 | Variable | Source | Notes |
@@ -120,7 +120,7 @@ infra/
 |----------|--------|-------|
 | `SIGNAL_DETECTION_URL` | hardcoded | `http://signal-detection.{env}.ocn.internal:8002` |
 | `LUCKY_CLARKE_URL` | hardcoded | `http://lucky-clarke.{env}.ocn.internal:8005` |
-| `SIGNAL_CALLER_SUB` | hardcoded | `1` — internal service identity used in x-ocn-caller header |
+| `SIGNAL_CALLER_SUB` | hardcoded | `1` - internal service identity used in x-ocn-caller header |
 | `OPENROUTER_MODEL` | hardcoded | `openai/gpt-4o-mini` |
 | `AWS_REGION` | hardcoded | `eu-north-1` |
 | `OPENROUTER_API_KEY` | Secrets Manager | `ocn/{env}/lucky-clarke:OPENROUTER_API_KEY` |
@@ -134,13 +134,46 @@ infra/
 |----------|--------|-------|
 | `SIGNAL_AGENT_URL` | hardcoded | `http://signal-detection-agent.{env}.ocn.internal:8003` |
 | `SIGNAL_HERALD_URL` | hardcoded | `http://signal-herald.{env}.ocn.internal:8006` |
-| `SIGNAL_CALLER_SUB` | hardcoded | `1` — internal service identity used in x-ocn-caller header |
+| `SIGNAL_CALLER_SUB` | hardcoded | `1` - internal service identity used in x-ocn-caller header |
 | `OPENROUTER_MODEL` | hardcoded | `openai/gpt-4o-mini` |
 | `OPENROUTER_API_KEY` | Secrets Manager | `ocn/{env}/signal-herald:OPENROUTER_API_KEY` |
 | `SMTP_HOST` | Secrets Manager | `ocn/{env}/signal-herald:SMTP_HOST` |
 | `SMTP_USER` | Secrets Manager | `ocn/{env}/signal-herald:SMTP_USER` |
 | `SMTP_PASSWORD` | Secrets Manager | `ocn/{env}/signal-herald:SMTP_PASSWORD` |
 | `SMTP_FROM` | Secrets Manager | `ocn/{env}/signal-herald:SMTP_FROM` |
+
+## Maintenance
+
+- Do not modify the Jira Board, Guidance, or Maintenance sections unless explicitly asked
+### research-universe
+| Variable | Source | Notes |
+|----------|--------|-------|
+| `POSTGRES_HOST` | `rds_endpoint` | |
+| `POSTGRES_PORT` | hardcoded | `5432` |
+| `POSTGRES_DB` | hardcoded | `research_universe_db` |
+| `POSTGRES_USER` | hardcoded | `research_universe_user` |
+| `POSTGRES_PASSWORD` | Secrets Manager | `ocn/{env}/research-universe:POSTGRES_PASSWORD` |
+| `PGSSLMODE` | hardcoded | `require` |
+| `OPENROUTER_MODEL` | hardcoded | `anthropic/claude-sonnet-4-6` |
+| `OPENROUTER_API_KEY` | Secrets Manager | `ocn/{env}/research-universe:OPENROUTER_API_KEY` |
+| `CORS_ORIGINS` | Secrets Manager | `ocn/{env}/research-universe:CORS_ORIGINS` - Lovable deployment URL |
+| `API_PREFIX` | hardcoded | `/universe` - strips ALB path prefix |
+
+**Secrets Manager pre-requisite:** Create `ocn/{env}/research-universe` with keys:
+- `POSTGRES_PASSWORD` - DB password for `research_universe_user`
+- `OPENROUTER_API_KEY` - OpenRouter API key
+- `CORS_ORIGINS` - Lovable deployment URL (e.g. `https://your-app.lovable.app`)
+
+**First deploy:** Run seed as a one-off ECS task after the service is up:
+```bash
+aws ecs run-task --cluster {env}-ocn \
+  --task-definition {env}-research-universe \
+  --overrides '{"containerOverrides":[{"name":"research-universe","command":["python","src/seed.py","--xlsx","/data/seed.xlsx"]}]}'
+```
+
+**Scheduled scan:** CloudWatch rule fires daily at 06:00 UTC → runs `python -m src scan-next` → scans the least recently enriched category → results land in pending_review queue.
+
+**ALB routing:** Path prefix `/universe/*` → research-universe target group (port 8007). Lovable's API base URL is `http://{alb-dns}/universe`.
 
 ## Maintenance
 

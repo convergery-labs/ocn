@@ -1,4 +1,4 @@
-"""Repository layer — agent_jobs and agent_classifications tables."""
+"""Repository layer - agent_jobs and agent_classifications tables."""
 from __future__ import annotations
 
 import json
@@ -110,9 +110,14 @@ def get_recent_entity_classifications(
     entity_names: list[str],
     *,
     days: int = 90,
-    limit: int = 10,
+    limit: int = 15,
 ) -> list[dict[str, Any]]:
-    """Return recent signal/weak_signal rows that mention any of the given entity names."""
+    """Return recent rows that mention any of the given entity names.
+
+    Includes signal/weak_signal rows (for novelty and downgrade decisions) and
+    borderline noise rows with signal_score >= 0.28 (as escalation context).
+    Stage 2 uses the signal_detection field to distinguish the two.
+    """
     if not entity_names:
         return []
     normalized_names = [name.lower() for name in entity_names]
@@ -124,7 +129,10 @@ def get_recent_entity_classifications(
                    entities_json, title, url, stored_at
             FROM agent_classifications
             WHERE stored_at >= NOW() - INTERVAL '{days} days'
-              AND signal_detection IN ('signal', 'weak_signal')
+              AND (
+                signal_detection IN ('signal', 'weak_signal')
+                OR (signal_detection = 'noise' AND signal_score >= 0.28)
+              )
               AND entity_names_normalized && ARRAY[{placeholders}]::TEXT[]
             ORDER BY stored_at DESC
             LIMIT %s

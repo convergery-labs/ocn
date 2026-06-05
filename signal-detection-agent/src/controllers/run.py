@@ -1,4 +1,4 @@
-"""Orchestration — fetch articles from news-retrieval, classify via LLM, persist."""
+"""Orchestration - fetch articles from news-retrieval, classify via LLM, persist."""
 from __future__ import annotations
 
 import asyncio

@@ -1,6 +1,6 @@
 """Seed the database with initial lookup data.
 
-Idempotent — rows that already exist are silently skipped.
+Idempotent - rows that already exist are silently skipped.
 """
 import logging
 

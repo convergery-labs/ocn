@@ -45,3 +45,4 @@ qdrant_storage/
 infra/staging/terraform.tfvars
 infra/production/terraform.tfvars.claude/worktrees/
 .claude/
+ROADMAP.md

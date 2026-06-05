@@ -29,12 +29,12 @@ docker compose up postgres-auth auth-service
 | `AUTH_POSTGRES_USER` | no | `auth-service` | Database user |
 | `AUTH_POSTGRES_PASSWORD` | no | _(empty)_ | Database password |
 | `PGSSLMODE` | no | `prefer` | PostgreSQL SSL mode |
-| `AUTH_JWT_PRIVATE_KEY` | **yes** | — | PEM-encoded RS256 private key for JWT signing |
+| `AUTH_JWT_PRIVATE_KEY` | **yes** | - | PEM-encoded RS256 private key for JWT signing |
 | `AUTH_JWT_EXPIRY_SECONDS` | no | `3600` | JWT lifetime in seconds |
-| `AUTH_ADMIN_API_KEY` | **yes** | — | Seed admin API key (must start with `csec_`) |
-| `ADMIN_USERNAME` | **yes** | — | Seed admin user username |
-| `ADMIN_EMAIL` | **yes** | — | Seed admin user email |
-| `ADMIN_PASSWORD` | **yes** | — | Seed admin user password |
+| `AUTH_ADMIN_API_KEY` | **yes** | - | Seed admin API key (must start with `csec_`) |
+| `ADMIN_USERNAME` | **yes** | - | Seed admin user username |
+| `ADMIN_EMAIL` | **yes** | - | Seed admin user email |
+| `ADMIN_PASSWORD` | **yes** | - | Seed admin user password |
 
 ## API
 

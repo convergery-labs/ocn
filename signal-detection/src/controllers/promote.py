@@ -176,7 +176,7 @@ def promote_deferred_corpus() -> dict[str, int]:
             skipped += 1
             continue
 
-        # Corpus mutations outside the DB transaction — best-effort.
+        # Corpus mutations outside the DB transaction - best-effort.
         if sim > threshold:
             upsert_cooccurrences(concepts)
             _undefer_claims_in_qdrant(qdrant, claim_ids, promotion_id)

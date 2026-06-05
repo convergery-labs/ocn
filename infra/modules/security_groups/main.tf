@@ -139,6 +139,24 @@ resource "aws_security_group" "lucky_clarke" {
 }
 
 
+resource "aws_security_group" "research_universe" {
+  name   = "${var.env}-research-universe"
+  vpc_id = var.vpc_id
+  ingress {
+    from_port       = 8007
+    to_port         = 8007
+    protocol        = "tcp"
+    security_groups = [aws_security_group.alb.id]
+  }
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+
 data "aws_security_group" "bastion" {
   name   = "${var.env}-bastion"
   vpc_id = var.vpc_id
@@ -173,6 +191,7 @@ resource "aws_security_group" "rds" {
       aws_security_group.news_retrieval.id,
       aws_security_group.signal_detection.id,
       aws_security_group.signal_detection_agent.id,
+      aws_security_group.research_universe.id,
       data.aws_security_group.bastion.id,
     ]
   }

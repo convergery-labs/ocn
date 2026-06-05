@@ -29,7 +29,7 @@ async def post_api_key_domains(
     body: DomainGrantIn,
     caller: dict[str, Any] = Depends(require_admin),
 ) -> list[dict]:
-    """Grant domain access to an API key — admin only.
+    """Grant domain access to an API key - admin only.
 
     Upserts grants for the given domain_ids and returns the updated
     full domain list for the key.
@@ -46,7 +46,7 @@ async def delete_api_key_domain(
     domain_id: int,
     caller: dict[str, Any] = Depends(require_admin),
 ) -> None:
-    """Revoke a single domain grant from an API key — admin only."""
+    """Revoke a single domain grant from an API key - admin only."""
     deleted = revoke_domain(key_id, domain_id)
     if not deleted:
         raise HTTPException(

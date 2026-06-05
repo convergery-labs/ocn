@@ -1,4 +1,4 @@
-"""GET /health — liveness check."""
+"""GET /health - liveness check."""
 from fastapi import APIRouter
 
 from db import get_db

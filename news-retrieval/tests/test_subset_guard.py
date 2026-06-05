@@ -170,7 +170,7 @@ async def test_subset_with_naive_iso_published_dates(
     client, admin_key
 ) -> None:
     """Subset run succeeds (200) when covering articles have naive ISO 8601
-    published dates — guards against TypeError on tz-naive vs tz-aware
+    published dates - guards against TypeError on tz-naive vs tz-aware
     comparison (CON-147)."""
     from datetime import datetime, timedelta, timezone
 

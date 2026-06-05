@@ -29,7 +29,7 @@ auth-service/
 │   ├── app.py            # FastAPI app factory
 │   ├── auth.py           # require_auth / require_admin dependencies
 │   ├── db.py             # thin adapter: _new_connection, init_db; re-exports get_db/DuplicateError from shared/src/db_utils.py
-│   ├── jwt_utils.py      # issue_token() — RS256 JWT via AUTH_JWT_PRIVATE_KEY env var
+│   ├── jwt_utils.py      # issue_token() - RS256 JWT via AUTH_JWT_PRIVATE_KEY env var
 │   ├── seed.py           # seed_domains(), seed_admin_key(), seed_admin_user()
 │   ├── models/
 │   │   ├── api_keys.py   # ApiKeyRow, generate_key, hash_key, CRUD
@@ -38,7 +38,7 @@ auth-service/
 │   └── routes/
 │       ├── health.py     # GET /health
 │       ├── auth.py       # POST /register, POST /login (public)
-│       ├── jwks.py       # GET /jwks (public — RS256 public key in JWKS format)
+│       ├── jwks.py       # GET /jwks (public - RS256 public key in JWKS format)
 │       ├── keys.py       # GET /keys, POST /keys
 │       ├── users.py      # GET /users, GET /users/{id}, PATCH /users/{id}
 │       └── validate.py   # POST /validate
@@ -58,9 +58,9 @@ fetch only those. Use the 'Read when' column as your guide.
 ## Documentation Index
 | Doc | Read when | Page ID |
 |-----|-----------|---------|
-| [Technical Specification — auth-service](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/89620484/Technical+Specification+auth-service) | Making architectural or technical decisions about auth, schema, or JWT | 89620484 |
+| [Technical Specification - auth-service](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/89620484/Technical+Specification+auth-service) | Making architectural or technical decisions about auth, schema, or JWT | 89620484 |
 
-Confluence space: `Projects` — Cloud: `opengrowthventures.atlassian.net`
+Confluence space: `Projects` - Cloud: `opengrowthventures.atlassian.net`
 
 ## Guidance
 

@@ -91,3 +91,13 @@ variable "signal_detection_agent_sg_id" {
 variable "signal_herald_sg_id" {
   type = string
 }
+
+
+variable "research_universe_sg_id" {
+  type = string
+}
+
+
+variable "research_universe_tg_arn" {
+  type = string
+}

@@ -1,4 +1,4 @@
-"""POST /run — trigger the agent classification pipeline."""
+"""POST /run - trigger the agent classification pipeline."""
 from __future__ import annotations
 
 from typing import Any

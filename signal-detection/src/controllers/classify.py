@@ -54,7 +54,7 @@ _EMBED_BATCH_SIZE = 40
 _ARTICLE_VECTOR_SIZE = 3072
 _CLAIM_VECTOR_SIZE = 1536
 
-# Scoring hyper-parameters — all overridable via environment variables
+# Scoring hyper-parameters - all overridable via environment variables
 _MIN_CLUSTER_SIMILARITY = float(
     os.environ.get("MIN_CLUSTER_SIMILARITY", "0.3")
 )
@@ -63,7 +63,7 @@ _COLD_START_CLAIM_SCORE = float(
 )
 _W_TRAJECTORY = float(os.environ.get("W_TRAJECTORY", "0.40"))
 _W_CLAIM_NOVELTY = float(os.environ.get("W_CLAIM_NOVELTY", "0.60"))
-# Phase 4 weights — used when bridge score is available
+# Phase 4 weights - used when bridge score is available
 _W_TRAJ_P4 = float(os.environ.get("W_TRAJECTORY_P4", "0.25"))
 _W_BRIDGE = float(os.environ.get("W_BRIDGE", "0.30"))
 _W_NOVELTY_P4 = float(os.environ.get("W_CLAIM_NOVELTY_P4", "0.45"))
@@ -164,8 +164,8 @@ async def submit_classify_job(
     For Mode B (articles provided directly): generates a fresh run_id.
 
     Raises:
-        RunNotFoundError: Mode A only — run_id not found.
-        DuplicateJobError: Mode A only — processing job already exists.
+        RunNotFoundError: Mode A only - run_id not found.
+        DuplicateJobError: Mode A only - processing job already exists.
     """
     if run_id is not None:
         await validate_run_id(int(run_id))
@@ -348,7 +348,7 @@ async def _run_scoring_phase(
                         ).end()
                     if flagged_for_review:
                         logger.info(
-                            "Job %d: flagged for review — %s"
+                            "Job %d: flagged for review - %s"
                             " (plausibility=%.3f)",
                             job_id, article_url, plausibility_score,
                         )
@@ -498,7 +498,7 @@ async def _run_feature_extraction(
     _ensure_qdrant_collection(qdrant, "claims", _CLAIM_VECTOR_SIZE)
 
     with span_ctx as span:
-        # Step 1 — MinHash LSH deduplication (within-batch)
+        # Step 1 - MinHash LSH deduplication (within-batch)
         keep_indices = _dedup_indices(articles)
         deduped = [articles[i] for i in keep_indices]
         skipped = len(articles) - len(deduped)
@@ -508,7 +508,7 @@ async def _run_feature_extraction(
                 job_id, skipped,
             )
 
-        # Step 2 — Language filter
+        # Step 2 - Language filter
         english = []
         for article in deduped:
             lang = _detect_language(article.get("body") or article.get("summary", ""))
@@ -530,7 +530,7 @@ async def _run_feature_extraction(
             logger.info("Job %d: no English articles to process", job_id)
             return
 
-        # Step 3 — Embed article bodies in batches
+        # Step 3 - Embed article bodies in batches
         bodies = [a.get("body") or a.get("summary", "") for a in english]
         total_chars = sum(len(b) for b in bodies)
         if span:
@@ -552,7 +552,7 @@ async def _run_feature_extraction(
             )
             all_embeddings.extend(batch_embeddings)
 
-        # Step 4 — Upsert article vectors to Qdrant and insert DB rows
+        # Step 4 - Upsert article vectors to Qdrant and insert DB rows
         article_points = [
             PointStruct(
                 id=_url_to_point_id(a["url"]),
@@ -575,7 +575,7 @@ async def _run_feature_extraction(
             job_id, len(article_points),
         )
 
-        # Step 5 — Insert classification rows and collect per-article metadata
+        # Step 5 - Insert classification rows and collect per-article metadata
         classification_ids: list[int] = []
         article_urls: list[str] = []
         article_bodies: list[str] = []
@@ -597,7 +597,7 @@ async def _run_feature_extraction(
             article_urls.append(article_url)
             article_bodies.append(article.get("body") or article.get("summary", ""))
 
-        # Step 6 — Extract claims for all articles concurrently
+        # Step 6 - Extract claims for all articles concurrently
         all_claims: list[list[str]] = await asyncio.gather(
             *[
                 loop.run_in_executor(
@@ -622,7 +622,7 @@ async def _run_feature_extraction(
                         output={"claims": claims},
                     ).end()
 
-        # Step 7 — Embed claims for all articles concurrently, then store
+        # Step 7 - Embed claims for all articles concurrently, then store
         await asyncio.gather(
             *[
                 _embed_and_store(
@@ -642,7 +642,7 @@ async def _run_feature_extraction(
             ]
         )
 
-        # Step 8 — NER concept extraction; results stored on classifications row
+        # Step 8 - NER concept extraction; results stored on classifications row
         article_titles = [a.get("title", "") for a in english]
         all_concepts: list[list[str]] = await asyncio.gather(
             *[

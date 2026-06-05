@@ -14,21 +14,21 @@ After each classification, the article embedding incrementally updates the EWMA 
 
 The composite score uses Phase 4 weights (`0.25 * A + 0.30 * B + 0.45 * C`) when a bridge score is available (≥ 2 concepts extracted), and falls back to Phase 3 (`0.40 * A + 0.60 * C`) otherwise. Co-occurrence counts are maintained in the `concept_cooccurrences` Postgres table and updated after each article is classified.
 
-After scoring, articles with `composite_score > PLAUSIBILITY_THRESHOLD` (default 0.40) pass through a plausibility filter — a single Claude Sonnet LLM call (via OpenRouter) that returns a `plausibility_score` (0–1), `flags`, and `reasoning`. Articles scoring below 0.30 plausibility are flagged (`flagged_for_review = true`); Signal articles are additionally downgraded to Weak Signal. Results are stored on the `classifications` row (`plausibility_score`, `plausibility_flags`, `plausibility_reasoning`, `flagged_for_review`). Noise articles skip the filter entirely. On LLM failure the filter is skipped and the label is unchanged.
+After scoring, articles with `composite_score > PLAUSIBILITY_THRESHOLD` (default 0.40) pass through a plausibility filter - a single Claude Sonnet LLM call (via OpenRouter) that returns a `plausibility_score` (0–1), `flags`, and `reasoning`. Articles scoring below 0.30 plausibility are flagged (`flagged_for_review = true`); Signal articles are additionally downgraded to Weak Signal. Results are stored on the `classifications` row (`plausibility_score`, `plausibility_flags`, `plausibility_reasoning`, `flagged_for_review`). Noise articles skip the filter entirely. On LLM failure the filter is skipped and the label is unchanged.
 
 ## Documentation Index
 | Doc | Read when | Page ID |
 |-----|-----------|---------|
-| [Project Brief](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/73203716/Project+Brief+—+signal-detection) | Understanding the service's purpose and goals | 73203716 |
-| [Scope & Success Criteria](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/73629710/Scope+%26+Success+Criteria+—+signal-detection) | Defining or verifying acceptance criteria | 73629710 |
-| [Functional Requirements](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/74153986/Functional+Requirements+—+signal-detection) | Implementing or questioning any feature | 74153986 |
-| [Technical Specifications](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/74154013/Technical+Specifications+—+signal-detection) | Making architectural or technical decisions | 74154013 |
-| [Solution Exploration](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/74416130/Solution+Exploration+—+signal-detection) | Evaluating design or approach options | 74416130 |
-| [Evidence Base](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/75923457/Evidence+Base+—+signal-detection+Approach) | Validating or challenging the chosen approach | 75923457 |
-| [Infrastructure Request](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/74940431/Infrastructure+Request+—+OCN+Signal+Detection+Platform) | Provisioning or configuring infrastructure | 74940431 |
-| [Assumptions & Open Questions Log](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/73957390/Assumptions+%26+Open+Questions+Log+—+signal-detection) | Resolving ambiguities or open questions | 73957390 |
+| [Project Brief](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/73203716/Project+Brief+-+signal-detection) | Understanding the service's purpose and goals | 73203716 |
+| [Scope & Success Criteria](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/73629710/Scope+%26+Success+Criteria+-+signal-detection) | Defining or verifying acceptance criteria | 73629710 |
+| [Functional Requirements](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/74153986/Functional+Requirements+-+signal-detection) | Implementing or questioning any feature | 74153986 |
+| [Technical Specifications](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/74154013/Technical+Specifications+-+signal-detection) | Making architectural or technical decisions | 74154013 |
+| [Solution Exploration](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/74416130/Solution+Exploration+-+signal-detection) | Evaluating design or approach options | 74416130 |
+| [Evidence Base](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/75923457/Evidence+Base+-+signal-detection+Approach) | Validating or challenging the chosen approach | 75923457 |
+| [Infrastructure Request](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/74940431/Infrastructure+Request+-+OCN+Signal+Detection+Platform) | Provisioning or configuring infrastructure | 74940431 |
+| [Assumptions & Open Questions Log](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/73957390/Assumptions+%26+Open+Questions+Log+-+signal-detection) | Resolving ambiguities or open questions | 73957390 |
 
-Confluence space: `Projects` — Cloud: `opengrowthventures.atlassian.net`
+Confluence space: `Projects` - Cloud: `opengrowthventures.atlassian.net`
 
 ## Jira Board
 | Board | URL | Project Key |
@@ -50,7 +50,7 @@ signal-detection/
 │   │                                     historical-ingest)
 │   ├── app.py               FastAPI factory
 │   ├── auth.py              x-ocn-caller header extraction
-│   ├── db.py                DB adapter — _new_connection(), init_db(); delegates
+│   ├── db.py                DB adapter - _new_connection(), init_db(); delegates
 │   │                        connection pooling, get_db(), transaction(), and
 │   │                        DuplicateError to shared/src/db_utils.py
 │   ├── seed.py              Seed classification_statuses

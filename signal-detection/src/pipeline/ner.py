@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 _MAPPINGS_PATH = Path(__file__).parent.parent / "taxonomy_mappings.json"
 
-# Characters fed to spaCy per article — caps latency without losing coverage.
+# Characters fed to spaCy per article - caps latency without losing coverage.
 _MAX_TEXT_CHARS = 50_000
 
 
@@ -34,7 +34,7 @@ try:
     _NLP = _load_model()
     _MAPPINGS: dict[str, str] = _load_mappings()
 except Exception:  # pragma: no cover
-    logger.exception("Failed to load NER pipeline — concept extraction disabled")
+    logger.exception("Failed to load NER pipeline - concept extraction disabled")
     _NLP = None  # type: ignore[assignment]
     _MAPPINGS = {}
 
@@ -47,7 +47,7 @@ def extract_concepts(text: str) -> list[str]:
     via case-insensitive substring lookup.
 
     Returns an empty list if text is empty, no concepts are matched,
-    or the pipeline failed to load — never raises.
+    or the pipeline failed to load - never raises.
     """
     if not _NLP or not text:
         return []

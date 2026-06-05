@@ -43,27 +43,27 @@ All write endpoints require an `Authorization: Bearer <token>` header. Admin-onl
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `POST` | `/run` | Required | Submit a pipeline run; returns `202` with `run_id`, or `200` with `cache_hit: true` if an identical run completed today |
-| `GET` | `/runs` | — | List runs newest-first; filter by one or more `domain` slugs (repeat param: `?domain=A&domain=B`), `status`, `from_date`, `to_date`; cursor-paginated |
-| `GET` | `/runs/{id}` | — | Single run record |
-| `GET` | `/runs/{id}/articles` | — | Articles for a run; cursor-paginated. Pass `include_body=true` to include article body text (omitted by default) |
-| `GET` | `/articles` | — | All articles across runs, newest first; filter by one or more `domain` slugs (repeat param: `?domain=A&domain=B`); cursor-paginated. Pass `include_body=true` to include body text (omitted by default) |
-| `GET` | `/articles/{id}` | — | Single article record |
-| `GET` | `/domains` | — | List all domains — public, no auth required |
+| `GET` | `/runs` | - | List runs newest-first; filter by one or more `domain` slugs (repeat param: `?domain=A&domain=B`), `status`, `from_date`, `to_date`; cursor-paginated |
+| `GET` | `/runs/{id}` | - | Single run record |
+| `GET` | `/runs/{id}/articles` | - | Articles for a run; cursor-paginated. Pass `include_body=true` to include article body text (omitted by default) |
+| `GET` | `/articles` | - | All articles across runs, newest first; filter by one or more `domain` slugs (repeat param: `?domain=A&domain=B`); cursor-paginated. Pass `include_body=true` to include body text (omitted by default) |
+| `GET` | `/articles/{id}` | - | Single article record |
+| `GET` | `/domains` | - | List all domains - public, no auth required |
 | `POST` | `/domains` | Required | Create a domain |
 | `PATCH` | `/domains/{id}` | Required | Update a domain (owner or admin only) |
-| `GET` | `/sources` | — | List sources (optional `?domain=` filter) |
+| `GET` | `/sources` | - | List sources (optional `?domain=` filter) |
 | `POST` | `/sources` | Required | Add an RSS feed source |
-| `GET` | `/frequencies` | — | List polling frequencies |
+| `GET` | `/frequencies` | - | List polling frequencies |
 | `POST` | `/frequencies` | Admin | Add a polling frequency |
 | `GET` | `/api-keys` | Admin | List API keys |
 | `POST` | `/api-keys` | Admin | Create an API key (returns plaintext key once) |
-| `GET` | `/health` | — | Health check |
+| `GET` | `/health` | - | Health check |
 
 ### POST /run
 
 Submits a pipeline run. Returns `202` immediately with a `run_id`; the pipeline runs in the background.
 
-If a completed run with identical parameters (`domain`, `days_back`, `focus`, `model`) already exists for the current UTC day, returns `200` with the existing run's fields and `cache_hit: true` — no pipeline is dispatched. Use `force: true` to bypass this and always start a fresh run.
+If a completed run with identical parameters (`domain`, `days_back`, `focus`, `model`) already exists for the current UTC day, returns `200` with the existing run's fields and `cache_hit: true` - no pipeline is dispatched. Use `force: true` to bypass this and always start a fresh run.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
@@ -83,7 +83,7 @@ curl -X POST http://localhost:8000/run \
   -d '{"domain": "ai_news", "days_back": 7}'
 ```
 
-Response: `{"run_id": "<uuid>"}` — poll `GET /runs/{run_id}` for status.
+Response: `{"run_id": "<uuid>"}` - poll `GET /runs/{run_id}` for status.
 
 ### POST /domains
 

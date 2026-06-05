@@ -10,8 +10,8 @@
 | `README.md` | Project overview and quick-start instructions |
 | `CLAUDE.md` | AI assistant instructions: documentation index, Jira board, structural guide, maintenance rules |
 | `STRUCTURE.md` | This file |
-| `tests/` | Automated test suite — see Testing section below |
-| `src/__main__.py` | CLI entry point — `click` + `uvicorn.run` |
+| `tests/` | Automated test suite - see Testing section below |
+| `src/__main__.py` | CLI entry point - `click` + `uvicorn.run` |
 | `src/app.py` | FastAPI app factory and lifespan hook |
 | `src/pipeline.py` | Fetch and relevance-filter pipeline (RSS + SerpAPI Google News + NewsAPI fetch → Pass 1 LLM relevance filter); returns list of relevant articles |
 | `src/db.py` | Thin adapter: `_new_connection()` (reads `POSTGRES_*` env vars), `init_db()`, and `db_utils.configure()`; re-exports `get_db`, `transaction`, and `DuplicateError` from `shared/src/db_utils.py` so all other imports are unaffected |
@@ -22,7 +22,7 @@
 
 ## App layers
 
-The application is a single FastAPI process. `POST /run` uses FastAPI `BackgroundTasks` to execute the pipeline after the HTTP response is sent. Control flow is entirely Python-driven (not LLM-driven). All domain configuration (sources, polling frequencies) lives in PostgreSQL and is loaded at request time — no code changes are needed to add new domains.
+The application is a single FastAPI process. `POST /run` uses FastAPI `BackgroundTasks` to execute the pipeline after the HTTP response is sent. Control flow is entirely Python-driven (not LLM-driven). All domain configuration (sources, polling frequencies) lives in PostgreSQL and is loaded at request time - no code changes are needed to add new domains.
 
 | Layer | File(s) | Responsibility |
 |-------|---------|----------------|
@@ -46,12 +46,12 @@ The application is a single FastAPI process. `POST /run` uses FastAPI `Backgroun
 | `GET /runs/{id}/articles` | Articles for a run; cursor-paginated (`limit`, `cursor`); returns `{"articles": [...], "next_cursor": str\|null}` |
 | `GET /articles/{id}` | Single article record |
 | `GET /health` | Service health check |
-| `GET /domains` | List all domains — **public**, no auth required |
-| `POST /domains` | Create a domain — requires auth; records caller as owner; `PATCH /{id}` requires ownership or admin |
+| `GET /domains` | List all domains - **public**, no auth required |
+| `POST /domains` | Create a domain - requires auth; records caller as owner; `PATCH /{id}` requires ownership or admin |
 | `GET/POST /sources` | Manage sources (`POST` requires auth; users restricted to domains they own) |
 | `GET/POST /frequencies` | Manage frequencies (`POST` admin only) |
-| `POST /grants/{id}/domains` | Grant domain access to a key — admin only; upserts grants, returns updated domain list |
-| `DELETE /grants/{id}/domains/{domain_id}` | Revoke a single domain grant — admin only; 204 on success, 404 if absent |
+| `POST /grants/{id}/domains` | Grant domain access to a key - admin only; upserts grants, returns updated domain list |
+| `DELETE /grants/{id}/domains/{domain_id}` | Revoke a single domain grant - admin only; 204 on success, 404 if absent |
 
 ### Execution flow
 
@@ -68,7 +68,7 @@ run_pipeline()  (background, after response is sent)
   └─ pl.run()
        ├─ load_sources()        # query sources WHERE min_days_back <= days_back
        ├─ _fetch_articles()     # branches by source_type: _fetch_rss() (feedparser, 10 workers) + _fetch_serpapi() (SerpAPI Google News, 5 workers) + _fetch_newsapi() (NewsAPI top-headlines, 5 workers); respective KEY unset → sources skipped
-       └─ _filter_articles()    # Pass 1 — LLM: title-only relevance filter
+       └─ _filter_articles()    # Pass 1 - LLM: title-only relevance filter
   └─ create_articles()          # batch INSERT relevant articles
   └─ complete_run() / fail_run() # UPDATE runs SET status='completed'|'failed'
   └─ _fire_webhook()             # POST to callback_url if set (best-effort, 10s timeout)
@@ -80,8 +80,8 @@ GET /runs/{id}  →  live status poll
 
 - Sources with `frequency.min_days_back > days_back` are skipped.
 - Pass 1 (relevance filter) fails open: if a batch errors, those articles are kept.
-- Domain config is loaded fresh from the DB on every `POST /run` — adding a new domain via the API takes effect immediately without restarting.
-- The LLM never decides what tools to call — all orchestration is in Python.
+- Domain config is loaded fresh from the DB on every `POST /run` - adding a new domain via the API takes effect immediately without restarting.
+- The LLM never decides what tools to call - all orchestration is in Python.
 - Same-day cache guard: if a completed run with identical `(domain, days_back, focus, model)` already exists for the current UTC day, `POST /run` returns it immediately with `cache_hit: true` (HTTP 200) without dispatching a new pipeline. `force: true` bypasses this.
 
 ## Testing
@@ -91,7 +91,7 @@ Tests live in `tests/` at the project root and run against a dedicated `news-ret
 ### Running the tests
 
 ```bash
-# From the repo root — start the test DB
+# From the repo root - start the test DB
 docker compose up postgres-news-test -d
 
 # Install test dependencies
@@ -136,29 +136,29 @@ pytest news-retrieval/tests/
 
 | Variable / resource | Default | Description |
 |--------------------|---------|-------------|
-| `OPENROUTER_API_KEY` | — | Required. Server-level API key for OpenRouter |
-| `OPENROUTER_MODEL` | — | Required. Default model string for relevance filtering. Currently `openai/gpt-4o-mini` — chosen for speed (~15s for 200 articles) and cost. Avoid reasoning models here; they add ~90s of latency per run. |
-| `AUTH_SERVICE_URL` | — | Required. URL of the auth-service (e.g. `http://auth-service:8001`). All Bearer tokens are validated by `POST {AUTH_SERVICE_URL}/validate`; returns 503 if unset |
+| `OPENROUTER_API_KEY` | - | Required. Server-level API key for OpenRouter |
+| `OPENROUTER_MODEL` | - | Required. Default model string for relevance filtering. Currently `openai/gpt-4o-mini` - chosen for speed (~15s for 200 articles) and cost. Avoid reasoning models here; they add ~90s of latency per run. |
+| `AUTH_SERVICE_URL` | - | Required. URL of the auth-service (e.g. `http://auth-service:8001`). All Bearer tokens are validated by `POST {AUTH_SERVICE_URL}/validate`; returns 503 if unset |
 | `POSTGRES_HOST` | `localhost` | PostgreSQL server hostname |
 | `POSTGRES_PORT` | `5432` | PostgreSQL server port |
 | `POSTGRES_DB` | `news-retrieval` | Database name |
 | `POSTGRES_USER` | `news-retrieval` | Database user |
-| `POSTGRES_PASSWORD` | — | Database password |
-| `SERPAPI_KEY` | — | Optional. SerpAPI API key for `google_news` sources. If unset, sources with `source_type = 'google_news'` are skipped with a warning log. |
-| `NEWSAPI_KEY` | — | Optional. NewsAPI API key for `newsapi` sources. If unset, sources with `source_type = 'newsapi'` are skipped with a warning log. |
+| `POSTGRES_PASSWORD` | - | Database password |
+| `SERPAPI_KEY` | - | Optional. SerpAPI API key for `google_news` sources. If unset, sources with `source_type = 'google_news'` are skipped with a warning log. |
+| `NEWSAPI_KEY` | - | Optional. NewsAPI API key for `newsapi` sources. If unset, sources with `source_type = 'newsapi'` are skipped with a warning log. |
 
 ### External services
 
 | Service | Used for |
 |---------|---------|
-| OpenRouter (`openrouter.ai/api/v1`) | LLM inference — relevance filtering, tag generation, cluster naming, embeddings |
-| RSS feeds (various) | Source articles — managed via `POST /sources` API or seed data in `src/seed.py` |
+| OpenRouter (`openrouter.ai/api/v1`) | LLM inference - relevance filtering, tag generation, cluster naming, embeddings |
+| RSS feeds (various) | Source articles - managed via `POST /sources` API or seed data in `src/seed.py` |
 | SerpAPI (`serpapi.com/search?engine=google_news`) | Google News article fetch for sources with `source_type = 'google_news'` |
 | NewsAPI (`newsapi.org/v2`) | Top-headlines article fetch for sources with `source_type = 'newsapi'` |
 
 ### Database schema
 
-Seven normalized tables. `run_statuses`, `frequencies`, `domains`, and `sources` are populated at startup; new rows can be added through the API at runtime. `runs` and `articles` are populated by pipeline runs. API key lifecycle is managed entirely by auth-service — news-retrieval stores only per-key domain grants.
+Seven normalized tables. `run_statuses`, `frequencies`, `domains`, and `sources` are populated at startup; new rows can be added through the API at runtime. `runs` and `articles` are populated by pipeline runs. API key lifecycle is managed entirely by auth-service - news-retrieval stores only per-key domain grants.
 
 | Table | Key columns | Notes |
 |-------|-------------|-------|
