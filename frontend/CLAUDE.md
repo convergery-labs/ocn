@@ -8,9 +8,9 @@ read only those.
 
 | Doc | Read when | Page ID |
 | --- | --- | --- |
-| [Technical Specification — frontend](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/92831747/Technical+Specification+frontend) | Making architectural or technical decisions about routing, auth, or state management | 92831747 |
+| [Technical Specification - frontend](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/92831747/Technical+Specification+frontend) | Making architectural or technical decisions about routing, auth, or state management | 92831747 |
 
-Confluence space: `Projects` — Cloud: `opengrowthventures.atlassian.net`
+Confluence space: `Projects` - Cloud: `opengrowthventures.atlassian.net`
 
 ## Structure
 
@@ -18,11 +18,11 @@ See [STRUCTURE.md](STRUCTURE.md) for the full directory layout.
 
 ## Guidance
 
-- No container rebuild needed for dev — `npm run dev` uses Vite HMR; just save and the browser updates
+- No container rebuild needed for dev - `npm run dev` uses Vite HMR; just save and the browser updates
 - JWT is stored under `localStorage` key `ocn_token`; `AuthContext` is the single source of truth in the component tree
 - Server data (articles, categories) belongs in TanStack Query hooks under `src/hooks/`, not in component state
-- Pages should never import `src/api/client.ts` directly — use hooks
-- `@/` is a path alias for `src/` — use it for all intra-project imports
+- Pages should never import `src/api/client.ts` directly - use hooks
+- `@/` is a path alias for `src/` - use it for all intra-project imports
 
 ## Maintenance
 

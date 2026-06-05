@@ -25,18 +25,18 @@ The gateway listens on port **8004**.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `GATEWAY_AUTH_URL` | yes | — | Base URL of auth-service |
-| `GATEWAY_NEWS_URL` | yes | — | Base URL of news-retrieval |
-| `GATEWAY_SIGNAL_URL` | yes | — | Base URL of signal-detection |
+| `GATEWAY_AUTH_URL` | yes | - | Base URL of auth-service |
+| `GATEWAY_NEWS_URL` | yes | - | Base URL of news-retrieval |
+| `GATEWAY_SIGNAL_URL` | yes | - | Base URL of signal-detection |
 
 ## API
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/health` | 200 if all upstream URLs configured; 503 otherwise |
-| `GET` | `/auth/jwks` | Proxy to auth-service `/jwks` — public, no auth |
+| `GET` | `/auth/jwks` | Proxy to auth-service `/jwks` - public, no auth |
 | `*` | `/auth/{path}` | Proxy to auth-service (requires auth) |
-| `*` | `/news/{path}` | Proxy to news-retrieval (optional auth — token validated if present) |
+| `*` | `/news/{path}` | Proxy to news-retrieval (optional auth - token validated if present) |
 | `*` | `/signal/{path}` | Proxy to signal-detection (requires admin) |
 
 ### Example: health check

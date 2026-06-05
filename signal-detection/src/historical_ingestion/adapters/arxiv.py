@@ -42,7 +42,7 @@ class ArXivAdapter(AbstractHistoricalAdapter):
         # pagination stops as soon as a page contains entries older than
         # date_from (results are sorted descending by submittedDate).
         #
-        # For plain keyword queries, keep the server-side date filter — the
+        # For plain keyword queries, keep the server-side date filter - the
         # query is simple enough that arXiv handles it efficiently.
         if ":" in query:
             search_query = f"({query})"
@@ -94,7 +94,7 @@ class ArXivAdapter(AbstractHistoricalAdapter):
             if client_side_filter and oldest_on_page is not None and oldest_on_page < date_from:
                 logger.info(
                     "arXiv: oldest entry on page (%s) is before date_from (%s)"
-                    " — stopping pagination",
+                    " - stopping pagination",
                     oldest_on_page, date_from,
                 )
                 break

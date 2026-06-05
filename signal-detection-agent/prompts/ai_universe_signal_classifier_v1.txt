@@ -27,7 +27,10 @@ changed. A full signal should satisfy all four checks below:
 
 Concrete events include launches, deals, regulation, funding, hires or
 departures, outages, earnings disclosures with new information, court rulings,
-export controls, partnerships, model releases, capacity expansions, and M&A.
+export controls, partnerships, model releases, capacity expansions, M&A,
+regulatory enforcement actions, confirmed layoffs or restructurings with named
+scale, product or service shutdowns by named companies, and confirmed data
+breaches at named AI-universe companies.
 
 Weak signal:
 The article has some real signal characteristics, but does not pass strongly
@@ -99,53 +102,83 @@ Use only for weak_signal or signal. For noise, return "none".
 CATEGORY (pick exactly one)
 ==============================
 
-1. "Minerals & Raw Materials"
+1. "Raw Materials & Critical Minerals"
 Copper, rare earths, lithium, aluminum, uranium feedstock, specialty metals,
-mining royalties, and upstream materials supporting AI infrastructure.
+mining royalties, PCB substrates, and upstream materials supporting AI
+infrastructure.
 
-2. "Energy"
-Power generation, utilities, nuclear, gas, renewables, backup power, grid
-power, and energy storage linked to AI demand.
+2. "Energy & Grid Infrastructure"
+Power generation, utilities, gas, renewables, backup power, grid transmission,
+energy storage, and power infrastructure linked to AI data center demand.
 
-3. "Semiconductor Manufacturing"
-Chip design, foundries, HBM/memory, EDA/IP, semiconductor equipment,
-advanced packaging, OSAT, wafers, and chip materials.
+3. "Nuclear & Advanced Energy"
+Nuclear power plants, SMRs, advanced reactors, long-duration energy storage,
+and next-generation energy sources powering AI compute.
 
-4. "Computer Hardware"
-AI servers, storage, OEM/ODM hardware, embedded compute, quantum hardware,
-edge hardware, and physical compute systems.
+4. "Semiconductor Manufacturing"
+Chip design, AI accelerators, GPUs, foundries, HBM/memory, EDA/IP,
+semiconductor equipment, advanced packaging, OSAT, wafers, and chip materials.
 
-5. "Thermal & Cooling"
-HVAC, liquid cooling, chillers, thermal management, water systems, and
-cooling infrastructure for high-density AI data centers.
+5. "Compute Hardware & Edge Systems"
+AI servers, storage, OEM/ODM hardware, embedded compute, edge hardware,
+appliances, physical compute systems, sensors, and electronics manufacturing.
 
-6. "Data Center Infrastructure"
-Colocation, data center REITs, construction, EPC, electrical systems,
-networking, fiber, telecom, towers, and facility infrastructure.
+6. "Networking, Optical & Interconnect"
+High-speed networking switches, optical transceivers, silicon photonics,
+InfiniBand, fiber interconnects, optical modules, and AI cluster networking.
 
-7. "Cloud & Compute Market"
-Hyperscalers, neoclouds, GPU cloud providers, edge cloud, AI compute
-hosting, sovereign compute, and compute platform operators.
+7. "Data Centers & Physical Infrastructure"
+Colocation, data center REITs, construction, EPC, electrical systems, HVAC,
+liquid cooling, thermal management, towers, and physical facility infrastructure.
 
-8. "Software / Infrastructure"
+8. "Telecom & Connectivity"
+Mobile network operators, 5G equipment, satellite connectivity, tower
+infrastructure, fixed wireless, backhaul, and telecom networks enabling AI.
+
+9. "Cloud & Compute Platforms"
+Hyperscalers, neoclouds, GPU cloud providers, edge cloud, AI compute hosting,
+sovereign compute, managed cloud AI services, and compute platform operators.
+
+10. "AI Software Infrastructure"
 SaaS, cybersecurity, databases, developer tools, observability, identity,
-automation, middleware, infrastructure software, model-serving frameworks,
-training runtimes, inference engines, MLOps platforms, and horizontal
+automation, middleware, inference engines, MLOps platforms, and horizontal
 AI-native software products sold across industries.
 
-9. "AI Data"
-Data clouds, data providers, annotation, analytics, geospatial data,
-knowledge graphs, market data, governance, and data infrastructure.
+11. "AI Data Infrastructure"
+Data annotation, data labeling, data marketplaces, synthetic data, data
+pipelines, data observability, enterprise data layers, and AI training data.
 
-10. "AI Models"
+12. "AI Models & Intelligence Layer"
 Frontier model labs, foundation model companies, LLM providers, multimodal
-model companies, sovereign AI models, model platforms, model releases,
-model checkpoints, model APIs, benchmark results, and direct model capability
-updates from model providers.
+models, sovereign AI models, model releases, model APIs, and benchmark results.
 
-11. "Applications & Economy"
-Applied AI companies in healthcare, fintech, robotics, drones, defense,
-space, industrial automation, consumer AI, vertical AI, and AI adoption.
+13. "Robotics & Physical AI"
+Industrial robotics, humanoid robots, autonomous vehicles, drones, ADAS,
+EV manufacturers, factory automation, and physical AI systems.
+
+14. "Quantum Computing & Sensing"
+Quantum computers, quantum networking, QKD, post-quantum cryptography,
+quantum sensing, and quantum hardware and software infrastructure.
+
+15. "Life Sciences & Healthcare AI"
+AI drug discovery, medical imaging AI, genomics, clinical AI, diagnostic AI,
+protein design, healthcare AI platforms, and life sciences AI applications.
+
+16. "Defense, Aerospace & Sovereign AI"
+Defense primes, aerospace AI, geospatial intelligence, government AI contracts,
+sovereign AI programs, space launch, and national security AI systems.
+
+17. "Financial Infrastructure & AI Capital"
+Fintech AI, AI lending, payments AI, project finance for AI capex, AI-focused
+investment vehicles, and financial infrastructure supporting AI deployment.
+
+18. "Water & Resource Infrastructure"
+Water treatment, water recycling, waste heat recovery, and resource
+infrastructure supporting AI data center sustainability and operations.
+
+19. "Applications & Digital Economy"
+Consumer AI, vertical AI applications, retail AI, marketing technology, digital
+media, gaming, agtech, smart buildings, and AI adoption across the digital economy.
 
 ==============================
 TIE-BREAKER RULES
@@ -155,23 +188,26 @@ When an article could fit multiple categories, apply these rules in order:
 
 1. Policy, regulation, and government action affecting AI, classify by the
    sector most affected. Chip export controls -> Semiconductor Manufacturing.
-   AI Act enforcement on model providers -> AI Models. Antitrust against
-   hyperscalers -> Cloud & Compute Market. Sovereign AI funds -> the sector the
-   funds primarily target.
+   AI Act enforcement on model providers -> AI Models & Intelligence Layer.
+   Antitrust against hyperscalers -> Cloud & Compute Platforms. Sovereign AI
+   funds -> the sector the funds primarily target.
 
 2. Horizontal vs vertical AI software, horizontal AI products sold across
    industries (agentic platforms, AI coding tools, AI copilots, AI
-   cybersecurity, general-purpose AI assistants) -> "Software / Infrastructure".
-   AI products sold to one specific industry (healthcare AI, legal AI, defense
-   AI, fintech AI, robotics for warehouses) -> "Applications & Economy".
+   cybersecurity, general-purpose AI assistants) -> "AI Software Infrastructure".
+   AI products sold to one specific industry (legal AI, fintech AI, marketing AI,
+   gaming AI) -> "Applications & Digital Economy". Healthcare AI -> "Life Sciences
+   & Healthcare AI". Defense AI -> "Defense, Aerospace & Sovereign AI". Robotics
+   and autonomous systems -> "Robotics & Physical AI".
 
 3. Cooling and data center overlap, articles about cooling technology,
-   thermal management, or liquid cooling systems -> "Thermal & Cooling".
-   Articles about a data center as a whole (construction, expansion, REITs,
-   colocation deals, electrical buildout) -> "Data Center Infrastructure".
-   If both are central, pick the one most material to the news.
+   thermal management, or liquid cooling systems -> "Data Centers & Physical
+   Infrastructure". Articles about a data center as a whole (construction,
+   expansion, REITs, colocation deals, electrical buildout) -> "Data Centers &
+   Physical Infrastructure". Networking gear inside or between data centers ->
+   "Networking, Optical & Interconnect".
 
-4. Chip vs system — classify by what the primary announcement is about:
+4. Chip vs system - classify by what the primary announcement is about:
    - Chip itself (architecture, process node, die specs, memory config,
      benchmark at chip level, chip pricing, chip launch) ->
      "Semiconductor Manufacturing". Examples: NVIDIA Blackwell B200/B300 GPU,
@@ -179,18 +215,19 @@ When an article could fit multiple categories, apply these rules in order:
      Alibaba Zhenwu chip.
    - Packaged AI server, rack, appliance, or compute system (named server
      SKU, rack config, compute appliance with chassis, full system specs) ->
-     "Computer Hardware". Examples: NVIDIA DGX GB200 NVL72 system,
+     "Compute Hardware & Edge Systems". Examples: NVIDIA DGX GB200 NVL72 system,
      Supermicro AI server line, Dell PowerEdge AI appliance,
      AMD Ryzen AI Dev Mini-PC, Cerebras waferscale compute system.
    - When an article covers both (platform announcement with chip + system):
      if the chip specs or chip launch are the core claim ->
      "Semiconductor Manufacturing". If the system config, rack density,
-     or appliance SKU is the core claim -> "Computer Hardware".
+     or appliance SKU is the core claim -> "Compute Hardware & Edge Systems".
 
 5. Deals between two categories, pick the category of the supplier providing
    the new capability. NVIDIA selling Blackwell GPUs to Microsoft ->
-   Semiconductor Manufacturing, not Cloud & Compute Market. CoreWeave signing
-   a power deal with Constellation -> Energy, not Cloud & Compute Market.
+   Semiconductor Manufacturing, not Cloud & Compute Platforms. CoreWeave signing
+   a power deal with Constellation -> Energy & Grid Infrastructure, not Cloud &
+   Compute Platforms.
 
 6. Funding or M&A, pick the category of the company being funded or acquired,
    not the investor.
@@ -200,11 +237,11 @@ When an article could fit multiple categories, apply these rules in order:
 
 8. Model provider vs model tooling, if the news is about a model itself,
    model release, benchmark, API, pricing, safety, or capability update ->
-   "AI Models". If the news is about the software stack used to train, serve,
-   optimize, orchestrate, or monitor models (vLLM, inference engines,
-   training runtimes, agent frameworks, vector databases, MLOps tooling) ->
-   "Software / Infrastructure", even when the article discusses model
-   training behavior or inference quality.
+   "AI Models & Intelligence Layer". If the news is about the software stack
+   used to train, serve, optimize, orchestrate, or monitor models (vLLM,
+   inference engines, training runtimes, agent frameworks, vector databases,
+   MLOps tooling) -> "AI Software Infrastructure", even when the article
+   discusses model training behavior or inference quality.
 
 ==============================
 RULES
@@ -243,17 +280,21 @@ RULES
   platform scale. Treat small promotional tie-ins or generic marketing copy
   conservatively, but do not dismiss a real bundle change just because the
   added perk is not itself an AI feature.
+- A stock price article that contains concrete new earnings data, specific AI revenue figures, forward guidance cuts or raises, or named AI business milestones is signal based on those underlying business facts, not the stock movement itself. Classify on the business content; the stock price is incidental context.
+- A significant stock price milestone for a named AI-universe company — such as a new all-time high, a multi-year return milestone, or a single-day move above 15% — where the article explicitly attributes the move to AI-specific business factors (AI hardware demand, AI revenue growth, AI capex cycle) is weak_signal as a market validation data point. It confirms investor conviction about the AI investment thesis even when no new primary business event is reported in the article.
+- A minor stock move, generic analyst opinion, or price commentary without a named milestone and without explicit AI attribution remains noise.
 - A valid signal must have an explicit, material connection to AI models, AI deployment, AI infrastructure, AI data pipelines, AI hardware, AI software, or AI company operations.
 - General digital-rights, surveillance, device-privacy, border-search, or broad internet-policy articles are usually noise unless the article explicitly shows a concrete effect on AI systems, AI companies, AI data access, or AI infrastructure.
 - General cybersecurity, software, or infrastructure incidents are only signal when they materially affect AI-relevant compute, model, data, cloud, or deployment environments. Otherwise classify them as noise.
 - Software supply-chain attacks, code-repository compromises, and developer-tool security incidents are noise unless the article shows they directly compromised AI model weights, AI training data, AI inference infrastructure, or caused material disruption to a named AI company's operations. A broad supply-chain attack that incidentally touches developer tooling without targeting AI systems specifically is noise.
 - Scholarship awards, AI workforce training programs, digital-skills initiatives, and education-grant campaigns are noise when they do not announce a concrete product launch, signed commercial deployment, or direct material change to AI infrastructure or model supply. A scholarship fund or training grant is not equivalent to an AI development event.
 - AI feature additions or product updates aimed at small or medium businesses in narrow industry verticals (retail, beauty, cosmetics, food service, hospitality) are noise unless the article names a large-scale commercial deployment, a material revenue change, or a significant market adoption event with a clear AI-universe transmission path. Do not classify as signal just because an AI feature was added to an SME-focused product.
-- Do not classify an article as "AI Models" just because it mentions training,
-  inference, RL, or benchmarks. Use "AI Models" only when the core news is
-  about the model or model provider itself. Use "Software / Infrastructure"
-  when the core news is about tooling, runtimes, frameworks, orchestration,
-  infrastructure software, or developer platforms around models.
+- Do not classify an article as "AI Models & Intelligence Layer" just because it
+  mentions training, inference, RL, or benchmarks. Use "AI Models & Intelligence
+  Layer" only when the core news is about the model or model provider itself.
+  Use "AI Software Infrastructure" when the core news is about tooling, runtimes,
+  frameworks, orchestration, infrastructure software, or developer platforms
+  around models.
 - All reason fields must name the actual companies, models, regulators,
   countries, or products involved.
 - Do not use vague phrases like "the company", "the announcement", or
@@ -263,6 +304,11 @@ RULES
   2. what happened,
   3. why this does or does not affect the AI universe or markets.
 - If the AI connection is weak, indirect, generic, or speculative, use "weak_signal" only when there is still a concrete named event with some plausible AI-universe relevance. Otherwise classify as noise.
+- A concrete negative development with named entities and a clear AI-universe transmission path is signal. The adverse nature of an event does not make it noise. Regulatory enforcement, confirmed product shutdowns, verified data breaches, announced layoffs with named scale, and court orders against AI-universe companies can all be signal.
+- Confirmed regulatory enforcement actions, formal investigations launched by a named regulator, consent decrees, binding court orders, and imposed fines on AI-universe companies are signal. These differ from speculative commentary about regulation that may come.
+- A named company confirming a product shutdown, service discontinuation, or major platform closure is signal when it affects AI models, AI infrastructure, or AI-universe operations.
+- Confirmed layoffs or restructurings at a named AI-universe company are signal when the article states a concrete headcount number or percentage. Unconfirmed or rumoured job cuts without a named source are not.
+- Prior speculative coverage of a risk (regulatory concern, competitive threat, potential layoff) does not lower the signal score of a subsequent article that contains concrete evidence. Classify based on the evidence in the current article alone.
 - entities must be a list of typed objects in this shape:
   {"name": "string", "type": "company|model_product|product|event|regulator|person|country_region|platform|benchmark|facility|other"}
 - entities should include only the most central named things used for the
@@ -280,7 +326,7 @@ OUTPUT SCHEMA
   "signal_score": number,
   "signal_reason": "string",
   "materiality": "high" | "medium" | "low" | "none",
-  "category": "string (one of the 11 categories above — always assign a real category, including for noise)",
+  "category": "string (one of the 19 categories above - always assign a real category, including for noise)",
   "entities": [
     {
       "name": "string",
@@ -336,7 +382,7 @@ Output:
   "signal_score": 0.72,
   "signal_reason": "xAI materially expanded on-site gas generation for its AI data center footprint while increasing permitting and legal risk around power supply and operations.",
   "materiality": "medium",
-  "category": "Energy",
+  "category": "Energy & Grid Infrastructure",
   "entities": [
     {"name": "xAI", "type": "company"},
     {"name": "Southaven", "type": "facility"},
@@ -353,7 +399,7 @@ Output:
   "signal_score": 0.66,
   "signal_reason": "The federal approval is a concrete permitting milestone for new power capacity that can support AI infrastructure expansion, even though demand linkage is indirect.",
   "materiality": "medium",
-  "category": "Energy",
+  "category": "Energy & Grid Infrastructure",
   "entities": [
     {"name": "Nuclear Regulatory Commission", "type": "regulator"}
   ]
@@ -368,7 +414,7 @@ Output:
   "signal_score": 0.12,
   "signal_reason": "Generic trend article with no named entity, no concrete event, and no new development affecting the AI universe.",
   "materiality": "none",
-  "category": "Applications & Economy",
+  "category": "Applications & Digital Economy",
   "entities": []
 }
 
@@ -381,7 +427,7 @@ Output:
   "signal_score": 0.28,
   "signal_reason": "The grant funds early-stage university AI research, but there is no commercialization, deployment, regulatory milestone, or material company impact.",
   "materiality": "none",
-  "category": "Applications & Economy",
+  "category": "Applications & Digital Economy",
   "entities": []
 }
 
@@ -394,7 +440,7 @@ Output:
   "signal_score": 0.53,
   "signal_reason": "ABB described a named AI maintenance pilot, but scale, AI centrality, and market transmission remain limited and early.",
   "materiality": "low",
-  "category": "Applications & Economy",
+  "category": "Applications & Digital Economy",
   "entities": [
     {"name": "ABB", "type": "company"}
   ]
@@ -409,14 +455,14 @@ Output:
   "signal_score": 0.84,
   "signal_reason": "Mistral released Mixtral-Next with improved reasoning benchmarks, adding a new open-weights option to the foundation model landscape.",
   "materiality": "medium",
-  "category": "AI Models",
+  "category": "AI Models & Intelligence Layer",
   "entities": [
     {"name": "Mistral", "type": "company"},
     {"name": "Mixtral-Next", "type": "model_product"}
   ]
 }
 
-Example 9, Signal, medium materiality, Applications & Economy:
+Example 9, Signal, medium materiality, Robotics & Physical AI:
 Article: "Figure raises $1.5B Series C led by Microsoft and NVIDIA to scale
 humanoid robot deployments in BMW factories."
 Output:
@@ -425,7 +471,7 @@ Output:
   "signal_score": 0.88,
   "signal_reason": "Figure raised a $1.5B Series C from Microsoft and NVIDIA to scale humanoid robot deployments at BMW, advancing commercial physical AI adoption.",
   "materiality": "medium",
-  "category": "Applications & Economy",
+  "category": "Robotics & Physical AI",
   "entities": [
     {"name": "Figure", "type": "company"},
     {"name": "Microsoft", "type": "company"},
@@ -444,7 +490,7 @@ Output:
   "signal_score": 0.55,
   "signal_reason": "Hugging Face described concrete vLLM migration fixes, but this is mainly a technical guide around existing tooling rather than a major market event.",
   "materiality": "low",
-  "category": "Software / Infrastructure",
+  "category": "AI Software Infrastructure",
   "entities": [
     {"name": "Hugging Face", "type": "company"},
     {"name": "vLLM", "type": "model_product"}
@@ -460,7 +506,7 @@ Output:
   "signal_score": 0.47,
   "signal_reason": "The Vatican created a formal AI commission, but it does not yet impose binding rules, compliance obligations, or direct market changes.",
   "materiality": "low",
-  "category": "Applications & Economy",
+  "category": "Applications & Digital Economy",
   "entities": [
     {"name": "The Vatican", "type": "regulator"}
   ]
@@ -475,7 +521,7 @@ Output:
   "signal_score": 0.52,
   "signal_reason": "The article reports a possible financing round for an AI lab, but the fundraising is still in progress and not yet a closed or formally completed event.",
   "materiality": "low",
-  "category": "AI Models",
+  "category": "AI Models & Intelligence Layer",
   "entities": []
 }
 
@@ -488,7 +534,7 @@ Output:
   "signal_score": 0.24,
   "signal_reason": "The article discusses non-binding workplace AI recommendations and opinion, but no enacted rule, binding obligation, or market-changing event.",
   "materiality": "none",
-  "category": "Applications & Economy",
+  "category": "Applications & Digital Economy",
   "entities": []
 }
 
@@ -501,7 +547,7 @@ Output:
   "signal_score": 0.22,
   "signal_reason": "The article describes possible future AI oversight and political momentum, but no executive order, launched process, created body, or binding regulatory action has actually occurred.",
   "materiality": "none",
-  "category": "AI Models",
+  "category": "AI Models & Intelligence Layer",
   "entities": []
 }
 
@@ -514,7 +560,7 @@ Output:
   "signal_score": 0.62,
   "signal_reason": "Google changed the paid bundle for its AI Pro subscription, a concrete monetization and distribution update that can affect consumer adoption of its AI plan at platform scale.",
   "materiality": "low",
-  "category": "Applications & Economy",
+  "category": "Applications & Digital Economy",
   "entities": [
     {"name": "Google", "type": "company"},
     {"name": "YouTube Premium Lite", "type": "product"}
@@ -529,7 +575,7 @@ Output:
   "signal_score": 0.18,
   "signal_reason": "Scholarship program awards education grants to students but announces no product launch, commercial deployment, or material change to AI infrastructure or model supply.",
   "materiality": "none",
-  "category": "Applications & Economy",
+  "category": "Applications & Digital Economy",
   "entities": []
 }
 
@@ -541,7 +587,7 @@ Output:
   "signal_score": 0.20,
   "signal_reason": "Supply-chain attack targets general developer tooling but does not compromise AI model weights, AI training pipelines, AI data infrastructure, or named AI company operations.",
   "materiality": "none",
-  "category": "Software / Infrastructure",
+  "category": "AI Software Infrastructure",
   "entities": []
 }
 
@@ -553,7 +599,1001 @@ Output:
   "signal_score": 0.22,
   "signal_reason": "Minor AI feature update for SME cosmetics businesses with no named large-scale deployment, material revenue change, or clear AI-universe market transmission path.",
   "materiality": "none",
-  "category": "Applications & Economy",
+  "category": "Applications & Digital Economy",
+  "entities": []
+}
+
+Example 19, Signal, medium materiality, AI Data:
+Article: "Scale AI confirms 400 layoffs, cutting roughly 20% of its workforce
+amid a slowdown in demand for human-labeled training data as model providers
+shift to synthetic data generation."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.76,
+  "signal_reason": "Scale AI confirmed a 400-person layoff (20% of workforce), a concrete restructuring event signaling reduced commercial demand for human-labeled AI training data.",
+  "materiality": "medium",
+  "category": "AI Data Infrastructure",
+  "entities": [
+    {"name": "Scale AI", "type": "company"}
+  ]
+}
+
+Example 20, Signal, medium materiality, AI Data:
+Article: "Italy's data protection authority orders Clearview AI to delete all
+facial recognition data collected from Italian citizens and imposes a €20M fine
+for GDPR violations, effective immediately."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.81,
+  "signal_reason": "Italy's DPA imposed a €20M fine on Clearview AI and ordered deletion of all Italian facial recognition data, a binding enforcement action with direct operational and legal impact.",
+  "materiality": "medium",
+  "category": "AI Data Infrastructure",
+  "entities": [
+    {"name": "Clearview AI", "type": "company"},
+    {"name": "Italy Garante", "type": "regulator"}
+  ]
+}
+
+Example 21, Signal, medium materiality, AI Models:
+Article: "Stability AI shuts down its Stable Audio Open platform and disbands
+its audio team following the collapse of acquisition talks and worsening cash
+flow constraints."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.73,
+  "signal_reason": "Stability AI confirmed the shutdown of Stable Audio Open and dissolution of its audio team, a concrete product discontinuation and restructuring directly shrinking its AI model portfolio.",
+  "materiality": "medium",
+  "category": "AI Models & Intelligence Layer",
+  "entities": [
+    {"name": "Stability AI", "type": "company"},
+    {"name": "Stable Audio Open", "type": "model_product"}
+  ]
+}
+
+Example 22, Signal, medium materiality, Semiconductor Manufacturing:
+Article: "Intel confirms it is cancelling its Falcon Shores AI accelerator
+program and laying off 2,000 engineers from its XPU division, citing
+uncompetitive die costs at Intel 18A versus NVIDIA Blackwell on TSMC N3."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.84,
+  "signal_reason": "Intel confirmed the cancellation of its Falcon Shores AI accelerator and 2,000 XPU engineer layoffs, a concrete product shutdown and restructuring that directly shrinks Intel's AI chip roadmap.",
+  "materiality": "medium",
+  "category": "Semiconductor Manufacturing",
+  "entities": [
+    {"name": "Intel", "type": "company"},
+    {"name": "Falcon Shores", "type": "model_product"},
+    {"name": "NVIDIA", "type": "company"}
+  ]
+}
+
+Example 23, Signal, medium materiality, Nuclear & Advanced Energy:
+Article: "The Nuclear Regulatory Commission denies the site permit for Oklo's
+Aurora microreactor project in Culpeper, Virginia, removing 50 MW of committed
+carbon-free power from a hyperscaler-backed AI campus that had planned to break
+ground in Q3."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.71,
+  "signal_reason": "NRC denied Oklo's site permit, eliminating 50 MW of committed power from a hyperscaler-backed AI compute campus — a concrete regulatory rejection with direct AI infrastructure capacity impact.",
+  "materiality": "medium",
+  "category": "Nuclear & Advanced Energy",
+  "entities": [
+    {"name": "Nuclear Regulatory Commission", "type": "regulator"},
+    {"name": "Oklo", "type": "company"}
+  ]
+}
+
+Example 24, Signal, medium materiality, Cloud & Compute Market:
+Article: "GPU cloud startup Voltage Park shuts down its compute rental platform
+and notifies customers of a 30-day wind-down after failing to close a $300M
+Series B, citing inability to compete on spot pricing with CoreWeave and AWS."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.78,
+  "signal_reason": "Voltage Park confirmed the shutdown of its GPU cloud platform with a 30-day wind-down notice, a concrete exit from the neocloud market citing competitive pricing pressure from larger players.",
+  "materiality": "medium",
+  "category": "Cloud & Compute Platforms",
+  "entities": [
+    {"name": "Voltage Park", "type": "company"},
+    {"name": "CoreWeave", "type": "company"},
+    {"name": "AWS", "type": "company"}
+  ]
+}
+
+Example 25, Signal, medium materiality, Data Center Infrastructure:
+Article: "DigitalBridge confirms it is cancelling its planned 200 MW AI campus
+in Loudoun County following an 18-month PJM grid interconnection delay and a
+40% rise in construction financing costs since the site was acquired."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.74,
+  "signal_reason": "DigitalBridge cancelled a planned 200 MW AI campus citing grid delay and financing cost increases — a concrete capacity withdrawal directly reducing planned AI data center supply in a key market.",
+  "materiality": "medium",
+  "category": "Data Centers & Physical Infrastructure",
+  "entities": [
+    {"name": "DigitalBridge", "type": "company"},
+    {"name": "PJM", "type": "other"}
+  ]
+}
+
+Example 26, Signal, medium materiality, Computer Hardware:
+Article: "Supermicro confirms 15% of its liquid-cooled H100 rack orders have
+been cancelled following pump failures at three hyperscaler deployments; the
+company is issuing a mandatory field replacement kit for all affected cooling
+manifolds."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.77,
+  "signal_reason": "Supermicro confirmed 15% H100 rack order cancellations and a field replacement programme following cooling failures at hyperscaler AI sites — a concrete product defect and demand contraction for AI server hardware.",
+  "materiality": "medium",
+  "category": "Compute Hardware & Edge Systems",
+  "entities": [
+    {"name": "Supermicro", "type": "company"}
+  ]
+}
+
+Example 27, Signal, low materiality, Thermal & Cooling:
+Article: "Vertiv issues a mandatory field-replacement notice for 3,200 deployed
+CoolChip liquid cooling distribution units after confirming pump seal failures
+caused overheating incidents at two hyperscaler AI data centers."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.68,
+  "signal_reason": "Vertiv confirmed a mandatory recall of 3,200 liquid cooling units following pump failures at hyperscaler AI data centers, a concrete product defect with direct impact on deployed AI compute capacity.",
+  "materiality": "low",
+  "category": "Data Centers & Physical Infrastructure",
+  "entities": [
+    {"name": "Vertiv", "type": "company"}
+  ]
+}
+
+Example 28, Signal, medium materiality, Software / Infrastructure:
+Article: "Together AI shuts down its public GPU inference cloud with 60 days'
+notice to API customers, citing unsustainable margins against hyperscaler
+spot-GPU pricing; the hosted inference service will be fully terminated."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.73,
+  "signal_reason": "Together AI confirmed the shutdown of its public inference cloud, a concrete platform exit removing a named independent AI inference provider from the software infrastructure market.",
+  "materiality": "medium",
+  "category": "AI Software Infrastructure",
+  "entities": [
+    {"name": "Together AI", "type": "company"}
+  ]
+}
+
+Example 29, Signal, medium materiality, Minerals & Raw Materials:
+Article: "MP Materials confirms its Mountain Pass rare earth processing facility
+will halt operations for six weeks following a fire in the solvent extraction
+circuit, reducing North American rare earth oxide output by approximately 15%."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.70,
+  "signal_reason": "MP Materials confirmed a six-week production halt at Mountain Pass due to a fire, cutting North American rare earth oxide supply by ~15% and tightening upstream materials for AI-linked semiconductor and magnet manufacturing.",
+  "materiality": "medium",
+  "category": "Raw Materials & Critical Minerals",
+  "entities": [
+    {"name": "MP Materials", "type": "company"},
+    {"name": "Mountain Pass", "type": "facility"}
+  ]
+}
+
+Example 30, Signal, low materiality, Robotics & Physical AI:
+Article: "Figure AI confirms it is ending its BMW factory humanoid robot
+deployment and laying off 120 operations staff, with BMW citing missed
+throughput targets and software reliability issues in the program review."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.72,
+  "signal_reason": "Figure AI confirmed the wind-down of its BMW humanoid robot deployment and 120 operations layoffs, a concrete commercial failure directly contracting physical AI deployment at industrial scale.",
+  "materiality": "low",
+  "category": "Robotics & Physical AI",
+  "entities": [
+    {"name": "Figure AI", "type": "company"},
+    {"name": "BMW", "type": "company"}
+  ]
+}
+
+Example 31, Signal, high materiality, AI Models:
+Article: "A US federal judge grants The New York Times a preliminary injunction
+ordering OpenAI to halt ingestion of its archive content for model training,
+pausing one component of OpenAI's data pipeline pending a full copyright
+ruling."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.86,
+  "signal_reason": "A federal court issued a binding preliminary injunction halting OpenAI from ingesting New York Times content for training, a concrete court order directly affecting OpenAI's data pipeline and establishing a copyright precedent for AI training.",
+  "materiality": "high",
+  "category": "AI Models & Intelligence Layer",
+  "entities": [
+    {"name": "OpenAI", "type": "company"},
+    {"name": "The New York Times", "type": "company"}
+  ]
+}
+
+Example 32, Signal, medium materiality, Computer Hardware:
+Article: "Dell Technologies stock surges 18% after Q2 2026 earnings: AI server
+revenue jumped 88% year-over-year to $4.1B, AI infrastructure backlog now
+stands at $9B — Dell's fastest-growing segment — as enterprise AI hardware
+demand accelerates."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.79,
+  "signal_reason": "Dell reported 88% AI server revenue growth to $4.1B with a $9B backlog in Q2, a concrete earnings disclosure showing material AI hardware demand acceleration at enterprise scale.",
+  "materiality": "medium",
+  "category": "Compute Hardware & Edge Systems",
+  "entities": [
+    {"name": "Dell Technologies", "type": "company"}
+  ]
+}
+
+Example 33, Weak signal, low materiality, Computer Hardware:
+Article: "Dell stock hits all-time high of $420.91 — a 100% surge over 12
+months — as investors bet on continued AI infrastructure spending through 2027;
+analysts explicitly cite AI server demand as the primary driver."
+Output:
+{
+  "signal_detection": "weak_signal",
+  "signal_score": 0.44,
+  "signal_reason": "Dell reached an all-time high with a 100% 12-month surge explicitly attributed by analysts to AI server demand — a named market milestone confirming investor conviction in the AI hardware cycle, though no new primary business event is reported.",
+  "materiality": "low",
+  "category": "Compute Hardware & Edge Systems",
+  "entities": [
+    {"name": "Dell Technologies", "type": "company"}
+  ]
+}
+
+Example 34, Noise:
+Article: "Dell stock up 2.3% today as broader tech market rallies; some analysts
+remain bullish on AI spending."
+Output:
+{
+  "signal_detection": "noise",
+  "signal_score": 0.12,
+  "signal_reason": "Minor intraday stock move with no named milestone, no explicit AI business attribution, and no new concrete event — generic market commentary.",
+  "materiality": "none",
+  "category": "Compute Hardware & Edge Systems",
+  "entities": [
+    {"name": "Dell Technologies", "type": "company"}
+  ]
+}
+
+Example 35, Signal, medium materiality, Semiconductor Manufacturing:
+Article: "Intel reports Q3 AI accelerator revenue of $800M, missing analyst
+consensus of $1.4B by 43%; management cuts full-year AI data center guidance
+by $2B, citing execution issues on the Gaudi 3 ramp — stock falls 14%."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.83,
+  "signal_reason": "Intel reported a 43% miss on AI accelerator revenue and cut full-year AI data center guidance by $2B, citing Gaudi 3 execution failures — a concrete earnings disclosure with specific AI hardware demand contraction.",
+  "materiality": "medium",
+  "category": "Semiconductor Manufacturing",
+  "entities": [
+    {"name": "Intel", "type": "company"},
+    {"name": "Gaudi 3", "type": "model_product"}
+  ]
+}
+
+Example 36, Signal, high materiality, Cloud & Compute Market:
+Article: "Microsoft reduces FY2027 AI infrastructure capex guidance by $5B to
+$68B, with CFO Amy Hood citing slower-than-expected enterprise AI monetization
+and a need to be more selective on data center commitments."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.90,
+  "signal_reason": "Microsoft cut FY2027 AI capex guidance by $5B, a concrete hyperscaler spending reduction directly signaling slower AI monetization and reduced near-term compute buildout.",
+  "materiality": "high",
+  "category": "Cloud & Compute Platforms",
+  "entities": [
+    {"name": "Microsoft", "type": "company"},
+    {"name": "Amy Hood", "type": "person"}
+  ]
+}
+
+Example 37, Weak signal, low materiality, Cloud & Compute Market:
+Article: "CoreWeave shares fall to a new 52-week low of $18.40, down 22%,
+after a major analyst firm downgrades the stock citing concerns that
+hyperscaler AI monetization is taking longer than expected to offset GPU
+cloud pricing pressure."
+Output:
+{
+  "signal_detection": "weak_signal",
+  "signal_score": 0.45,
+  "signal_reason": "CoreWeave hit a named 52-week low with a 22% drop explicitly attributed to AI monetization concerns — a market validation data point on the downside, though no new primary business event is reported.",
+  "materiality": "low",
+  "category": "Cloud & Compute Platforms",
+  "entities": [
+    {"name": "CoreWeave", "type": "company"}
+  ]
+}
+
+Example 38, Signal, high materiality, Cloud & Compute Market:
+Article: "Microsoft announces a $50B AI data center and compute infrastructure
+capex plan for FY2027, targeting hyperscale AI inference capacity across
+Azure regions in the US, EU, and Asia-Pacific."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.93,
+  "signal_reason": "Microsoft committed $50B in FY2027 AI compute capex, a hyperscaler-scale infrastructure investment directly expanding global AI inference capacity across major regions.",
+  "materiality": "high",
+  "category": "Cloud & Compute Platforms",
+  "entities": [
+    {"name": "Microsoft", "type": "company"},
+    {"name": "Azure", "type": "platform"}
+  ]
+}
+
+Example 39, Signal, high materiality, AI Models:
+Article: "Google confirms it has acquired Character.AI for $2.7B, bringing
+founder Noam Shazeer back to Google DeepMind and absorbing Character's
+consumer AI platform and model technology."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.91,
+  "signal_reason": "Google acquired Character.AI for $2.7B, a major AI M&A event returning a key model researcher to Google DeepMind and consolidating a large consumer AI platform into Alphabet.",
+  "materiality": "high",
+  "category": "AI Models & Intelligence Layer",
+  "entities": [
+    {"name": "Google", "type": "company"},
+    {"name": "Character.AI", "type": "company"},
+    {"name": "Noam Shazeer", "type": "person"},
+    {"name": "Google DeepMind", "type": "company"}
+  ]
+}
+
+Example 40, Signal, medium materiality, AI Models:
+Article: "Italy's data protection authority orders OpenAI to suspend ChatGPT's
+data collection from Italian users within 20 days pending a full GDPR
+compliance audit, the second such action by a European DPA against a frontier
+model provider."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.80,
+  "signal_reason": "Italy's Garante issued a binding suspension order against OpenAI's ChatGPT data collection, a concrete regulatory enforcement action imposing compliance obligations on a frontier model provider in the EU.",
+  "materiality": "medium",
+  "category": "AI Models & Intelligence Layer",
+  "entities": [
+    {"name": "OpenAI", "type": "company"},
+    {"name": "ChatGPT", "type": "model_product"},
+    {"name": "Italy Garante", "type": "regulator"}
+  ]
+}
+
+Example 41, Signal, medium materiality, AI Data:
+Article: "Hugging Face confirms unauthorized access to its Spaces platform
+credentials store; tokens for approximately 723 organisation accounts may
+have been exfiltrated; affected users are being force-notified and all
+compromised tokens rotated."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.76,
+  "signal_reason": "Hugging Face confirmed a credentials breach on its Spaces platform affecting 723 organisation accounts — a concrete security incident at a core AI model-hosting and collaboration platform with direct operational impact.",
+  "materiality": "medium",
+  "category": "AI Data Infrastructure",
+  "entities": [
+    {"name": "Hugging Face", "type": "company"},
+    {"name": "Spaces", "type": "platform"}
+  ]
+}
+
+Example 42, Signal, high materiality, Semiconductor Manufacturing:
+Article: "TSMC breaks ground on its second Arizona fab building dedicated to the
+N2 process node, backed by $12B in CHIPS Act funding with Apple and NVIDIA
+confirmed as anchor customers for advanced AI chip production."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.90,
+  "signal_reason": "TSMC broke ground on a second N2 Arizona fab with $12B in CHIPS Act funding and Apple and NVIDIA as anchor customers, a concrete capacity expansion milestone for advanced AI chip manufacturing in the US.",
+  "materiality": "high",
+  "category": "Semiconductor Manufacturing",
+  "entities": [
+    {"name": "TSMC", "type": "company"},
+    {"name": "Apple", "type": "company"},
+    {"name": "NVIDIA", "type": "company"}
+  ]
+}
+
+Example 43, Signal, medium materiality, Energy:
+Article: "Google signs a 10-year nuclear power purchase agreement with
+Constellation Energy for 500 MW of carbon-free power to support its Northern
+Virginia AI data center cluster, the largest tech-sector nuclear PPA to date."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.79,
+  "signal_reason": "Google signed a 10-year 500 MW nuclear PPA with Constellation Energy for its AI data center cluster — a concrete power supply commitment that materially expands dedicated carbon-free energy for AI compute.",
+  "materiality": "medium",
+  "category": "Energy & Grid Infrastructure",
+  "entities": [
+    {"name": "Google", "type": "company"},
+    {"name": "Constellation Energy", "type": "company"}
+  ]
+}
+
+Example 44, Signal, medium materiality, Data Center Infrastructure:
+Article: "Equinix opens its LD12x hyperscale campus in London, adding 200 MW
+of AI-optimised compute capacity with Microsoft Azure and Google Cloud
+confirmed as anchor tenants."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.75,
+  "signal_reason": "Equinix opened a 200 MW AI-optimised hyperscale campus in London with Microsoft Azure and Google Cloud as anchor tenants, a concrete capacity addition to European AI compute infrastructure.",
+  "materiality": "medium",
+  "category": "Data Centers & Physical Infrastructure",
+  "entities": [
+    {"name": "Equinix", "type": "company"},
+    {"name": "Microsoft Azure", "type": "platform"},
+    {"name": "Google Cloud", "type": "platform"}
+  ]
+}
+
+Example 45, Signal, medium materiality, Semiconductor Manufacturing:
+Article: "SK Hynix signs a multi-year HBM4 supply agreement with NVIDIA to
+support Blackwell Ultra GPU production through 2027, securing exclusive
+capacity allocation at its Icheon fab ahead of competing memory suppliers."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.84,
+  "signal_reason": "SK Hynix locked in a multi-year exclusive HBM4 supply deal with NVIDIA for Blackwell Ultra, a concrete supply chain commitment that directly shapes AI GPU memory availability through 2027.",
+  "materiality": "medium",
+  "category": "Semiconductor Manufacturing",
+  "entities": [
+    {"name": "SK Hynix", "type": "company"},
+    {"name": "NVIDIA", "type": "company"},
+    {"name": "Blackwell Ultra", "type": "model_product"}
+  ]
+}
+
+Example 46, Signal, medium materiality, Financial Infrastructure & AI Capital:
+Article: "JPMorgan Chase confirms it has deployed its LLM Suite AI assistant
+to 60,000 employees, reporting a 20% productivity increase in software
+development teams, and plans to expand to 80,000 seats by Q3."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.77,
+  "signal_reason": "JPMorgan confirmed deployment of its AI assistant to 60,000 employees with a 20% productivity gain, a large-scale financial AI adoption event with named scale, named company, and measurable business impact.",
+  "materiality": "medium",
+  "category": "Financial Infrastructure & AI Capital",
+  "entities": [
+    {"name": "JPMorgan Chase", "type": "company"},
+    {"name": "LLM Suite", "type": "product"}
+  ]
+}
+
+Example 47, Signal, high materiality, AI Models:
+Article: "The UAE announces a $10B sovereign AI fund to invest in foundation
+model development, compute infrastructure, and AI company partnerships, with
+the first tranche targeting US-based frontier model labs including Anthropic
+and xAI."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.87,
+  "signal_reason": "UAE committed $10B to a sovereign AI fund targeting frontier model labs including Anthropic and xAI — a concrete government capital commitment that materially expands AI investment flows and sovereign AI ambitions.",
+  "materiality": "high",
+  "category": "AI Models & Intelligence Layer",
+  "entities": [
+    {"name": "UAE", "type": "country_region"},
+    {"name": "Anthropic", "type": "company"},
+    {"name": "xAI", "type": "company"}
+  ]
+}
+
+Example 48, Signal, low materiality, Applications & Economy:
+Article: "AI legal research startup Harvey confirms it has filed for Chapter 11
+bankruptcy protection after failing to close a Series D, with $12M in
+liabilities and 180 employees to be laid off."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.71,
+  "signal_reason": "Harvey confirmed Chapter 11 bankruptcy with $12M in liabilities and 180 layoffs — a concrete AI startup failure event with named company, scale, and direct impact on the legal AI application market.",
+  "materiality": "low",
+  "category": "Applications & Digital Economy",
+  "entities": [
+    {"name": "Harvey", "type": "company"}
+  ]
+}
+
+Example 49, Signal, medium materiality, Defense, Aerospace & Sovereign AI:
+Article: "Palantir wins a $480M US Army AI data platform contract to deploy its
+AI operating system across 12 Army commands, its largest single federal
+award and a material expansion of defence AI data infrastructure."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.81,
+  "signal_reason": "Palantir won a $480M US Army contract to deploy its AI platform across 12 commands — a concrete defense AI award with named parties, dollar scale, and direct government AI deployment commitment.",
+  "materiality": "medium",
+  "category": "Defense, Aerospace & Sovereign AI",
+  "entities": [
+    {"name": "Palantir", "type": "company"},
+    {"name": "US Army", "type": "regulator"}
+  ]
+}
+
+Example 50, Weak signal, low materiality, Thermal & Cooling:
+Article: "CoolIT Systems signs a three-year direct liquid cooling supply
+agreement with a major unnamed hyperscaler for next-generation AI rack
+deployments, with delivery commencing Q2 2027."
+Output:
+{
+  "signal_detection": "weak_signal",
+  "signal_score": 0.52,
+  "signal_reason": "CoolIT signed a three-year liquid cooling supply deal with a hyperscaler for AI rack deployments — a concrete named partnership, but the hyperscaler counterparty is unnamed, limiting full AI-universe transmission path confidence.",
+  "materiality": "low",
+  "category": "Data Centers & Physical Infrastructure",
+  "entities": [
+    {"name": "CoolIT Systems", "type": "company"}
+  ]
+}
+
+Example 51, Signal, high materiality, AI Models:
+Article: "Anthropic prices its IPO at $28 per share on Nasdaq, valuing the
+company at $52B and raising $3.5B in primary proceeds to fund frontier model
+development and compute infrastructure expansion."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.94,
+  "signal_reason": "Anthropic priced its IPO at $52B valuation raising $3.5B — a major public market debut that restructures the competitive and capital landscape for frontier AI model development.",
+  "materiality": "high",
+  "category": "AI Models & Intelligence Layer",
+  "entities": [
+    {"name": "Anthropic", "type": "company"}
+  ]
+}
+
+Example 52, Signal, medium materiality, AI Models:
+Article: "OpenAI chief scientist Ilya Sutskever confirms he has left the
+company, effective immediately, citing disagreements over safety priorities
+and the pace of capability development; he is the fourth member of the safety
+team to depart in three months."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.80,
+  "signal_reason": "Ilya Sutskever confirmed his departure from OpenAI over safety disagreements, a named senior departure that directly affects OpenAI's research leadership and signals internal tension over capability vs safety priorities.",
+  "materiality": "medium",
+  "category": "AI Models & Intelligence Layer",
+  "entities": [
+    {"name": "OpenAI", "type": "company"},
+    {"name": "Ilya Sutskever", "type": "person"}
+  ]
+}
+
+Example 53, Signal, high materiality, Cloud & Compute Market:
+Article: "The US Department of Justice opens a formal antitrust investigation
+into Microsoft's AI bundling practices, examining whether Azure OpenAI's
+exclusive enterprise agreements foreclose competition in the cloud AI market."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.86,
+  "signal_reason": "The DOJ opened a formal antitrust investigation into Microsoft's Azure OpenAI bundling — a concrete government legal action that directly threatens Microsoft's cloud AI distribution model and competitive position.",
+  "materiality": "high",
+  "category": "Cloud & Compute Platforms",
+  "entities": [
+    {"name": "US Department of Justice", "type": "regulator"},
+    {"name": "Microsoft", "type": "company"},
+    {"name": "Azure OpenAI", "type": "platform"}
+  ]
+}
+
+Example 54, Signal, medium materiality, AI Models:
+Article: "Anthropic closes $2B in convertible debt financing led by JPMorgan
+and Goldman Sachs, structured as notes convertible at IPO or maturity,
+extending its compute runway and supplementing its existing equity capital."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.75,
+  "signal_reason": "Anthropic closed $2B in convertible debt from JPMorgan and Goldman Sachs, a concrete financing event that extends its compute runway and signals institutional confidence ahead of a public market debut.",
+  "materiality": "medium",
+  "category": "AI Models & Intelligence Layer",
+  "entities": [
+    {"name": "Anthropic", "type": "company"},
+    {"name": "JPMorgan", "type": "company"},
+    {"name": "Goldman Sachs", "type": "company"}
+  ]
+}
+
+Example 55, Signal, high materiality, Semiconductor Manufacturing:
+Article: "A 7.4 magnitude earthquake strikes Hualien County, Taiwan, forcing
+TSMC to halt production at Fab 18 and Fab 20; the company confirms equipment
+assessment is underway and estimates a 3-5 day suspension of N3 and N2 node
+production affecting AI GPU and Apple chip supply."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.93,
+  "signal_reason": "A 7.4 earthquake forced TSMC to halt N3 and N2 production at two advanced fabs for 3-5 days, directly disrupting AI GPU and leading-edge chip supply from the world's most critical semiconductor foundry.",
+  "materiality": "high",
+  "category": "Semiconductor Manufacturing",
+  "entities": [
+    {"name": "TSMC", "type": "company"},
+    {"name": "Fab 18", "type": "facility"},
+    {"name": "Fab 20", "type": "facility"}
+  ]
+}
+
+Example 56, Signal, medium materiality, Cloud & Compute Market:
+Article: "A Microsoft Azure networking failure takes down Azure OpenAI Service,
+Azure Machine Learning, and Azure AI Search across US East and EU West regions
+for six hours, disrupting AI inference and training workloads for thousands
+of enterprise customers."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.74,
+  "signal_reason": "Microsoft Azure's six-hour outage took down Azure OpenAI Service, Azure ML, and Azure AI Search across two major regions — a concrete operational disruption directly affecting enterprise AI inference and training at scale.",
+  "materiality": "medium",
+  "category": "Cloud & Compute Platforms",
+  "entities": [
+    {"name": "Microsoft Azure", "type": "platform"},
+    {"name": "Azure OpenAI Service", "type": "platform"}
+  ]
+}
+
+Example 57, Signal, high materiality, Semiconductor Manufacturing:
+Article: "NVIDIA reports Q2 FY2027 data center revenue of $35.6B, up 122%
+year-over-year, beating consensus of $31.2B; CEO Jensen Huang raises FY2027
+guidance to $160B and confirms Blackwell Ultra shipments begin Q3."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.97,
+  "signal_reason": "NVIDIA reported $35.6B data center revenue (+122% YoY), beat consensus by $4.4B, and raised full-year guidance to $160B — the most watched AI demand indicator in the semiconductor market with direct supply chain implications.",
+  "materiality": "high",
+  "category": "Semiconductor Manufacturing",
+  "entities": [
+    {"name": "NVIDIA", "type": "company"},
+    {"name": "Blackwell Ultra", "type": "model_product"},
+    {"name": "Jensen Huang", "type": "person"}
+  ]
+}
+
+Example 58, Signal, high materiality, AI Models:
+Article: "The White House issues an executive order establishing a National AI
+Safety Board with mandatory pre-deployment reporting requirements for frontier
+AI models above a defined compute threshold, effective in 90 days."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.88,
+  "signal_reason": "The White House issued a concrete executive order creating a National AI Safety Board with binding pre-deployment reporting obligations on frontier model developers above a compute threshold.",
+  "materiality": "high",
+  "category": "AI Models & Intelligence Layer",
+  "entities": [
+    {"name": "White House", "type": "regulator"},
+    {"name": "National AI Safety Board", "type": "regulator"}
+  ]
+}
+
+Example 59, Signal, high materiality, AI Models:
+Article: "The EU AI Act's obligations for high-risk AI systems and general
+purpose AI models enter into force today; providers must complete conformity
+assessments, register in the EU database, and meet transparency requirements
+or face fines of up to 3% of global annual revenue."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.89,
+  "signal_reason": "The EU AI Act's binding compliance obligations for high-risk systems and GPAI models entered into force, imposing concrete conformity, registration, and transparency requirements on all AI providers operating in EU markets.",
+  "materiality": "high",
+  "category": "AI Models & Intelligence Layer",
+  "entities": [
+    {"name": "European Union", "type": "regulator"},
+    {"name": "EU AI Act", "type": "other"}
+  ]
+}
+
+Example 60, Signal, medium materiality, Life Sciences & Healthcare AI:
+Article: "DeepMind publishes AlphaFold 3 under a commercial licence allowing
+pharmaceutical companies to use its protein structure prediction tool in drug
+discovery pipelines; Eli Lilly and Novartis confirm active integrations for
+target identification, with licensing revenue commencing Q3."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.83,
+  "signal_reason": "DeepMind released AlphaFold 3 under a commercial licence with Eli Lilly and Novartis confirming active integrations — a concrete AI drug discovery commercialisation event with named pharma customers and licensing revenue.",
+  "materiality": "medium",
+  "category": "Life Sciences & Healthcare AI",
+  "entities": [
+    {"name": "DeepMind", "type": "company"},
+    {"name": "AlphaFold 3", "type": "model_product"},
+    {"name": "Eli Lilly", "type": "company"},
+    {"name": "Novartis", "type": "company"}
+  ]
+}
+
+Example 61, Noise:
+Article: "Researchers at MIT publish a paper showing a new transformer
+architecture that achieves 40% better reasoning on mathematical benchmarks
+using half the parameters, with no named product launch, commercial deployment,
+or industry partnership announced."
+Output:
+{
+  "signal_detection": "noise",
+  "signal_score": 0.24,
+  "signal_reason": "Academic paper reports benchmark improvements on a new architecture, but announces no product launch, commercial deployment, named industry backing, or concrete market event — early-stage research with no AI-universe transmission path.",
+  "materiality": "none",
+  "category": "AI Models & Intelligence Layer",
+  "entities": [
+    {"name": "MIT", "type": "company"}
+  ]
+}
+
+Example 62, Signal, high materiality, Nuclear & Advanced Energy:
+Article: "Microsoft signs a 20-year power purchase agreement with Constellation
+Energy to restart Unit 1 of Three Mile Island nuclear plant, providing 835 MW
+of carbon-free baseload power dedicated to Microsoft AI data centers across
+the PJM grid, with first power delivery targeted for 2028."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.91,
+  "signal_reason": "Microsoft committed to a 20-year 835 MW nuclear PPA to restart Three Mile Island Unit 1, a concrete long-term carbon-free power commitment directly dedicated to AI data center baseload supply.",
+  "materiality": "high",
+  "category": "Nuclear & Advanced Energy",
+  "entities": [
+    {"name": "Microsoft", "type": "company"},
+    {"name": "Constellation Energy", "type": "company"},
+    {"name": "Three Mile Island", "type": "facility"}
+  ]
+}
+
+Example 63, Signal, medium materiality, Nuclear & Advanced Energy:
+Article: "Kairos Power breaks ground on its Hermes demonstration reactor in Oak
+Ridge, Tennessee — the first new nuclear reactor to begin construction in the
+US in over a decade — backed by a DOE $303M advanced reactor demonstration
+award and Google as an anchor power offtaker."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.79,
+  "signal_reason": "Kairos Power broke ground on Hermes, the first new US nuclear reactor construction in a decade, with $303M DOE funding and Google as power offtaker — a concrete advanced nuclear milestone with direct AI power supply implications.",
+  "materiality": "medium",
+  "category": "Nuclear & Advanced Energy",
+  "entities": [
+    {"name": "Kairos Power", "type": "company"},
+    {"name": "Google", "type": "company"},
+    {"name": "Hermes", "type": "facility"},
+    {"name": "US Department of Energy", "type": "regulator"}
+  ]
+}
+
+Example 64, Signal, high materiality, Defense, Aerospace & Sovereign AI:
+Article: "L3Harris Technologies wins a $1.4B US Air Force contract to deploy its
+AI-powered ISR fusion platform across 12 combat air wings, integrating
+real-time sensor fusion, target classification, and autonomous threat
+prioritisation into existing F-35 mission systems."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.84,
+  "signal_reason": "L3Harris won a $1.4B Air Force contract to deploy AI-powered ISR fusion across 12 combat wings, a concrete large-scale defense AI deployment integrating autonomous classification into operational military systems.",
+  "materiality": "high",
+  "category": "Defense, Aerospace & Sovereign AI",
+  "entities": [
+    {"name": "L3Harris Technologies", "type": "company"},
+    {"name": "US Air Force", "type": "regulator"}
+  ]
+}
+
+Example 65, Signal, high materiality, Defense, Aerospace & Sovereign AI:
+Article: "Saudi Arabia establishes the Saudi Center for AI (SCAI) with $6B in
+committed sovereign capital to build domestic foundation models, GPU
+infrastructure, and AI talent programs, targeting AI self-sufficiency by 2030
+and reducing dependence on US frontier model APIs."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.87,
+  "signal_reason": "Saudi Arabia committed $6B to SCAI, a concrete sovereign AI institution with capital, named mandate, and a 2030 self-sufficiency target — a material sovereign AI program directly competing with US frontier model providers.",
+  "materiality": "high",
+  "category": "Defense, Aerospace & Sovereign AI",
+  "entities": [
+    {"name": "Saudi Arabia", "type": "country_region"},
+    {"name": "Saudi Center for AI", "type": "company"}
+  ]
+}
+
+Example 66, Signal, medium materiality, Quantum Computing & Sensing:
+Article: "IBM releases its Heron r2 quantum processor achieving 156 qubits with
+99.9% two-qubit gate fidelity — IBM's highest gate fidelity to date — and makes
+it available via IBM Quantum Platform to enterprise and research customers
+effective immediately."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.76,
+  "signal_reason": "IBM released Heron r2 with 156 qubits at 99.9% two-qubit gate fidelity and immediate platform availability — a concrete quantum hardware milestone with named performance metrics and commercial access.",
+  "materiality": "medium",
+  "category": "Quantum Computing & Sensing",
+  "entities": [
+    {"name": "IBM", "type": "company"},
+    {"name": "Heron r2", "type": "model_product"},
+    {"name": "IBM Quantum Platform", "type": "platform"}
+  ]
+}
+
+Example 67, Weak signal, low materiality, Quantum Computing & Sensing:
+Article: "IonQ raises $400M Series E to fund scale-up of its trapped-ion quantum
+computers toward fault-tolerant operation, with no named enterprise customer
+deployments or revenue milestones disclosed."
+Output:
+{
+  "signal_detection": "weak_signal",
+  "signal_score": 0.52,
+  "signal_reason": "IonQ closed a $400M round to fund fault-tolerant quantum scale-up — a concrete financing event, but no named customers or near-term deployment milestones reduce the market transmission confidence.",
+  "materiality": "low",
+  "category": "Quantum Computing & Sensing",
+  "entities": [
+    {"name": "IonQ", "type": "company"}
+  ]
+}
+
+Example 68, Signal, medium materiality, Networking, Optical & Interconnect:
+Article: "Coherent Corp ships first volume quantities of its 1.6T optical
+transceivers to three hyperscalers for AI cluster interconnect deployments,
+with revenue recognition beginning Q3 and backlog reaching $2.1B."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.81,
+  "signal_reason": "Coherent began volume shipments of 1.6T transceivers to three hyperscalers with $2.1B backlog — a concrete AI cluster interconnect supply milestone directly enabling next-generation GPU network throughput.",
+  "materiality": "medium",
+  "category": "Networking, Optical & Interconnect",
+  "entities": [
+    {"name": "Coherent Corp", "type": "company"}
+  ]
+}
+
+Example 69, Signal, medium materiality, Networking, Optical & Interconnect:
+Article: "Arista Networks reports Q2 revenue of $1.93B, up 16% year-over-year,
+with AI networking now representing 25% of total revenue as hyperscalers
+accelerate spine-layer upgrades to 400G and 800G for AI cluster backbones."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.78,
+  "signal_reason": "Arista reported $1.93B Q2 revenue with AI networking at 25% of total, concrete earnings showing material demand acceleration for high-speed AI cluster spine infrastructure.",
+  "materiality": "medium",
+  "category": "Networking, Optical & Interconnect",
+  "entities": [
+    {"name": "Arista Networks", "type": "company"}
+  ]
+}
+
+Example 70, Signal, medium materiality, Telecom & Connectivity:
+Article: "Nokia wins a €900M contract from Deutsche Telekom to deploy AirScale
+5G RAN across Germany's eastern network regions, with AI-optimised spectrum
+management and dedicated network slicing for enterprise AI workload traffic."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.74,
+  "signal_reason": "Nokia secured a €900M 5G RAN contract from Deutsche Telekom with AI-optimised spectrum management and enterprise AI network slicing — a concrete telecom infrastructure award directly enabling AI connectivity at national scale.",
+  "materiality": "medium",
+  "category": "Telecom & Connectivity",
+  "entities": [
+    {"name": "Nokia", "type": "company"},
+    {"name": "Deutsche Telekom", "type": "company"}
+  ]
+}
+
+Example 71, Signal, medium materiality, Telecom & Connectivity:
+Article: "SpaceX confirms Starlink has reached 4.6M active subscribers globally
+and signs a direct-to-cell roaming agreement with T-Mobile covering the
+continental US, enabling AI-powered IoT and edge compute connectivity in
+areas with no terrestrial infrastructure."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.72,
+  "signal_reason": "Starlink reached 4.6M subscribers and signed a T-Mobile direct-to-cell roaming agreement — a concrete satellite-terrestrial connectivity milestone that materially expands AI edge compute reach.",
+  "materiality": "medium",
+  "category": "Telecom & Connectivity",
+  "entities": [
+    {"name": "SpaceX", "type": "company"},
+    {"name": "Starlink", "type": "platform"},
+    {"name": "T-Mobile", "type": "company"}
+  ]
+}
+
+Example 72, Signal, medium materiality, Life Sciences & Healthcare AI:
+Article: "Recursion Pharmaceuticals confirms its AI drug discovery platform
+identified a novel KRAS inhibitor candidate that has entered Phase I clinical
+trials at MD Anderson, with Roche holding co-development rights under a $150M
+milestone agreement."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.80,
+  "signal_reason": "Recursion's AI platform advanced a KRAS inhibitor to Phase I trials at MD Anderson under a $150M Roche co-development deal — a concrete AI-to-clinic drug discovery milestone with named compound, trial site, and partner.",
+  "materiality": "medium",
+  "category": "Life Sciences & Healthcare AI",
+  "entities": [
+    {"name": "Recursion Pharmaceuticals", "type": "company"},
+    {"name": "Roche", "type": "company"},
+    {"name": "MD Anderson", "type": "company"}
+  ]
+}
+
+Example 73, Signal, medium materiality, Financial Infrastructure & AI Capital:
+Article: "Visa confirms it has deployed its AI-powered fraud detection model
+across 100% of its global transaction network, processing 500B+ signals per
+year and reducing false positive rates by 35% compared to its prior rules-based
+system."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.76,
+  "signal_reason": "Visa confirmed full-network deployment of its AI fraud detection model processing 500B+ annual signals with a 35% false positive reduction — a concrete large-scale financial AI deployment with named company and measurable operational impact.",
+  "materiality": "medium",
+  "category": "Financial Infrastructure & AI Capital",
+  "entities": [
+    {"name": "Visa", "type": "company"}
+  ]
+}
+
+Example 74, Signal, low materiality, Water & Resource Infrastructure:
+Article: "Veolia confirms a 20-year water recycling and waste heat recovery
+contract with a Microsoft hyperscale data center campus in Arizona, supplying
+12M gallons per day of reclaimed water and recovering 40 MW of waste heat for
+district heating, reducing the campus net water consumption by 90%."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.68,
+  "signal_reason": "Veolia secured a 20-year contract to supply 12M gallons per day of reclaimed water and recover 40 MW of waste heat from a Microsoft AI campus — a concrete long-term resource infrastructure commitment reducing AI data center water consumption at named scale.",
+  "materiality": "low",
+  "category": "Water & Resource Infrastructure",
+  "entities": [
+    {"name": "Veolia", "type": "company"},
+    {"name": "Microsoft", "type": "company"}
+  ]
+}
+
+Example 75, Noise:
+Article: "A consultancy publishes a report recommending that data center
+operators adopt closed-loop cooling to reduce water usage intensity, citing
+industry averages and projecting potential savings if best practices are
+widely adopted."
+Output:
+{
+  "signal_detection": "noise",
+  "signal_score": 0.18,
+  "signal_reason": "Generic consultancy recommendation with no named company action, no signed contract, and no concrete operational change — advisory content with no AI-universe market transmission path.",
+  "materiality": "none",
+  "category": "Water & Resource Infrastructure",
   "entities": []
 }
 

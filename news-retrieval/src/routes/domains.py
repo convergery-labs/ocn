@@ -11,7 +11,7 @@ router = APIRouter()
 
 @router.get("/domains")
 async def get_domains() -> list[dict]:
-    """Return all domains (public — no auth required)."""
+    """Return all domains (public - no auth required)."""
     return get_all()
 
 

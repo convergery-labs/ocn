@@ -37,7 +37,7 @@ def _service_caller_header() -> str:
 async def _trigger_news_run(request) -> int:
     """POST to news-retrieval /run and return the run_id.
 
-    Handles 202 (new run), 200 (cache hit), and 409 (conflict — returns
+    Handles 202 (new run), 200 (cache hit), and 409 (conflict - returns
     the conflicting run_id so the caller can poll it).
 
     Raises:
@@ -65,7 +65,7 @@ async def _trigger_news_run(request) -> int:
         raise RuntimeError(f"news-retrieval unreachable: {exc}") from exc
 
     if resp.status_code == 200:
-        # Cache hit — response is the RunRow directly, keyed by "id"
+        # Cache hit - response is the RunRow directly, keyed by "id"
         return int(resp.json()["id"])
     if resp.status_code == 202:
         return int(resp.json()["run_id"])

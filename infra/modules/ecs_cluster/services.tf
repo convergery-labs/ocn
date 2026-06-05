@@ -747,3 +747,132 @@ resource "aws_cloudwatch_event_target" "lucky_clarke_daily" {
     ]
   })
 }
+
+
+# ---------------------------------------------------------------------------
+# research-universe (port 8007)
+# ---------------------------------------------------------------------------
+
+data "aws_secretsmanager_secret" "research_universe" {
+  name = "ocn/${var.env}/research-universe"
+}
+
+resource "aws_ecs_task_definition" "research_universe" {
+  family                   = "${var.env}-research-universe"
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = "512"
+  memory                   = "1024"
+  execution_role_arn       = aws_iam_role.ecs_task_execution.arn
+
+  container_definitions = jsonencode([
+    {
+      name  = "research-universe"
+      image = "${var.ecr_registry}/ocn/research-universe:${var.image_tag}"
+      portMappings = [
+        { containerPort = 8007 }
+      ]
+      environment = [
+        { name = "POSTGRES_HOST",      value = var.rds_endpoint },
+        { name = "POSTGRES_PORT",      value = "5432" },
+        { name = "POSTGRES_DB",        value = "research_universe_db" },
+        { name = "POSTGRES_USER",      value = "research_universe_user" },
+        { name = "PGSSLMODE",          value = "require" },
+        { name = "OPENROUTER_MODEL",   value = "anthropic/claude-sonnet-4-6" },
+        { name = "API_PREFIX",         value = "/universe" },
+      ]
+      secrets = [
+        {
+          name      = "POSTGRES_PASSWORD"
+          valueFrom = "${data.aws_secretsmanager_secret.research_universe.arn}:POSTGRES_PASSWORD::"
+        },
+        {
+          name      = "OPENROUTER_API_KEY"
+          valueFrom = "${data.aws_secretsmanager_secret.research_universe.arn}:OPENROUTER_API_KEY::"
+        },
+        {
+          name      = "CORS_ORIGINS"
+          valueFrom = "${data.aws_secretsmanager_secret.research_universe.arn}:CORS_ORIGINS::"
+        },
+      ]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = "/ecs/${var.env}/research-universe"
+          "awslogs-region"        = var.aws_region
+          "awslogs-stream-prefix" = "ecs"
+        }
+      }
+    }
+  ])
+}
+
+
+resource "aws_service_discovery_service" "research_universe" {
+  name = "research-universe"
+  dns_config {
+    namespace_id = aws_service_discovery_private_dns_namespace.main.id
+    dns_records {
+      ttl  = 10
+      type = "A"
+    }
+  }
+}
+
+
+resource "aws_ecs_service" "research_universe" {
+  name            = "${var.env}-research-universe"
+  cluster         = aws_ecs_cluster.main.id
+  task_definition = aws_ecs_task_definition.research_universe.arn
+  desired_count   = 1
+  launch_type     = "FARGATE"
+
+  load_balancer {
+    target_group_arn = var.research_universe_tg_arn
+    container_name   = "research-universe"
+    container_port   = 8007
+  }
+
+  network_configuration {
+    subnets          = var.private_subnet_ids
+    security_groups  = [var.research_universe_sg_id]
+    assign_public_ip = false
+  }
+
+  service_registries {
+    registry_arn = aws_service_discovery_service.research_universe.arn
+  }
+}
+
+
+# Daily scheduled scan - picks the least recently enriched category
+resource "aws_cloudwatch_event_rule" "research_universe_scan" {
+  name                = "${var.env}-research-universe-scan"
+  description         = "Daily universe enrichment: scan next category"
+  schedule_expression = "cron(0 6 * * ? *)"  # 06:00 UTC daily
+}
+
+
+resource "aws_cloudwatch_event_target" "research_universe_scan" {
+  rule     = aws_cloudwatch_event_rule.research_universe_scan.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+
+  ecs_target {
+    task_definition_arn = aws_ecs_task_definition.research_universe.arn
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets         = var.private_subnet_ids
+      security_groups = [var.research_universe_sg_id]
+    }
+  }
+
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "research-universe"
+        command = ["python", "-m", "src", "scan-next"]
+      }
+    ]
+  })
+}

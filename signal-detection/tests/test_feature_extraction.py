@@ -45,7 +45,7 @@ _ARTICLE_FR = {
     "source": "example.com",
     "published": "2026-01-02",
 }
-# Near-duplicate of _ARTICLE_EN — differs by one word at the end
+# Near-duplicate of _ARTICLE_EN - differs by one word at the end
 _ARTICLE_DUP = {
     "url": "https://example.com/dup-article",
     "title": "Deep-sea discovery dup",
@@ -53,7 +53,7 @@ _ARTICLE_DUP = {
     "source": "example.com",
     "published": "2026-01-03",
 }
-# SerpAPI-style article where Trafilatura scraping failed — body is None
+# SerpAPI-style article where Trafilatura scraping failed - body is None
 _ARTICLE_NO_BODY = {
     "url": "https://example.com/no-body",
     "title": "AI startup raises $50M Series B",
@@ -115,7 +115,7 @@ def _mock_qdrant():
 
 
 # ---------------------------------------------------------------------------
-# Unit — _dedup_indices
+# Unit - _dedup_indices
 # ---------------------------------------------------------------------------
 
 class TestDedupIndices:
@@ -153,7 +153,7 @@ class TestDedupIndices:
 
 
 # ---------------------------------------------------------------------------
-# Unit — _detect_language
+# Unit - _detect_language
 # ---------------------------------------------------------------------------
 
 class TestDetectLanguage:
@@ -175,7 +175,7 @@ class TestDetectLanguage:
 
 
 # ---------------------------------------------------------------------------
-# Unit — _extract_claims
+# Unit - _extract_claims
 # ---------------------------------------------------------------------------
 
 class TestExtractClaims:
@@ -207,7 +207,7 @@ class TestExtractClaims:
 
 
 # ---------------------------------------------------------------------------
-# Integration — _run_feature_extraction
+# Integration - _run_feature_extraction
 # ---------------------------------------------------------------------------
 
 class TestRunFeatureExtraction:
@@ -423,7 +423,7 @@ class TestRunFeatureExtraction:
         ):
             await _run_feature_extraction(job["id"], [_ARTICLE_NO_BODY], domain="ai_news")
 
-        # Article should reach Qdrant — pipeline completed without skipping
+        # Article should reach Qdrant - pipeline completed without skipping
         article_upsert_calls = [
             c for c in qdrant.upsert.call_args_list
             if c.kwargs.get("collection_name") == "articles"

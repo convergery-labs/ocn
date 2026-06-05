@@ -4,7 +4,7 @@ Part of the [ocn monorepo](../README.md). See root README for full system setup.
 
 Classifies news articles as Signal, Weak Signal, or Noise using vector
 similarity against a reference corpus stored in Qdrant. Downstream consumer of
-`news-retrieval` — does not ingest articles directly.
+`news-retrieval` - does not ingest articles directly.
 
 ## Stack
 
@@ -16,7 +16,7 @@ similarity against a reference corpus stored in Qdrant. Downstream consumer of
 ## Quick Start
 
 ```bash
-# From the repo root — start the HTTP service
+# From the repo root - start the HTTP service
 docker compose up postgres-signal qdrant signal-detection
 
 # Bootstrap the corpus (run once per domain before classifying)
@@ -33,46 +33,46 @@ docker compose run --rm signal-detection python -m src bootstrap \
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `SIGNAL_POSTGRES_PASSWORD` | Yes | — | PostgreSQL password |
+| `SIGNAL_POSTGRES_PASSWORD` | Yes | - | PostgreSQL password |
 | `SIGNAL_POSTGRES_DB` | No | `signal-detection` | PostgreSQL database name |
 | `SIGNAL_POSTGRES_USER` | No | `signal-detection` | PostgreSQL user |
 | `SIGNAL_POSTGRES_HOST` | No | `localhost` | PostgreSQL host |
 | `QDRANT_HOST` | No | `qdrant` | Qdrant hostname |
 | `QDRANT_PORT` | No | `6333` | Qdrant port |
-| `NEWS_RETRIEVAL_URL` | Yes | — | news-retrieval base URL for run triggering, polling, and article fetching |
+| `NEWS_RETRIEVAL_URL` | Yes | - | news-retrieval base URL for run triggering, polling, and article fetching |
 | `NEWS_RETRIEVAL_SERVICE_CALLER` | No | pre-encoded admin identity | Base64-encoded `x-ocn-caller` JSON used for service-to-service calls to news-retrieval |
 | `PIPELINE_POLL_TIMEOUT_SECS` | No | `600` | Max seconds to wait for a news-retrieval run to complete before failing |
-| `AUTH_SERVICE_URL` | Yes | — | auth-service base URL for token validation |
-| `OPENROUTER_API_KEY` | Yes | — | OpenRouter API key for embeddings and LLM calls |
+| `AUTH_SERVICE_URL` | Yes | - | auth-service base URL for token validation |
+| `OPENROUTER_API_KEY` | Yes | - | OpenRouter API key for embeddings and LLM calls |
 | `OPENROUTER_MODEL` | No | `openai/gpt-4o-mini` | LLM model used for claim extraction |
 | `EMBEDDING_MODEL` | No | `openai/text-embedding-3-large` | Article embedding model (OpenRouter prefix format) |
 | `CLAIM_EMBEDDING_MODEL` | No | `openai/text-embedding-3-small` | Claim embedding model (1536 dims; claims are short, compared only to other claims) |
 | `SIGNAL_THRESHOLD` | No | `0.5` | Cosine similarity threshold used by the deferred promotion job |
-| `LANGFUSE_PUBLIC_KEY` | No | — | Langfuse public key; tracing disabled if absent |
-| `LANGFUSE_SECRET_KEY` | No | — | Langfuse secret key |
+| `LANGFUSE_PUBLIC_KEY` | No | - | Langfuse public key; tracing disabled if absent |
+| `LANGFUSE_SECRET_KEY` | No | - | Langfuse secret key |
 | `LANGFUSE_HOST` | No | `https://cloud.langfuse.com` | Langfuse host |
 
 ## Scoring Model
 
 Every article is scored on three orthogonal dimensions, then combined into a single composite score. The composite determines the final label: **Signal** (> 0.70), **Weak Signal** (0.40–0.70), **Noise** (< 0.40).
 
-### Sub-score A — Trajectory Deviation
+### Sub-score A - Trajectory Deviation
 
-Measures how far an article's semantic embedding is from the centroid of its assigned topic cluster. A high score means the article is semantically distant from the established "centre of gravity" of its topic — i.e. it is exploring new ground rather than rehashing what the corpus has already mapped.
+Measures how far an article's semantic embedding is from the centroid of its assigned topic cluster. A high score means the article is semantically distant from the established "centre of gravity" of its topic - i.e. it is exploring new ground rather than rehashing what the corpus has already mapped.
 
 Computed as cosine distance between the article embedding and the nearest cluster centroid, normalised to [0, 1].
 
 Cold start: if no clusters exist for the domain (bootstrap not run), trajectory score defaults to 0.5.
 
-### Sub-score B — Bridge Score
+### Sub-score B - Bridge Score
 
-Measures how unusual it is for the concepts in an article to appear together. It rewards articles that connect concept domains that rarely co-occur within the domain — a proxy for cross-domain synthesis, which is a common early-signal pattern.
+Measures how unusual it is for the concepts in an article to appear together. It rewards articles that connect concept domains that rarely co-occur within the domain - a proxy for cross-domain synthesis, which is a common early-signal pattern.
 
 Computed as `mean(1 / (1 + log(1 + count)))` across all canonical concept pairs extracted by NER. A pair seen together for the first time scores 1.0; a pair that always co-occurs approaches 0. Co-occurrence counts are domain-scoped so a concept pair common in `biotech_research` does not deflate the bridge score for an `ai_news` article.
 
 Requires ≥ 2 concepts to be extracted. Articles with fewer than 2 matched concepts fall back to Phase 3 weights (Sub-score B omitted).
 
-### Sub-score C — Claim Novelty
+### Sub-score C - Claim Novelty
 
 Measures how novel an article's specific factual claims are relative to everything the corpus has already seen for that domain. An article making claims that have not appeared in any prior article in the same domain scores highly; an article restating well-documented facts scores low.
 
@@ -93,7 +93,7 @@ All weights are env-configurable. Claim novelty (C) carries the most weight beca
 
 ## Bootstrap CLI
 
-Seeds the Qdrant corpus before the service can classify articles. Idempotent — re-runs skip already-embedded documents and articles whose claims are already stored.
+Seeds the Qdrant corpus before the service can classify articles. Idempotent - re-runs skip already-embedded documents and articles whose claims are already stored.
 
 ```bash
 docker compose run --rm signal-detection python -m src bootstrap \
@@ -115,7 +115,7 @@ The command:
 
 ## Historical Ingest CLI
 
-Seeds the Qdrant corpus with historical documents from external sources. Qdrant-only — no Postgres involvement. Idempotent: re-runs skip already-upserted documents.
+Seeds the Qdrant corpus with historical documents from external sources. Qdrant-only - no Postgres involvement. Idempotent: re-runs skip already-upserted documents.
 
 ```bash
 docker compose run --rm signal-detection python -m src historical-ingest \
@@ -193,9 +193,9 @@ Returns `{"job_id": 1, "status": "processing"}`. On completion, POSTs
 ### POST /classify
 
 Accepts either a `run_id` (fetches articles from news-retrieval) or an inline
-`articles` list — not both. `domain` is required and must be a slug registered
+`articles` list - not both. `domain` is required and must be a slug registered
 in news-retrieval (i.e. appears in `GET /domains`). The service validates this
-before creating a job and returns 422 if the slug is unknown — classification
+before creating a job and returns 422 if the slug is unknown - classification
 cannot proceed without a bootstrapped corpus to compare articles against.
 
 ```json
@@ -313,4 +313,4 @@ Test modules:
 |--------|----------|
 | `test_smoke.py` | Health endpoint, app startup |
 | `test_classify.py` | POST /classify and GET /classifications/* endpoints |
-| `test_ner.py` | `extract_concepts` — multi-concept match, zero-match, deduplication |
+| `test_ner.py` | `extract_concepts` - multi-concept match, zero-match, deduplication |

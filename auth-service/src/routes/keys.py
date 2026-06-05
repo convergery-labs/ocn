@@ -26,7 +26,7 @@ class ApiKeyIn(BaseModel):
 async def get_keys(
     caller: dict = Depends(require_admin),
 ) -> list[dict]:
-    """Return all API keys (hashes excluded) — admin only."""
+    """Return all API keys (hashes excluded) - admin only."""
     return list_api_keys()
 
 
@@ -35,7 +35,7 @@ async def post_key(
     body: ApiKeyIn,
     caller: dict = Depends(require_admin),
 ) -> dict:
-    """Create a new API key and return the plaintext key once — admin only."""
+    """Create a new API key and return the plaintext key once - admin only."""
     try:
         key = generate_key()
         row = create_api_key(
@@ -46,6 +46,6 @@ async def post_key(
         )
     except DuplicateError:
         raise HTTPException(
-            status_code=409, detail="Key hash collision — try again."
+            status_code=409, detail="Key hash collision - try again."
         )
     return {**row, "key": key}

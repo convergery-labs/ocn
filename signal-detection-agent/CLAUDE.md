@@ -51,7 +51,7 @@ signal-detection-agent/
 │   │   └── jobs.py
 │   ├── pipeline/
 │   │   ├── classifier.py
-│   │   └── category_candidates.py   (parked — not wired in v1)
+│   │   └── category_candidates.py   (parked - not wired in v1)
 │   └── adapters/
 │       ├── news_client.py
 │       └── web_search.py
@@ -78,7 +78,7 @@ signal-detection-agent/
 ## Guidance
 
 - Use the Jira board (project key `CON`) to track and reference cards
-- `category_candidates.py` is parked — re-enable by passing `category_hints` into `classify_article()` if category errors appear in production
+- `category_candidates.py` is parked - re-enable by passing `category_hints` into `classify_article()` if category errors appear in production
 
 ## Maintenance
 

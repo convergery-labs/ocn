@@ -212,6 +212,49 @@ services:
     networks:
       - ocn-internal
 
+  # ---------------------------------------------------------------------------
+  # research-universe (port 8007)
+  # ---------------------------------------------------------------------------
+  research-universe:
+    build:
+      context: .
+      dockerfile: research-universe/Dockerfile
+      target: base
+    ports:
+      - "8007:8007"
+    env_file: research-universe/.env
+    depends_on:
+      postgres-universe:
+        condition: service_healthy
+    networks:
+      - ocn-internal
+
+  research-universe-ui:
+    build:
+      context: research-universe-ui
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    depends_on:
+      - research-universe
+    networks:
+      - ocn-internal
+
+  postgres-universe:
+    image: postgres:16
+    env_file: research-universe/.env
+    ports:
+      - "5436:5432"
+    volumes:
+      - postgres-universe-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ocn-internal
+
 networks:
   ocn-internal:
     driver: bridge
@@ -220,4 +263,5 @@ volumes:
   postgres-auth-data:
   postgres-news-data:
   postgres-signal-data:
+  postgres-universe-data:
   qdrant-data:

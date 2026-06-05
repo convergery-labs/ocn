@@ -11,12 +11,12 @@ fetch only those. Use the 'Read when' column as your guide.
 | Doc | Read when | Page ID |
 |-----|-----------|---------|
 | [Technical Specifications](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/30113793/Technical+Specifications) | Making architectural or technical decisions | 30113793 |
-| ↳ [CON-95: API Integration-Readiness — Open Questions](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/61898754/CON-95+API+Integration-Readiness+Open+Questions) | Reviewing open questions for the API integration-readiness epic | 61898754 |
+| ↳ [CON-95: API Integration-Readiness - Open Questions](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/61898754/CON-95+API+Integration-Readiness+Open+Questions) | Reviewing open questions for the API integration-readiness epic | 61898754 |
 | [Sources](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/28705610/Sources) | Adding, removing, or evaluating data sources | 28705610 |
 | [PRD](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/28705568/PRD) | Implementing or questioning any feature | 28705568 |
 | [Roadmap](https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/28508185/Roadmap) | Planning, scoping, or prioritising work | 28508185 |
 
-Confluence space: `Projects` — Cloud: `opengrowthventures.atlassian.net`
+Confluence space: `Projects` - Cloud: `opengrowthventures.atlassian.net`
 
 ## Jira Board
 | Board | URL | Project Key |
@@ -76,7 +76,7 @@ news-retrieval/
 ```
 
 ## Guidance
-- Read only the docs relevant to your task — not all of them
+- Read only the docs relevant to your task - not all of them
 - Check the index above before asking for clarification; the answer is often in a doc
 - When in doubt about scope or requirements, read the Functional Requirements or PRD first
 - Use the Jira board (project key `CON`) to track and reference cards

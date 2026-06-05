@@ -1,6 +1,6 @@
 """News aggregation pipeline: fetch and relevance-filter articles.
 
-Pass 1 — title-only relevance filter (LLM via OpenRouter).
+Pass 1 - title-only relevance filter (LLM via OpenRouter).
 """
 import html
 import json
@@ -106,7 +106,7 @@ def _clean_summary(raw: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Step 1 — fetch
+# Step 1 - fetch
 # ---------------------------------------------------------------------------
 
 def _extract_body(entry: Any, url: str, no_fetch: bool) -> str | None:
@@ -471,7 +471,7 @@ def _fetch_articles(
             articles.extend(_fetch_serpapi(serpapi_sources, days_back, serpapi_key))
         else:
             logger.warning(
-                "SERPAPI_KEY not set — skipping %d serpapi source(s)",
+                "SERPAPI_KEY not set - skipping %d serpapi source(s)",
                 len(serpapi_sources),
             )
 
@@ -480,7 +480,7 @@ def _fetch_articles(
             articles.extend(_fetch_newsapi(newsapi_sources, days_back, newsapi_key))
         else:
             logger.warning(
-                "NEWSAPI_KEY not set — skipping %d newsapi source(s)",
+                "NEWSAPI_KEY not set - skipping %d newsapi source(s)",
                 len(newsapi_sources),
             )
 
@@ -503,7 +503,7 @@ def _fetch_articles(
 
 
 # ---------------------------------------------------------------------------
-# Step 2 — relevance filter (Pass 1)
+# Step 2 - relevance filter (Pass 1)
 # ---------------------------------------------------------------------------
 
 def _filter_batch(
@@ -541,7 +541,7 @@ def _filter_batch(
         return [a.url for a in result.articles if a.relevant]
     except openai.AuthenticationError:
         raise RuntimeError(
-            "OpenRouter authentication failed — check your API key"
+            "OpenRouter authentication failed - check your API key"
         )
     except Exception as exc:
         logger.warning(
@@ -560,7 +560,7 @@ def _filter_articles(
 ) -> list[dict]:
     """Filter articles by domain relevance using titles only (Pass 1).
 
-    Sends only ``url`` and ``title`` — no summary — keeping token cost low.
+    Sends only ``url`` and ``title`` - no summary - keeping token cost low.
     Batches that fail are kept in full (fail-open) to avoid silent data loss.
 
     Args:

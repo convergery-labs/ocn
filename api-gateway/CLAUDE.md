@@ -46,13 +46,13 @@ api-gateway/
 
 | Title | Confluence URL |
 |-------|---------------|
-| Technical Specification — API Gateway | https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/86900737/Technical+Specification+API+Gateway |
+| Technical Specification - API Gateway | https://opengrowthventures.atlassian.net/wiki/spaces/Projects/pages/86900737/Technical+Specification+API+Gateway |
 
 ## Guidance
 
 - Read only the docs relevant to your task
 - Use the Jira board (project key `CON`) to track and reference cards
-- All upstream URLs are configured via `GATEWAY_*` env vars — never hardcode
+- All upstream URLs are configured via `GATEWAY_*` env vars - never hardcode
 
 ## Maintenance
 

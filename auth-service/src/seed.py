@@ -40,7 +40,7 @@ def seed_admin_key() -> None:
             f"AUTH_ADMIN_API_KEY must start with '{KEY_PREFIX}'"
         )
     if get_by_hash(hash_key(key)) is not None:
-        logger.info("Admin key already exists — skipping seed.")
+        logger.info("Admin key already exists - skipping seed.")
         return
     create_api_key(key, label="seed-admin", role="admin", created_by=None)
     logger.info("Seed admin key created.")
@@ -55,7 +55,7 @@ def seed_admin_user() -> None:
     email = os.environ["ADMIN_EMAIL"]
     password = os.environ["ADMIN_PASSWORD"]
     if get_user_by_username(username) is not None:
-        logger.info("Admin user already exists — skipping seed.")
+        logger.info("Admin user already exists - skipping seed.")
         return
     password_hash = bcrypt.hashpw(
         password.encode(), bcrypt.gensalt()
