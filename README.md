@@ -17,7 +17,7 @@ Monorepo for the OCN platform: auth, news retrieval, and signal detection.
 - **Vector store**: Qdrant (signal-detection)
 - **LLM**: Configurable via OpenRouter (news-retrieval, signal-detection)
 - **Infrastructure**: Docker Compose
-- **Shared utilities**: `shared/src/` — PostgreSQL connection helpers and keyset-pagination cursor utilities, copied into each service image at build time
+- **Shared utilities**: `shared/src/` - PostgreSQL connection helpers and keyset-pagination cursor utilities, copied into each service image at build time
 
 ## Quick start
 
@@ -46,7 +46,7 @@ curl http://localhost:8002/health   # signal-detection
 
 ## Deploying to ECS
 
-Images must be built for `linux/amd64` regardless of the host OS. Use the Makefile targets — they bake in the correct platform flag and the ECR registry URL.
+Images must be built for `linux/amd64` regardless of the host OS. Use the Makefile targets - they bake in the correct platform flag and the ECR registry URL.
 
 ```bash
 # Authenticate to ECR (once per session)
@@ -61,7 +61,7 @@ make push-signal
 make push-all
 ```
 
-Individual `push-*` targets do not authenticate — run `make ecr-login` first if your session has expired.
+Individual `push-*` targets do not authenticate - run `make ecr-login` first if your session has expired.
 
 See [infra/README.md](infra/README.md) for Terraform apply instructions.
 

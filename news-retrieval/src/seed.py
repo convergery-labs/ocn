@@ -4,7 +4,7 @@ Run directly to populate a fresh database:
 
     python seed.py
 
-The script is idempotent — rows that already exist (matched by slug
+The script is idempotent - rows that already exist (matched by slug
 or URL) are silently skipped.
 """
 import json
@@ -677,7 +677,7 @@ SUBSTACK_SOURCES: list[dict[str, Any]] = [
         "url": "https://newsletter.safe.ai/feed",
         "name": "AI Safety Newsletter",
         "frequency_name": "weekly",
-        "description": "Center for AI Safety — AI alignment and safety research.",
+        "description": "Center for AI Safety - AI alignment and safety research.",
     },
     {
         "domain_slug": "ai_news",
@@ -691,7 +691,7 @@ SUBSTACK_SOURCES: list[dict[str, Any]] = [
         "url": "https://brief.montrealethics.ai/feed",
         "name": "The AI Ethics Brief",
         "frequency_name": "weekly",
-        "description": "Montreal AI Ethics Institute — AI ethics and governance.",
+        "description": "Montreal AI Ethics Institute - AI ethics and governance.",
     },
     {
         "domain_slug": "ai_news",
@@ -747,7 +747,7 @@ SUBSTACK_SOURCES: list[dict[str, Any]] = [
         "url": "https://newsletter.forethought.org/feed",
         "name": "ForeWord",
         "frequency_name": "weekly",
-        "description": "Forethought Institute — AI research and policy.",
+        "description": "Forethought Institute - AI research and policy.",
     },
     {
         "domain_slug": "ai_news",
@@ -803,7 +803,7 @@ SUBSTACK_SOURCES: list[dict[str, Any]] = [
         "url": "https://humanandmachine.com/feed",
         "name": "Human and Machine",
         "frequency_name": "weekly",
-        "description": "Humans and AI working together — practical perspectives.",
+        "description": "Humans and AI working together - practical perspectives.",
     },
 
     {
@@ -930,7 +930,7 @@ SUBSTACK_SOURCES: list[dict[str, Any]] = [
         "url": "https://www.technostatecraft.com/feed",
         "name": "Techno-Statecraft",
         "frequency_name": "weekly",
-        "description": "Technology and statecraft — geopolitics of AI and semis.",
+        "description": "Technology and statecraft - geopolitics of AI and semis.",
     },
     {
         "domain_slug": "ai_news",
@@ -1247,7 +1247,7 @@ SOURCES: list[dict[str, Any]] = [
             " systems, AI for robots, and industrial automation."
         ),
     },
-    # Weekly feeds — only polled when days_back >= 7
+    # Weekly feeds - only polled when days_back >= 7
     {
         "domain_slug": "ai_news",
         "url": "https://huggingface.co/blog/feed.xml",
@@ -1388,7 +1388,7 @@ SOURCES: list[dict[str, Any]] = [
         ),
     },
     # ------------------------------------------------------------------
-    # Substack newsletters (free tier — full body in RSS)
+    # Substack newsletters (free tier - full body in RSS)
     # ------------------------------------------------------------------
     *SUBSTACK_SOURCES,
     # ------------------------------------------------------------------

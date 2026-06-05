@@ -78,7 +78,7 @@ deploy-frontend: build-frontend
 	  --distribution-id $(CLOUDFRONT_DISTRIBUTION_ID) \
 	  --paths "/*"
 
-# Tunnel RDS to localhost via SSM — requires SSM Session Manager plugin
+# Tunnel RDS to localhost via SSM - requires SSM Session Manager plugin
 # https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html
 # Connect DBeaver to localhost:$(RDS_LOCAL_PORT) once this is running
 tunnel-rds:

@@ -141,7 +141,7 @@ async def optional_auth(
 async def require_auth(
     credentials: HTTPAuthorizationCredentials = Depends(_bearer),
 ) -> dict[str, Any]:
-    """Validate the Bearer token — JWT or API key — and return caller identity.
+    """Validate the Bearer token - JWT or API key - and return caller identity.
 
     JWTs are identified by containing exactly two dots (three segments).
     All other tokens are treated as API keys and validated via the

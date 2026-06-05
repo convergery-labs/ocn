@@ -43,14 +43,14 @@ resource "aws_cloudfront_distribution" "frontend" {
   default_root_object = "index.html"
   price_class         = "PriceClass_100"
 
-  # S3 origin — serves the React SPA
+  # S3 origin - serves the React SPA
   origin {
     domain_name              = aws_s3_bucket.frontend.bucket_regional_domain_name
     origin_id                = "s3-ocn-staging-frontend"
     origin_access_control_id = aws_cloudfront_origin_access_control.frontend.id
   }
 
-  # ALB origin — serves API traffic (HTTP; CloudFront terminates TLS for the viewer)
+  # ALB origin - serves API traffic (HTTP; CloudFront terminates TLS for the viewer)
   origin {
     domain_name = module.alb.alb_dns_name
     origin_id   = "alb-staging-api"
@@ -62,7 +62,7 @@ resource "aws_cloudfront_distribution" "frontend" {
     }
   }
 
-  # API behaviors — forwarded to the ALB, never cached
+  # API behaviors - forwarded to the ALB, never cached
   ordered_cache_behavior {
     path_pattern             = "/auth/*"
     target_origin_id         = "alb-staging-api"
@@ -103,7 +103,7 @@ resource "aws_cloudfront_distribution" "frontend" {
     origin_request_policy_id = local.origin_request_policy_all_no_host
   }
 
-  # Default behavior — serves the SPA from S3
+  # Default behavior - serves the SPA from S3
   default_cache_behavior {
     target_origin_id       = "s3-ocn-staging-frontend"
     viewer_protocol_policy = "redirect-to-https"

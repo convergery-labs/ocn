@@ -109,6 +109,23 @@ def scan_all_cmd() -> None:
     )
 
 
+@users.command("set-password")
+@click.option("--email", prompt="Email", help="User's email address")
+@click.password_option(help="Password to set")
+def users_set_password(email: str, password: str) -> None:
+    """Set or reset a password for a user (enables email/password login)."""
+    import db
+    import models.user as user_model
+    db.init_db()
+    user = user_model.get_by_email(email)
+    if not user:
+        click.echo(f"  Error: no active user found with email {email}", err=True)
+        sys.exit(1)
+    user_model.set_password(user["id"], password)
+    click.echo(f"\n  Password set for {user['name']} <{email}>")
+    click.echo("  They can now log in at the UI with their email and password.\n")
+
+
 @users.command("rotate")
 @click.argument("user_id")
 def users_rotate(user_id: str) -> None:

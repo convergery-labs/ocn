@@ -4,11 +4,11 @@ Terraform infrastructure for the OCN platform. Provisions VPC, RDS, ECS Fargate 
 
 ## Stack
 
-- **Terraform** — infrastructure as code
-- **AWS ECS Fargate** — container orchestration
-- **AWS RDS PostgreSQL 16** — shared relational database
-- **AWS Secrets Manager** — runtime secrets injection
-- **AWS S3 + DynamoDB** — remote state and locking
+- **Terraform** - infrastructure as code
+- **AWS ECS Fargate** - container orchestration
+- **AWS RDS PostgreSQL 16** - shared relational database
+- **AWS Secrets Manager** - runtime secrets injection
+- **AWS S3 + DynamoDB** - remote state and locking
 
 ## Prerequisites
 
@@ -57,7 +57,7 @@ Expected secrets per service (path pattern: `ocn/{env}/{service}`):
 
 ## Building and pushing images
 
-Use the Makefile at the repo root — it handles the `linux/amd64` platform flag needed for ECS Fargate when building on Apple Silicon or other non-amd64 hosts.
+Use the Makefile at the repo root - it handles the `linux/amd64` platform flag needed for ECS Fargate when building on Apple Silicon or other non-amd64 hosts.
 
 ```bash
 make push-all        # build + push all three services

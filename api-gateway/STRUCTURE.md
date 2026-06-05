@@ -16,7 +16,7 @@
 |-------|------|---------------|
 | Entry point | `src/__main__.py` | Click CLI → `uvicorn.run`; no DB or seed logic |
 | App factory | `src/app.py` | Assembles `FastAPI`, registers routers; no I/O |
-| Routes | `src/routes/health.py` | `GET /health` — validates upstream URL config |
+| Routes | `src/routes/health.py` | `GET /health` - validates upstream URL config |
 | Routes | `src/routes/proxy_routes.py` | Catch-all proxy routes per upstream service |
 | Auth | `src/auth.py` | `require_auth` / `require_admin` / `optional_auth` FastAPI dependencies |
 | Infrastructure | `src/proxy.py` | `forward_request()` using a shared `httpx.AsyncClient` |
@@ -88,6 +88,6 @@ docker compose run --rm --build api-gateway pytest tests/ -v
 | File | Covers |
 |------|--------|
 | `tests/conftest.py` | ASGI `client` fixture with all `GATEWAY_*` vars pre-set |
-| `tests/test_health.py` | `/health` — 200 when all vars set, 503 when one is missing |
+| `tests/test_health.py` | `/health` - 200 when all vars set, 503 when one is missing |
 | `tests/test_auth.py` | missing token → 401; unknown → 401; wrong role → 403; valid admin → 200; `x-ocn-caller` header propagated downstream |
 | `tests/test_jwt_auth.py` | valid JWT → 200; expired → 401; tampered → 401; domain mismatch → 403; admin bypass; `x-ocn-caller` from JWT claims |

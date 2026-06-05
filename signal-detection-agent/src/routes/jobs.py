@@ -1,4 +1,4 @@
-"""GET /jobs — job listing and results endpoints."""
+"""GET /jobs - job listing and results endpoints."""
 from __future__ import annotations
 
 from typing import Any

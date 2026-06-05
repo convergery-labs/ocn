@@ -173,7 +173,7 @@ def init_db() -> None:
             "ALTER TABLE sources"
             " ADD COLUMN IF NOT EXISTS config JSONB"
         )
-        # Deduplicate existing (run_id, url) pairs — keep highest id per pair
+        # Deduplicate existing (run_id, url) pairs - keep highest id per pair
         conn.execute("""
             DELETE FROM articles
             WHERE id NOT IN (
@@ -183,13 +183,13 @@ def init_db() -> None:
             )
             AND url IS NOT NULL
         """)
-        # One article per URL per run — silently drops cross-source duplicates on insert
+        # One article per URL per run - silently drops cross-source duplicates on insert
         conn.execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS uq_articles_run_url
             ON articles (run_id, url)
             WHERE url IS NOT NULL
         """)
-        # Deduplicate existing (run_id, title) pairs — keep lowest id per pair
+        # Deduplicate existing (run_id, title) pairs - keep lowest id per pair
         conn.execute("""
             DELETE FROM articles
             WHERE id NOT IN (

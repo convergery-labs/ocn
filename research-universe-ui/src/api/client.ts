@@ -5,8 +5,10 @@ const API_KEY_KEY = 'ru_api_key';
 
 export const clearAuth = () => localStorage.removeItem(API_KEY_KEY);
 
+const DEFAULT_API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8007';
+
 export const getApiBase = () =>
-  localStorage.getItem(API_BASE_KEY) ?? 'http://localhost:8007';
+  localStorage.getItem(API_BASE_KEY) ?? DEFAULT_API_BASE;
 
 export const setApiBase = (url: string) =>
   localStorage.setItem(API_BASE_KEY, url.replace(/\/$/, ''));

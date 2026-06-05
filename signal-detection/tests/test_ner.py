@@ -1,6 +1,6 @@
 """Unit tests for the spaCy NER concept-extraction pipeline (CON-148).
 
-No DB, no network, no mocks — tests call extract_concepts() directly.
+No DB, no network, no mocks - tests call extract_concepts() directly.
 Requires en_core_web_lg to be installed: python -m spacy download en_core_web_lg
 """
 

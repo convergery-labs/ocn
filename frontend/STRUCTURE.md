@@ -1,4 +1,4 @@
-# frontend — Structure
+# frontend - Structure
 
 ```
 frontend/
@@ -11,7 +11,7 @@ frontend/
 ├── .prettierrc
 ├── .env.example               Documents VITE_API_BASE_URL
 └── src/
-    ├── main.tsx               React root — mounts BrowserRouter, QueryClientProvider, AuthProvider
+    ├── main.tsx               React root - mounts BrowserRouter, QueryClientProvider, AuthProvider
     ├── App.tsx                Route definitions (public + protected)
     ├── api/
     │   └── client.ts          Axios instance; request interceptor attaches JWT; 401 handler
@@ -20,10 +20,10 @@ frontend/
     ├── context/
     │   └── AuthContext.tsx    localStorage-backed auth state; exposes user, login(), logout()
     ├── hooks/
-    │   ├── useDomains.ts      TanStack Query — GET /news/domains (public)
-    │   ├── useArticles.ts     TanStack useInfiniteQuery — GET /news/articles (domain filter, cursor pagination)
-    │   ├── useLoginMutation.ts  TanStack useMutation — POST /auth/login
-    │   └── useRegisterMutation.ts  TanStack useMutation — POST /auth/register
+    │   ├── useDomains.ts      TanStack Query - GET /news/domains (public)
+    │   ├── useArticles.ts     TanStack useInfiniteQuery - GET /news/articles (domain filter, cursor pagination)
+    │   ├── useLoginMutation.ts  TanStack useMutation - POST /auth/login
+    │   └── useRegisterMutation.ts  TanStack useMutation - POST /auth/register
     ├── components/
     │   ├── ProtectedRoute.tsx Redirects to /login if no token in AuthContext
     │   ├── ArticleCard.tsx    Article card with 300 ms hover-reveal summary tooltip

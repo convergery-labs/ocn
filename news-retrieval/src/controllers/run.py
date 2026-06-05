@@ -54,7 +54,7 @@ def _parse_published_date(published: str) -> Optional[datetime]:
 
 
 class RunCreateResult(TypedDict):
-    """Result of create_run_record — new run or cache hit."""
+    """Result of create_run_record - new run or cache hit."""
 
     run_id: int
     cache_hit: bool

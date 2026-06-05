@@ -74,7 +74,7 @@ class GDELTAdapter(AbstractHistoricalAdapter):
             published = _parse_gdelt_date(seendate, date_from)
             body = _extract_body(url)
             if not body:
-                logger.warning("No body extracted for %s — skipping", url)
+                logger.warning("No body extracted for %s - skipping", url)
                 continue
 
             docs.append(

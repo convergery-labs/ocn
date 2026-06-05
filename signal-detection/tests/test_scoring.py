@@ -184,7 +184,7 @@ class TestComputeClaimNovelty:
 
 
 # ---------------------------------------------------------------------------
-# _compute_claim_novelty — domain scoping
+# _compute_claim_novelty - domain scoping
 # ---------------------------------------------------------------------------
 
 

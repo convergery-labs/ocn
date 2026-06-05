@@ -11,7 +11,7 @@
 ## How to use this file
 For service-specific context and documentation links, read the relevant service's CLAUDE.md.
 
-Confluence space: `Projects` — Cloud: `opengrowthventures.atlassian.net`
+Confluence space: `Projects` - Cloud: `opengrowthventures.atlassian.net`
 
 ## Services
 
@@ -20,12 +20,14 @@ Confluence space: `Projects` — Cloud: `opengrowthventures.atlassian.net`
 | `auth-service` | [auth-service/](auth-service/) | [auth-service/CLAUDE.md](auth-service/CLAUDE.md) | Authentication and API key management |
 | `news-retrieval` | [news-retrieval/](news-retrieval/) | [news-retrieval/CLAUDE.md](news-retrieval/CLAUDE.md) | RSS feed fetching and LLM-based relevance filtering |
 | `signal-detection` | [signal-detection/](signal-detection/) | [signal-detection/CLAUDE.md](signal-detection/CLAUDE.md) | Signal detection and vector-similarity pipelines |
-| `signal-detection-agent` | [signal-detection-agent/](signal-detection-agent/) | [signal-detection-agent/CLAUDE.md](signal-detection-agent/CLAUDE.md) | LLM-driven signal detection agent — classifies articles via Claude with reasoning traces |
+| `signal-detection-agent` | [signal-detection-agent/](signal-detection-agent/) | [signal-detection-agent/CLAUDE.md](signal-detection-agent/CLAUDE.md) | LLM-driven signal detection agent - classifies articles via Claude with reasoning traces |
 | `api-gateway` | [api-gateway/](api-gateway/) | [api-gateway/CLAUDE.md](api-gateway/CLAUDE.md) | Async HTTP reverse proxy to OCN upstream services |
-| `lucky-clarke` | [lucky-clarke/](lucky-clarke/) | [lucky-clarke/CLAUDE.md](lucky-clarke/CLAUDE.md) | A2A-compatible daily AI news digest agent — classifies articles into 12 categories, generates summaries, and emails recipients |
-| `signal-herald` | [signal-herald/](signal-herald/) | [signal-herald/CLAUDE.md](signal-herald/CLAUDE.md) | A2A-compatible daily digest agent — polls signal-detection-agent, summarises by AI-universe category via OpenRouter, emails recipients |
+| `lucky-clarke` | [lucky-clarke/](lucky-clarke/) | [lucky-clarke/CLAUDE.md](lucky-clarke/CLAUDE.md) | A2A-compatible daily AI news digest agent - classifies articles into 12 categories, generates summaries, and emails recipients |
+| `signal-herald` | [signal-herald/](signal-herald/) | [signal-herald/CLAUDE.md](signal-herald/CLAUDE.md) | A2A-compatible daily digest agent - polls signal-detection-agent, summarises by AI-universe category via OpenRouter, emails recipients |
 | `infra` | [infra/](infra/) | [infra/CLAUDE.md](infra/CLAUDE.md) | Terraform infrastructure (VPC, RDS, ECS, ALB, IAM) |
-| `frontend` | [frontend/](frontend/) | [frontend/CLAUDE.md](frontend/CLAUDE.md) | React + Vite SPA — article feed UI |
+| `frontend` | [frontend/](frontend/) | [frontend/CLAUDE.md](frontend/CLAUDE.md) | React + Vite SPA - article feed UI |
+| `research-universe` | [research-universe/](research-universe/) | [research-universe/CLAUDE.md](research-universe/CLAUDE.md) | Chat-first internal tool for maintaining the AI Economy Universe - company lookup, agent-driven addition, taxonomy management, and peer discovery |
+| `research-universe-ui` | [research-universe-ui/](research-universe-ui/) | [research-universe-ui/CLAUDE.md](research-universe-ui/CLAUDE.md) | React + Vite SPA for the AI Economy Universe - chat, pending review, and enrichment scan UI. Standalone; deploys to S3 + CloudFront |
 
 ## Jira Board
 | Board | URL | Project Key |
@@ -100,10 +102,22 @@ ocn/
 │   ├── bootstrap/
 │   ├── modules/
 │   └── staging/
-└── frontend/                 # see frontend/STRUCTURE.md
+├── frontend/                 # see frontend/STRUCTURE.md
+│   ├── CLAUDE.md
+│   ├── STRUCTURE.md
+│   ├── README.md
+│   ├── package.json
+│   ├── vite.config.ts
+│   └── src/
+├── research-universe/        # see research-universe/CLAUDE.md
+│   ├── CLAUDE.md
+│   ├── STRUCTURE.md
+│   ├── Dockerfile
+│   ├── requirements.txt
+│   └── src/
+└── research-universe-ui/     # see research-universe-ui/CLAUDE.md
     ├── CLAUDE.md
     ├── STRUCTURE.md
-    ├── README.md
     ├── package.json
     ├── vite.config.ts
     └── src/

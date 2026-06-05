@@ -1,4 +1,4 @@
-"""Category candidate pre-step — parked, not wired in v1.
+"""Category candidate pre-step - parked, not wired in v1.
 
 Builds top-k category shortlists per article using embedding cosine similarity.
 Re-enable by passing the result as category_hints into classify_article().
@@ -19,48 +19,80 @@ MAX_SUMMARY_CHARS = 1200
 
 CATEGORY_SPECS = [
     {
-        'category': 'Minerals & Raw Materials',
-        'description': 'Copper, rare earths, lithium, aluminum, uranium feedstock, specialty metals, mining royalties, and upstream materials supporting AI infrastructure.',
+        'category': 'Raw Materials & Critical Minerals',
+        'description': 'Copper, rare earths, lithium, aluminum, uranium feedstock, specialty metals, mining royalties, PCB substrates, and upstream materials supporting AI infrastructure.',
     },
     {
-        'category': 'Energy',
-        'description': 'Power generation, utilities, nuclear, gas, renewables, backup power, grid power, and energy storage linked to AI demand.',
+        'category': 'Energy & Grid Infrastructure',
+        'description': 'Power generation, utilities, gas, renewables, backup power, grid transmission, energy storage, and power infrastructure linked to AI data center demand.',
+    },
+    {
+        'category': 'Nuclear & Advanced Energy',
+        'description': 'Nuclear power plants, SMRs, advanced reactors, long-duration energy storage, and next-generation energy sources powering AI compute.',
     },
     {
         'category': 'Semiconductor Manufacturing',
         'description': 'Chip design, AI accelerators, GPUs, foundries, HBM and memory, EDA and IP, semiconductor equipment, advanced packaging, OSAT, wafers, and chip materials.',
     },
     {
-        'category': 'Compute Hardware',
-        'description': 'AI servers, storage, OEM and ODM hardware, embedded compute, quantum hardware, edge hardware, robotics hardware, appliances, and physical compute systems.',
+        'category': 'Compute Hardware & Edge Systems',
+        'description': 'AI servers, storage, OEM and ODM hardware, embedded compute, edge hardware, appliances, physical compute systems, sensors, and electronics manufacturing.',
     },
     {
-        'category': 'Thermal & Cooling',
-        'description': 'HVAC, liquid cooling, chillers, thermal management, water systems, and cooling infrastructure for high-density AI data centers.',
+        'category': 'Networking, Optical & Interconnect',
+        'description': 'High-speed networking switches, optical transceivers, silicon photonics, InfiniBand, fiber interconnects, optical modules, and AI cluster networking infrastructure.',
     },
     {
-        'category': 'Data Center Infrastructure',
-        'description': 'Colocation, data center REITs, construction, EPC, electrical systems, networking, fiber, telecom, towers, and facility infrastructure.',
+        'category': 'Data Centers & Physical Infrastructure',
+        'description': 'Colocation, data center REITs, construction, EPC, electrical systems, HVAC, liquid cooling, thermal management, towers, and physical facility infrastructure.',
     },
     {
-        'category': 'Cloud & Compute Market',
-        'description': 'Hyperscalers, neoclouds, GPU cloud providers, edge cloud, AI compute hosting, sovereign compute, and compute platform operators.',
+        'category': 'Telecom & Connectivity',
+        'description': 'Mobile network operators, 5G equipment, satellite connectivity, tower infrastructure, fixed wireless, backhaul, and telecom networks enabling AI services.',
     },
     {
-        'category': 'Software / Infrastructure',
-        'description': 'SaaS, cybersecurity, databases, developer tools, observability, identity, automation, middleware, infrastructure software, model-serving frameworks, training runtimes, inference engines, MLOps platforms, and horizontal AI-native software products sold across industries.',
+        'category': 'Cloud & Compute Platforms',
+        'description': 'Hyperscalers, neoclouds, GPU cloud providers, edge cloud, AI compute hosting, sovereign compute, managed cloud AI services, and compute platform operators.',
     },
     {
-        'category': 'AI Data',
-        'description': 'Data clouds, data providers, annotation, analytics, geospatial data, knowledge graphs, market data, governance, retrieval systems, vector data, and data infrastructure.',
+        'category': 'AI Software Infrastructure',
+        'description': 'SaaS, cybersecurity, databases, developer tools, observability, identity, automation, middleware, inference engines, MLOps platforms, and horizontal AI-native software products sold across industries.',
     },
     {
-        'category': 'AI Models',
-        'description': 'Frontier model labs, foundation model companies, LLM providers, multimodal model companies, sovereign AI models, model platforms, model releases, embedding models, model checkpoints, model APIs, benchmark results, and direct model capability updates from model providers.',
+        'category': 'AI Data Infrastructure',
+        'description': 'Data annotation, data labeling, data marketplaces, synthetic data, data pipelines, data observability, enterprise data layers, and AI training data infrastructure.',
     },
     {
-        'category': 'Applications & Economy',
-        'description': 'Applied AI companies in healthcare, fintech, robotics, drones, defense, space, industrial automation, consumer AI, vertical AI, research commercialization, and AI adoption.',
+        'category': 'AI Models & Intelligence Layer',
+        'description': 'Frontier model labs, foundation model companies, LLM providers, multimodal models, sovereign AI models, model releases, model APIs, benchmark results, and MLOps tooling.',
+    },
+    {
+        'category': 'Robotics & Physical AI',
+        'description': 'Industrial robotics, humanoid robots, autonomous vehicles, drones, ADAS, EV manufacturers, factory automation, and physical AI systems.',
+    },
+    {
+        'category': 'Quantum Computing & Sensing',
+        'description': 'Quantum computers, quantum networking, QKD, post-quantum cryptography, quantum sensing, and quantum hardware and software infrastructure.',
+    },
+    {
+        'category': 'Life Sciences & Healthcare AI',
+        'description': 'AI drug discovery, medical imaging AI, genomics, clinical AI, diagnostic AI, protein design, healthcare AI platforms, and life sciences AI applications.',
+    },
+    {
+        'category': 'Defense, Aerospace & Sovereign AI',
+        'description': 'Defense primes, aerospace AI, geospatial intelligence, government AI contracts, sovereign AI programs, space launch, and national security AI systems.',
+    },
+    {
+        'category': 'Financial Infrastructure & AI Capital',
+        'description': 'Fintech AI, AI lending, payments AI, project finance for AI capex, AI-focused investment vehicles, and financial infrastructure supporting AI deployment.',
+    },
+    {
+        'category': 'Water & Resource Infrastructure',
+        'description': 'Water treatment, water recycling, waste heat recovery, and resource infrastructure supporting AI data center sustainability and operations.',
+    },
+    {
+        'category': 'Applications & Digital Economy',
+        'description': 'Consumer AI, vertical AI applications, retail AI, marketing technology, digital media, gaming, agtech, smart buildings, and AI adoption across the digital economy.',
     },
 ]
 

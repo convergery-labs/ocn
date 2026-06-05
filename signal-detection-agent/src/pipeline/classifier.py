@@ -1,4 +1,4 @@
-"""LLM-based signal classifier — base pass + optional STORM-style second pass."""
+"""LLM-based signal classifier - base pass + optional STORM-style second pass."""
 from __future__ import annotations
 
 import json
@@ -10,25 +10,14 @@ from pathlib import Path
 from typing import Any
 from urllib.request import Request, urlopen
 
+from pipeline.categories import ALLOWED_CATEGORIES
+
 ALLOWED_SIGNAL = {'signal', 'weak_signal', 'noise'}
 ALLOWED_MATERIALITY = {'high', 'medium', 'low', 'none'}
 SIGNAL_SCORE_THRESHOLD = 0.60
 WEAK_SIGNAL_SCORE_THRESHOLD = 0.40
 ALLOWED_NOVELTY = {'step_change', 'meaningful_update', 'incremental_update', 'repeated_coverage'}
 ALLOWED_CONFIDENCE = {'high', 'medium', 'low'}
-ALLOWED_CATEGORIES = {
-    'Minerals & Raw Materials',
-    'Energy',
-    'Semiconductor Manufacturing',
-    'Computer Hardware',
-    'Thermal & Cooling',
-    'Data Center Infrastructure',
-    'Cloud & Compute Market',
-    'Software / Infrastructure',
-    'AI Data',
-    'AI Models',
-    'Applications & Economy',
-}
 ALLOWED_ENTITY_TYPES = {
     'company',
     'model_product',
@@ -362,7 +351,7 @@ def apply_verification_adjustments(result: dict[str, Any]) -> dict[str, Any]:
     else:
         detection = 'noise'
     trace = (
-        f"Score trace — base {base_score:.2f} → pre_verification {pvs:.2f}"
+        f"Score trace - base {base_score:.2f} → pre_verification {pvs:.2f}"
         f" → QA net {total_adj:+.2f} → final {score:.2f}."
     )
     reason = result.get('refinement_reason') or ''
@@ -459,7 +448,7 @@ def classify_article_two_stage(
         f_history = ex.submit(entity_history_fn, entity_names)
         f_web = ex.submit(web_search_fn, entity_names[:2], base.get('signal_reason', ''))
     history = f_history.result()
-    web_snips = f_web.result()[:3]  # cap at top 3; [] on any failure — second pass still runs
+    web_snips = f_web.result()[:3]  # cap at top 3; [] on any failure - second pass still runs
 
     # Stage 2: refined classification
     user_prompt = build_user_prompt_v2(
@@ -502,7 +491,7 @@ def classify_article_two_stage(
                 time.sleep(0.25)
                 continue
 
-    # Second pass failed — fall back to base with null second-pass fields
+    # Second pass failed - fall back to base with null second-pass fields
     return {
         **base,
         'base_signal_detection': base_signal_detection,

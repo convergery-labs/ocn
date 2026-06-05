@@ -1,4 +1,4 @@
-"""Routes for /users — admin user management."""
+"""Routes for /users - admin user management."""
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -37,7 +37,7 @@ def _serialize(user: dict, domains: list[str]) -> dict:
 async def get_users(
     caller: dict = Depends(require_admin),
 ) -> list[dict]:
-    """List all users — admin only."""
+    """List all users - admin only."""
     users = list_users()
     return [
         _serialize(u, get_domain_slugs_for_user(u["id"]))
@@ -50,7 +50,7 @@ async def get_user(
     user_id: int,
     caller: dict = Depends(require_admin),
 ) -> dict:
-    """Return a single user record — admin only."""
+    """Return a single user record - admin only."""
     user = get_user_by_id(user_id)
     if user is None:
         raise HTTPException(status_code=404, detail="User not found.")
@@ -71,7 +71,7 @@ async def patch_user(
     body: PatchUserIn,
     caller: dict = Depends(require_admin),
 ) -> dict:
-    """Update is_active, role, and/or domain associations — admin only."""
+    """Update is_active, role, and/or domain associations - admin only."""
     with transaction():
         user = get_user_by_id(user_id)
         if user is None:

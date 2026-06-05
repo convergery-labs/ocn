@@ -1,4 +1,4 @@
-"""Route for GET /jwks — returns the RS256 public key in JWKS format."""
+"""Route for GET /jwks - returns the RS256 public key in JWKS format."""
 import base64
 import os
 from typing import Optional
