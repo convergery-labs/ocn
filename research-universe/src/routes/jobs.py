@@ -99,26 +99,21 @@ def get_scan_job(job_id: str) -> dict[str, Any]:
 def get_schedule(
     _: dict = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """Return last_run_at and next_run_at for the twice-weekly full sweep.
-
-    Schedule: every Monday and Thursday at 09:00 UTC.
-    """
+    """Return last_run_at and next_run_at for the 15-day sweep."""
     from datetime import datetime, timedelta, timezone
 
     last_run_at = scan_job_model.get_last_run_at()
 
     now = datetime.now(timezone.utc)
-    scheduled_days = {0, 3}  # Monday=0, Thursday=3
-    next_run_at: datetime | None = None
-    for delta in range(8):
-        candidate = (now + timedelta(days=delta)).replace(
-            hour=9, minute=0, second=0, microsecond=0
-        )
-        if candidate.weekday() in scheduled_days and candidate > now:
-            next_run_at = candidate
-            break
+    if last_run_at:
+        last_dt = last_run_at if isinstance(last_run_at, datetime) else datetime.fromisoformat(str(last_run_at))
+        if last_dt.tzinfo is None:
+            last_dt = last_dt.replace(tzinfo=timezone.utc)
+        next_run_at = last_dt + timedelta(days=15)
+    else:
+        next_run_at = now + timedelta(days=15)
 
     return {
         "last_run_at": last_run_at,
-        "next_run_at": next_run_at.isoformat() if next_run_at else None,
+        "next_run_at": next_run_at.isoformat(),
     }

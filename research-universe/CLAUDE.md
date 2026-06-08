@@ -206,8 +206,8 @@ A background job triggered manually via a button in the Lovable UI (`POST /jobs/
 - Progress: `GET /jobs/{job_id}` - returns per-category counts and overall status
 - UI polls this endpoint to update the progress indicator
 
-**Schedule:** CloudWatch EventBridge runs a full 19-category scan twice a week (e.g. Monday and Thursday at 09:00 UTC). No per-category rotation - each run always covers all 19.
-- `GET /jobs/schedule` returns `{ last_run_at, next_run_at }` - no per-category tracking needed
+**Schedule:** CloudWatch EventBridge runs a full 19-category scan every 15 days at 09:00 UTC. No per-category rotation - each run always covers all 19.
+- `GET /jobs/schedule` returns `{ last_run_at, next_run_at }` where `next_run_at = last_run_at + 15 days`
 - The manual "Run Scan" button in the UI remains available for ad-hoc runs at any time
 
 **Differs from `find_peers`:**
@@ -287,7 +287,7 @@ Every `/chat` response returns this shape - the frontend reads `card_type` to re
 ### Auth
 | Phase | Approach |
 |-------|---------|
-| v1 (now) | API key auth - `ru_` prefixed keys, bcrypt-hashed in DB. Created via CLI (`python -m src users create`). Sent as `Authorization: Bearer <key>` |
+| v1 (now) | Email + password login (`POST /auth/login`) issues a session token. API keys (`ru_` prefix) still supported via `Authorization: Bearer <key>`. Users created via CLI (`python -m src users create`); passwords set via `python -m src users set-password`. |
 | v2 | Google OAuth restricted to company domain; backend issues a short-lived JWT; ~7–8 hrs effort |
 
 ### Misspelling Handling
