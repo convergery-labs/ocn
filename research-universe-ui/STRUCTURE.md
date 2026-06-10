@@ -24,25 +24,26 @@ research-universe-ui/
     ├── utils/
     │   └── url.ts         safeUrl() - strips javascript:/data: protocol links (XSS guard)
     └── components/
-        ├── Sidebar.tsx    Dark gradient sidebar - brand, nav items, pending badge,
-        │                    auth status indicator, API URL + key inputs
-        ├── ChatTab.tsx    Chat interface - message thread, typing indicator, card rendering.
-        │                    Sub-components: WelcomeScreen, MessageRow, CompanyCard,
-        │                    PeerProposals, ReviewNudge, TypingIndicator
+        ├── LoginScreen.tsx Email + password login form → POST /auth/login → session token
+        ├── Sidebar.tsx    Top nav bar - brand, tab links, pending badge, account pill + dropdown
+        ├── ChatTab.tsx    Chat interface - constellation backdrop, message thread, typing indicator,
+        │                    card rendering. Sub-components: MessageRow, CompanyCard,
+        │                    PeerProposals, ReviewNudge
         ├── PendingTab.tsx Pending review queue - skeleton loading, per-card approve,
         │                    bulk approve-all with progress, toast notifications
-        └── EnrichmentTab.tsx  Two sub-tabs:
+        └── DiscoveryTab.tsx   Two sub-tabs:
                                • Run Scan - category grid, start scan, live progress bar,
                                  per-category status (pending/running/done)
-                               • Schedule - last_enriched_at table, highlights next category
+                               • Schedule - last_run_at / next_run_at (every 15 days)
 ```
 
 ## Data flow
 
 ```
-User types in sidebar API key
-  → App.tsx calls api.me() to verify
-  → on success: currentUser set, pendingCount refreshed, categories load
+User submits email + password on LoginScreen
+  → api.login() → POST /auth/login → session_token stored in localStorage
+  → App.tsx calls api.me() to verify on load
+  → on success: currentUser set, pendingCount refreshed
 
 Chat tab:
   User message → api.chat() → POST /chat
@@ -54,14 +55,14 @@ Pending tab:
   Approve → api.verify(id) → POST /companies/{id}/verify
   → card removed, badge decremented
 
-Enrichment tab (scan):
+Discovery tab (scan):
   api.startScan(ids) → POST /jobs/scan → { job_id }
   setInterval 5s → api.pollScan(job_id) → GET /jobs/scan/{job_id}
   → updates progress bar + per-category status until status = completed|failed
 
-Enrichment tab (schedule):
-  api.schedule() → GET /jobs/schedule → ScheduleEntry[]
-  → table with last_enriched_at + is_next flag
+Discovery tab (schedule):
+  api.schedule() → GET /jobs/schedule → { last_run_at, next_run_at }
+  → shows last run date + next run (last + 15 days)
 ```
 
 ## Key design decisions

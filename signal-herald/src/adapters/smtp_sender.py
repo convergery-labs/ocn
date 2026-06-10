@@ -90,7 +90,7 @@ def _render_html(
         '<meta charset="UTF-8">',
         '<meta name="viewport" content="width=device-width,initial-scale=1.0">',
         "<style>",
-        "body{margin:0;padding:0;background:#FAFAF8;font-family:'IBM Plex Sans',Arial,sans-serif;-webkit-text-size-adjust:100%}",
+        "body{margin:0;padding:0;background:#FAFAF8;font-family:'IBM Plex Sans',Arial,sans-serif;-webkit-text-size-adjust:100%;text-align:left}",
         "a{color:inherit}",
         "@media only screen and (max-width:620px){",
         ".wrap{padding:0!important}",
@@ -113,18 +113,12 @@ def _render_html(
 
     # ── HEADER ──
     parts.append(
-        f'<div class="hdr" style="padding:28px 32px 24px;border-bottom:1px solid #E0E0DB">'
-        f'<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-bottom:20px">'
-        f'<tr>'
-        f'<td style="vertical-align:top">'
+        f'<div class="hdr" style="padding:28px 32px 24px;border-bottom:1px solid #E0E0DB;text-align:left">'
+        f'<div style="margin-bottom:20px">'
         f'<span style="font-size:11px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:#1a7a4a;display:block">AlphaStreet.ai</span>'
         f'<span style="font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#111;font-weight:500;display:block;margin-top:3px">OCN · Signal Intelligence</span>'
-        f'<span class="date-mobile" style="display:none;font-size:10px;color:#111;margin-top:4px">{date_str}</span>'
-        f'</td>'
-        f'<td class="date-desktop" style="text-align:right;vertical-align:top;font-size:10px;color:#111">{date_str}</td>'
-        f'</tr>'
-        f'</table>'
-        f'<div class="hdr-title" style="font-size:27px;font-weight:300;color:#111;letter-spacing:-0.4px;line-height:1.2;margin-bottom:10px">'
+        f'</div>'
+        f'<div class="hdr-title" style="font-size:27px;font-weight:600;color:#111;letter-spacing:-0.4px;line-height:1.2;margin-bottom:10px">'
         f'{title_html}'
         f'</div>'
         f'<div style="font-size:15px;color:#111;line-height:1.5;letter-spacing:0.2px">Daily signal intelligence across the AI economy</div>'
@@ -213,7 +207,7 @@ def send_digest(
 
     now = datetime.now(tz=timezone.utc)
     date_str = now.strftime("%-d %B %Y")
-    subject = f"OCN Daily Signal Intelligence Digest: Key AI Economy Signals - {date_str}"
+    subject = f"OCN Daily Signal Intelligence Digest - {date_str}"
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject

@@ -46,19 +46,20 @@ Internal use only. 3–4 admin users.
 
 ### Discovery tab - Schedule
 - Shows `last_run_at` and `next_run_at` for the full sweep (from `GET /jobs/schedule`)
-- CloudWatch runs a full 19-category scan twice a week (Monday + Thursday 09:00 UTC)
-- No per-category rotation - every scheduled run covers all 19 categories
+- CloudWatch runs a full 19-category scan every 15 days at 09:00 UTC
+- `next_run_at` = `last_run_at + 15 days`; no per-category rotation
 
 ---
 
 ## Auth
 
-API key entered in the sidebar, stored in `localStorage` under `ru_api_key`.  
-All requests send `Authorization: Bearer <key>`.  
-Key is validated against `GET /users/me` on load and after any change.
+Login screen takes email + password → `POST /auth/login` → `session_token` stored in `localStorage` under `ru_api_key`.  
+All requests send `Authorization: Bearer <session_token>`.  
+Token validated against `GET /users/me` on load; expired sessions redirect back to login screen.
 
-**Planned v2:** Google OAuth (backend issues a JWT; frontend stores it in place of the API key).  
-Effort: ~7–8 hrs. Requires Google Cloud Console OAuth 2.0 credentials + a registered redirect URI.
+Passwords set via CLI: `python -m src users set-password --email <email>`
+
+**Planned v2:** Google OAuth restricted to company domain; ~7–8 hrs effort.
 
 ---
 

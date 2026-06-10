@@ -18,7 +18,7 @@ from agent.tools import _resolve_taxonomy_ids
 
 log = logging.getLogger(__name__)
 
-DUPLICATE_THRESHOLD = 0.7  # match_score above which we consider a company already present
+DUPLICATE_THRESHOLD = 0.65  # trgm score for pure name similarity (word-overlap handles lower-scoring variants)
 CONCURRENCY = 3  # max categories processed in parallel
 
 
@@ -85,18 +85,128 @@ def _call_discovery_llm(
         return []
 
 
+def _word_overlap(a: str, b: str) -> bool:
+    """Return True if one name's meaningful words are all contained in the other.
+
+    Catches pairs like 'Zenlayer' / 'Zenlayer Asia', 'Proxim Inc' / 'Proxim Wireless',
+    'Runwayml' / 'Runway ML' that score below DUPLICATE_THRESHOLD on trgm.
+    """
+    _STOP = {"inc", "llc", "ltd", "group", "holdings", "technologies", "technology",
+             "corporation", "corp", "co", "company", "gmbh", "ag", "sa", "plc", "bv", "nv",
+             "the", "and", "of", "for", "a", "an", "solutions", "systems", "services",
+             "networks", "international", "global",
+             "adr", "ads", "shs", "ord"}
+
+    def _words(s: str) -> set[str]:
+        import re
+        # Normalise concatenated names like "runwayml" → "runway ml" via camelCase/lowercase split
+        s = re.sub(r"([a-z])([A-Z])", r"\1 \2", s)
+        tokens = re.split(r"[\s\-/&.,()]+", s.lower())
+        return {t for t in tokens if t and t not in _STOP and len(t) > 1}
+
+    def _strip_concat(s: str) -> str:
+        """Remove all spaces/punctuation for concatenation comparison."""
+        import re
+        return re.sub(r"[\s\-/&.,()]+", "", s.lower())
+
+    # Direct concatenation match: "runwayml" == "runway ml" stripped
+    if _strip_concat(a) == _strip_concat(b):
+        return True
+
+    words_a = _words(a)
+    words_b = _words(b)
+    if not words_a or not words_b:
+        return False
+    shorter, longer = (words_a, words_b) if len(words_a) <= len(words_b) else (words_b, words_a)
+    # All words of the shorter name appear in the longer name
+    return shorter.issubset(longer)
+
+
+def _sig_words(name: str) -> list[str]:
+    """Return significant tokens from a company name (strips stopwords, punctuation)."""
+    import re as _re
+    _SW = {"inc", "llc", "ltd", "group", "holdings", "technologies", "technology",
+           "corporation", "corp", "co", "company", "gmbh", "ag", "sa", "plc", "bv", "nv",
+           "the", "and", "of", "for", "a", "an", "solutions", "systems", "services",
+           "networks", "international", "global",
+           "adr", "ads", "shs", "ord"}  # share-class suffixes — not part of company identity
+    return [t for t in _re.split(r"[\s\-/&.,()]+", name.lower()) if t and t not in _SW and len(t) > 1]
+
+
 def _is_duplicate(company_name: str, ticker: str) -> bool:
     """Return True if company is already in the universe."""
-    # Check by name
-    results = company_model.search_companies(company_name, limit=3)
+    import re as _re
+
+    proposed_sig = _sig_words(company_name)
+
+    # --- Name check 1: full name fuzzy + word-overlap ---
+    results = company_model.search_companies(company_name, limit=10)
     for r in results:
-        if r.get("match_score", 0) >= DUPLICATE_THRESHOLD:
+        score = r.get("match_score", 0)
+        existing_sig = _sig_words(r["company_name"])
+        overlap = _word_overlap(company_name, r["company_name"])
+
+        if score >= DUPLICATE_THRESHOLD:
+            if len(existing_sig) >= len(proposed_sig):
+                # High-confidence same-length match only blocks when names are
+                # actually overlapping OR score is very high (≥0.85 catches "TSMC"/"TSM").
+                # Avoids "Leonardo AI" being blocked by "Leonardo DRS" at 0.75 (shared first
+                # word, but genuinely different companies).
+                if overlap or score >= 0.85:
+                    return True
+            else:
+                # Existing is shorter (e.g. "Relativity" vs "Relativity Media") —
+                # require very high confidence to block.
+                if score >= 0.80:
+                    return True
+
+        # Word-overlap fallback for variants like "Zenlayer" / "Zenlayer Asia",
+        # "Proxim Inc" / "Proxim Wireless" that score below threshold.
+        # Guard: only fire when the existing entry is at least as long as the proposed name.
+        # This prevents "Tencent" (1 word) from blocking "Tencent Music" (2 words).
+        if overlap and len(existing_sig) >= len(proposed_sig) and score >= 0.40:
             return True
-    # Check by ticker (exact)
-    if ticker and ticker.lower() != "private":
-        ticker_results = company_model.search_companies(ticker, limit=1)
-        if ticker_results and ticker_results[0].get("match_score", 0) >= 0.95:
-            return True
+
+    # --- Name check 2: search each significant token individually ---
+    # Catches "Tencent Holdings" when only "Tencent" is in DB,
+    # "Eoptolink Technology Corporation" when "Eoptolink" is in DB.
+    # Guard: only fire when the existing entry has >= as many significant words as the proposed name.
+    # Prevents "Nokia" (1 word) from blocking "Nokia Solutions" (2 words).
+    _STOP_SET = {"inc", "llc", "ltd", "group", "holdings", "technologies", "technology",
+                 "corporation", "corp", "co", "company", "gmbh", "ag", "sa",
+                 "plc", "bv", "nv", "the", "and", "of", "for", "a", "an",
+                 "adr", "ads", "shs", "ord", "international", "global", "solutions",
+                 "systems", "services", "networks"}
+    tokens = [
+        t for t in _re.split(r"[\s\-/&.,()]+", company_name.lower())
+        if t and t not in _STOP_SET and len(t) > 3
+    ]
+    for token in tokens:
+        token_results = company_model.search_companies(token, limit=5)
+        for r in token_results:
+            if r.get("match_score", 0) >= 0.85 and _word_overlap(company_name, r["company_name"]):
+                existing_sig = _sig_words(r["company_name"])
+                if len(existing_sig) >= len(proposed_sig):
+                    return True
+
+    # --- Ticker check: case-insensitive, base-ticker prefix match ---
+    # "688256" matches "688256.SS"; "AAPL" matches "aapl".
+    # Uses a direct LIKE query to handle exchange-suffix variants that exact match misses.
+    if ticker and ticker.lower() not in ("private", ""):
+        ticker_upper = ticker.upper()
+        base_ticker = ticker_upper.split(".")[0]
+        if base_ticker:
+            from db import get_db
+            with get_db() as conn:
+                cur = conn.execute(
+                    "SELECT 1 FROM universe_companies"
+                    " WHERE UPPER(ticker) = :full"
+                    "    OR UPPER(ticker) LIKE :prefix"
+                    " LIMIT 1",
+                    {"full": ticker_upper, "prefix": base_ticker + ".%"},
+                )
+                if cur.fetchone():
+                    return True
     return False
 
 

@@ -358,11 +358,6 @@ resource "aws_ecs_service" "signal_detection_agent" {
 }
 
 
-resource "aws_cloudwatch_event_rule" "promote_corpus" {
-  name                = "${var.env}-promote-corpus-nightly"
-  schedule_expression = "cron(0 0 * * ? *)"
-}
-
 
 resource "aws_iam_role" "ecs_events" {
   name = "${var.env}-ecs-events-role"
@@ -392,8 +387,8 @@ resource "aws_iam_role_policy" "ecs_events_run_task" {
         Action = ["ecs:RunTask"]
         Resource = [
           aws_ecs_task_definition.signal_detection.arn,
-          aws_ecs_task_definition.lucky_clarke.arn,
           aws_ecs_task_definition.signal_herald.arn,
+          aws_ecs_task_definition.research_universe.arn,
         ]
       },
       {
@@ -406,27 +401,6 @@ resource "aws_iam_role_policy" "ecs_events_run_task" {
 }
 
 
-resource "aws_cloudwatch_event_target" "promote_corpus" {
-  rule     = aws_cloudwatch_event_rule.promote_corpus.name
-  arn      = aws_ecs_cluster.main.arn
-  role_arn = aws_iam_role.ecs_events.arn
-  ecs_target {
-    task_definition_arn = aws_ecs_task_definition.signal_detection.arn
-    launch_type         = "FARGATE"
-    network_configuration {
-      subnets         = var.private_subnet_ids
-      security_groups = [var.signal_sg_id]
-    }
-  }
-  input = jsonencode({
-    containerOverrides = [
-      {
-        name    = "signal-detection"
-        command = ["python", "-m", "src", "promote-corpus"]
-      }
-    ]
-  })
-}
 
 
 resource "aws_ecs_task_definition" "api_gateway" {
@@ -720,33 +694,6 @@ resource "aws_cloudwatch_event_target" "signal_herald_daily" {
 }
 
 
-resource "aws_cloudwatch_event_rule" "lucky_clarke_daily" {
-  name                = "${var.env}-lucky-clarke-daily"
-  schedule_expression = "cron(0 17 * * ? *)"
-}
-
-
-resource "aws_cloudwatch_event_target" "lucky_clarke_daily" {
-  rule     = aws_cloudwatch_event_rule.lucky_clarke_daily.name
-  arn      = aws_ecs_cluster.main.arn
-  role_arn = aws_iam_role.ecs_events.arn
-  ecs_target {
-    task_definition_arn = aws_ecs_task_definition.lucky_clarke.arn
-    launch_type         = "FARGATE"
-    network_configuration {
-      subnets         = var.private_subnet_ids
-      security_groups = [var.lucky_clarke_sg_id]
-    }
-  }
-  input = jsonencode({
-    containerOverrides = [
-      {
-        name    = "lucky-clarke"
-        command = ["python", "-m", "src", "run"]
-      }
-    ]
-  })
-}
 
 
 # ---------------------------------------------------------------------------
@@ -845,11 +792,10 @@ resource "aws_ecs_service" "research_universe" {
 }
 
 
-# Daily scheduled scan - picks the least recently enriched category
 resource "aws_cloudwatch_event_rule" "research_universe_scan" {
   name                = "${var.env}-research-universe-scan"
-  description         = "Daily universe enrichment: scan next category"
-  schedule_expression = "cron(0 6 * * ? *)"  # 06:00 UTC daily
+  description         = "Universe enrichment: full 19-category scan every 15 days"
+  schedule_expression = "rate(15 days)"  # every 15 days at 09:00 UTC
 }
 
 
@@ -871,7 +817,7 @@ resource "aws_cloudwatch_event_target" "research_universe_scan" {
     containerOverrides = [
       {
         name    = "research-universe"
-        command = ["python", "-m", "src", "scan-next"]
+        command = ["python", "-m", "src", "scan-all"]
       }
     ]
   })

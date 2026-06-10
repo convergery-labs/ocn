@@ -174,27 +174,28 @@ TOOL_DEFINITIONS: list[dict] = [
             },
         },
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "find_peers",
-            "description": (
-                "Find companies that belong in the same category/subcategory but are not yet "
-                "in the universe. Checks existing companies first, then uses Claude's knowledge "
-                "to suggest missing peers. Call this after every new company addition."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "company_name": {"type": "string", "description": "The company just added"},
-                    "category_name": {"type": "string"},
-                    "subcategory_name": {"type": "string"},
-                    "country": {"type": "string"},
-                },
-                "required": ["company_name", "category_name", "subcategory_name", "country"],
-            },
-        },
-    },
+    # find_peers disabled — re-enable when peer discovery is needed
+    # {
+    #     "type": "function",
+    #     "function": {
+    #         "name": "find_peers",
+    #         "description": (
+    #             "Find companies that belong in the same category/subcategory but are not yet "
+    #             "in the universe. Checks existing companies first, then uses Claude's knowledge "
+    #             "to suggest missing peers. Call this after every new company addition."
+    #         ),
+    #         "parameters": {
+    #             "type": "object",
+    #             "properties": {
+    #                 "company_name": {"type": "string", "description": "The company just added"},
+    #                 "category_name": {"type": "string"},
+    #                 "subcategory_name": {"type": "string"},
+    #                 "country": {"type": "string"},
+    #             },
+    #             "required": ["company_name", "category_name", "subcategory_name", "country"],
+    #         },
+    #     },
+    # },
 ]
 
 
