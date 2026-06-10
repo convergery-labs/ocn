@@ -1,5 +1,6 @@
 """LLM adapter: per-category summarisation using OpenRouter."""
 import logging
+import re
 from typing import Any
 
 from openai import OpenAI
@@ -9,6 +10,9 @@ import config
 logger = logging.getLogger(__name__)
 
 _SIGNAL_TIER_ORDER = {"signal": 0, "weak_signal": 1, "noise": 2}
+
+# Matches straight, curly, and backtick quotes
+_QUOTE_CHARS = r'["“”‘’`\']'
 
 
 def _client() -> OpenAI:
@@ -55,7 +59,7 @@ def summarise_category(
         f'Write a 3-4 sentence investment-focused summary for the category '
         f'{category} based on these articles. '
         f"Prioritise signal-tier articles with high materiality and step_change novelty. "
-        f"Be concise and factual.\n\n"
+        f"Be concise and factual. Do not quote or wrap any category name in quotation marks.\n\n"
         f"Articles:\n" + "\n".join(article_lines)
     )
 
@@ -65,4 +69,9 @@ def summarise_category(
         messages=[{"role": "user", "content": prompt}],
         temperature=0.3,
     )
-    return (response.choices[0].message.content or "").strip()
+    text = (response.choices[0].message.content or "").strip()
+    # Strip quotes around any known category name in the summary
+    for cat in config.CATEGORIES:
+        escaped = re.escape(cat)
+        text = re.sub(rf'{_QUOTE_CHARS}{escaped}{_QUOTE_CHARS}', cat, text)
+    return text
