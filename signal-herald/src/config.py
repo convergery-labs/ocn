@@ -24,27 +24,22 @@ CATEGORIES: list[str] = [
 ]
 
 EMAIL_RECIPIENTS: list[str] = [
-    "gunjan@opengrowth.com",
-    "karan@nasiko.com",
     "ayushi.shah@opengrowth.com",
-    "aditya.jaiswal@opengrowth.com",
-    "jaikrit.sinha@opengrowth.com",
-    "anmol.majithia@opengrowth.com",
-    "jatin@opengrowth.com",
-    "scott@opengrowth.com",
-    "kuldeep@foliumlabs.net",
     "wasikul.islam@cern.ch",
-
+    "kajal@foliumlabs.net",
 ]
+
 if _test_email := os.environ.get("DIGEST_TEST_EMAIL"):
     EMAIL_RECIPIENTS = [_test_email]
 
 SIGNAL_AGENT_URL: str = os.environ.get(
     "SIGNAL_AGENT_URL", "http://localhost:8003"
 )
+
 SIGNAL_HERALD_URL: str = os.environ.get(
     "SIGNAL_HERALD_URL", "http://localhost:8006"
 )
+
 SIGNAL_CALLER_SUB: int = int(os.environ.get("SIGNAL_CALLER_SUB", "1"))
 
 OPENROUTER_API_KEY: str = os.environ.get("OPENROUTER_API_KEY", "")

@@ -32,25 +32,25 @@ The master taxonomy is derived from `AI_Economy_Universe_Final.xlsx` with four s
 ### 19 Categories
 | # | Category | Companies |
 |---|----------|-----------|
-| 01 | Raw Materials & Critical Minerals | 50 |
-| 02 | Energy & Grid Infrastructure | 97 |
-| 03 | Nuclear & Advanced Energy | 7 |
-| 04 | Semiconductor Manufacturing | 154 |
-| 05 | Compute Hardware & Edge Systems | 94 |
-| 06 | Networking, Optical & Interconnect | 25 |
-| 07 | Data Centers & Physical Infrastructure | 141 |
-| 08 | Telecom & Connectivity | 21 |
+| 01 | Raw Materials & Critical Minerals | 150 |
+| 02 | Energy & Grid Infrastructure | 100 |
+| 03 | Nuclear & Advanced Energy | 58 |
+| 04 | Semiconductor Manufacturing | 181 |
+| 05 | Compute Hardware & Edge Systems | 89 |
+| 06 | Networking, Optical & Interconnect | 45 |
+| 07 | Data Centers & Physical Infrastructure | 172 |
+| 08 | Telecom & Connectivity | 22 |
 | 09 | Cloud & Compute Platforms | 34 |
-| 10 | AI Software Infrastructure | 125 |
-| 11 | AI Data Infrastructure | 8 |
-| 12 | AI Models & Intelligence Layer | 3 |
-| 13 | Robotics & Physical AI | 31 |
-| 14 | Quantum Computing & Sensing | 3 |
-| 15 | Life Sciences & Healthcare AI | 15 |
-| 16 | Defense, Aerospace & Sovereign AI | 12 |
-| 17 | Financial Infrastructure & AI Capital | 17 |
+| 10 | AI Software Infrastructure | 186 |
+| 11 | AI Data Infrastructure | 55 |
+| 12 | AI Models & Intelligence Layer | 33 |
+| 13 | Robotics & Physical AI | 32 |
+| 14 | Quantum Computing & Sensing | 36 |
+| 15 | Life Sciences & Healthcare AI | 88 |
+| 16 | Defense, Aerospace & Sovereign AI | 34 |
+| 17 | Financial Infrastructure & AI Capital | 51 |
 | 18 | Water & Resource Infrastructure | 6 |
-| 19 | Applications & Digital Economy | 160 |
+| 19 | Applications & Digital Economy | 166 |
 
 ---
 

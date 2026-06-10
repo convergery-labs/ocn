@@ -19,7 +19,7 @@ MAX_TOOL_ITERATIONS = 10
 # Tools whose results determine the UI card shown to the user
 _CARD_TOOLS = {
     "search_companies", "get_company", "create_company",
-    "update_company", "verify_company", "list_pending", "find_peers",
+    "update_company", "verify_company", "list_pending",  # "find_peers" disabled
 }
 _MATCH_THRESHOLD = 0.7  # minimum search score to show a company_card
 
@@ -50,9 +50,9 @@ def _card_from_tool(tool_name: str, result_str: str) -> tuple[str | None, dict |
     if tool_name in ("create_company", "update_company"):
         return "proposed_entry", result
 
-    if tool_name == "find_peers":
-        peers = result.get("peers", [])
-        return ("peer_proposals", {"peers": peers}) if peers else (None, None)
+    # if tool_name == "find_peers":
+    #     peers = result.get("peers", [])
+    #     return ("peer_proposals", {"peers": peers}) if peers else (None, None)
 
     if tool_name == "list_pending":
         return "review_nudge", {"pending_count": result.get("count", 0)}

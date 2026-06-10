@@ -138,5 +138,131 @@ def users_rotate(user_id: str) -> None:
     click.echo("  Old key is now invalid.\n")
 
 
+@cli.command("bulk-import")
+@click.argument("json_file")
+@click.option("--dry-run", is_flag=True, default=False, help="Print what would be inserted without writing to DB")
+def bulk_import_cmd(json_file: str, dry_run: bool) -> None:
+    """Bulk import companies from a JSON file (output of excel cross-reference).
+
+    JSON must be a list of objects with keys: Company, Ticker, Market, Country,
+    Website, Category, Subcategory.
+    """
+    import json as _json
+    import db
+    from db import get_db
+
+    db.init_db()
+
+    with open(json_file) as f:
+        companies = _json.load(f)
+
+    click.echo(f"Loaded {len(companies)} companies from {json_file}")
+
+    # Load taxonomy
+    cat_map: dict[str, int] = {}
+    sub_map: dict[tuple, int] = {}
+    with get_db() as conn:
+        for row in conn.execute("SELECT id, name FROM universe_taxonomy WHERE type='category'").fetchall():
+            cat_map[row["name"].strip()] = row["id"]
+        for row in conn.execute("SELECT id, name, parent_id FROM universe_taxonomy WHERE type='subcategory'").fetchall():
+            sub_map[(row["name"].strip(), row["parent_id"])] = row["id"]
+
+    # Pre-fetch existing names + tickers for dedup
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT LOWER(company_name) AS n, LOWER(COALESCE(ticker,'')) AS t FROM universe_companies"
+        ).fetchall()
+    existing_names   = {r["n"] for r in rows}
+    existing_tickers = {r["t"] for r in rows if r["t"] and r["t"] not in ("", "private")}
+
+    inserted = skipped_dup = skipped_no_cat = 0
+    errors: list[str] = []
+
+    for c in companies:
+        name     = (c.get("Company") or "").strip()
+        ticker   = (c.get("Ticker") or "").strip()
+        market   = (c.get("Market") or "").strip()
+        country  = (c.get("Country") or "").strip()
+        website  = (c.get("Website") or "").strip()
+        cat_name = (c.get("Category") or "").strip()
+        sub_name = (c.get("Subcategory") or "").strip()
+
+        if not name:
+            continue
+
+        if name.lower() in existing_names:
+            skipped_dup += 1
+            continue
+        if ticker and ticker.lower() not in ("", "private") and ticker.lower() in existing_tickers:
+            skipped_dup += 1
+            continue
+
+        cat_id = cat_map.get(cat_name)
+        if not cat_id:
+            for k, v in cat_map.items():
+                if cat_name.lower() in k.lower() or k.lower() in cat_name.lower():
+                    cat_id = v
+                    break
+        if not cat_id:
+            skipped_no_cat += 1
+            errors.append(f"NO_CAT: {name} | {cat_name}")
+            continue
+
+        sub_id = sub_map.get((sub_name, cat_id))
+        if not sub_id:
+            for (sn, pid), sid in sub_map.items():
+                if pid == cat_id and sn.lower() == sub_name.lower():
+                    sub_id = sid
+                    break
+
+        if dry_run:
+            click.echo(f"  DRY-RUN: {name} | {ticker} | cat={cat_id} sub={sub_id}")
+            inserted += 1
+            continue
+
+        try:
+            with get_db() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO universe_companies (
+                        company_name, ticker, market, country, website,
+                        category_ids, subcategory_ids,
+                        status, agent_added, added_by
+                    ) VALUES (
+                        :company_name, :ticker, :market, :country, :website,
+                        :category_ids, :subcategory_ids,
+                        'pending_review', TRUE, 'bulk_import'
+                    )
+                    ON CONFLICT (company_name) DO NOTHING
+                    """,
+                    {
+                        "company_name": name,
+                        "ticker": ticker or None,
+                        "market": market or None,
+                        "country": country or None,
+                        "website": website or None,
+                        "category_ids": [cat_id],
+                        "subcategory_ids": [sub_id] if sub_id else [],
+                    },
+                )
+            existing_names.add(name.lower())
+            if ticker and ticker.lower() not in ("", "private"):
+                existing_tickers.add(ticker.lower())
+            inserted += 1
+            if inserted % 50 == 0:
+                click.echo(f"  Inserted {inserted}...")
+        except Exception as exc:
+            errors.append(f"ERROR: {name} — {exc}")
+
+    click.echo(f"\n=== {'DRY RUN ' if dry_run else ''}DONE ===")
+    click.echo(f"Inserted      : {inserted}")
+    click.echo(f"Skipped (dup) : {skipped_dup}")
+    click.echo(f"Skipped (no cat): {skipped_no_cat}")
+    if errors:
+        click.echo(f"\nErrors/warnings ({len(errors)}):")
+        for e in errors[:30]:
+            click.echo(f"  {e}")
+
+
 if __name__ == "__main__":
     cli()

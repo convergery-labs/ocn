@@ -32,9 +32,11 @@ def chat(
     current_user: dict[str, Any] = Depends(get_current_user),
 ) -> dict:
     """Run one user turn through the agent and return a structured response."""
-    return agent.run(
+    result = agent.run(
         message=body.message,
         conversation_id=body.conversation_id,
         user_id=current_user["id"],
         user_name=current_user["name"],
     )
+    result["message"] = result.get("message", "").replace("—", "-").replace("–", "-")
+    return result
