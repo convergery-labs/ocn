@@ -31,7 +31,8 @@ EMAIL_RECIPIENTS: list[str] = [
     "jaikrit.sinha@opengrowth.com",
     "anmol.majithia@opengrowth.com",
     "jatin@opengrowth.com",
-    "scott@opengrowth.com"
+    "scott@opengrowth.com",
+    "kuldeep@foliumlabs.net",
     "wasikul.islam@cern.ch",
 
 ]
