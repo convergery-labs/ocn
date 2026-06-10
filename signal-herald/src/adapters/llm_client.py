@@ -53,7 +53,7 @@ def summarise_category(
 
     prompt = (
         f'Write a 3-4 sentence investment-focused summary for the category '
-        f'"{category}" based on these articles. '
+        f'{category} based on these articles. '
         f"Prioritise signal-tier articles with high materiality and step_change novelty. "
         f"Be concise and factual.\n\n"
         f"Articles:\n" + "\n".join(article_lines)

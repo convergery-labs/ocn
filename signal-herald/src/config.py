@@ -2,17 +2,25 @@
 import os
 
 CATEGORIES: list[str] = [
-    "Minerals & Raw Materials",
-    "Energy",
+    "Raw Materials & Critical Minerals",
+    "Energy & Grid Infrastructure",
+    "Nuclear & Advanced Energy",
     "Semiconductor Manufacturing",
-    "Computer Hardware",
-    "Thermal & Cooling",
-    "Data Center Infrastructure",
-    "Cloud & Compute Market",
-    "Software / Infrastructure",
-    "AI Data",
-    "AI Models",
-    "Applications & Economy",
+    "Compute Hardware & Edge Systems",
+    "Networking, Optical & Interconnect",
+    "Data Centers & Physical Infrastructure",
+    "Telecom & Connectivity",
+    "Cloud & Compute Platforms",
+    "AI Software Infrastructure",
+    "AI Data Infrastructure",
+    "AI Models & Intelligence Layer",
+    "Robotics & Physical AI",
+    "Quantum Computing & Sensing",
+    "Life Sciences & Healthcare AI",
+    "Defense, Aerospace & Sovereign AI",
+    "Financial Infrastructure & AI Capital",
+    "Water & Resource Infrastructure",
+    "Applications & Digital Economy",
 ]
 
 EMAIL_RECIPIENTS: list[str] = [
@@ -20,7 +28,12 @@ EMAIL_RECIPIENTS: list[str] = [
     "karan@nasiko.com",
     "ayushi.shah@opengrowth.com",
     "aditya.jaiswal@opengrowth.com",
+    "jaikrit.sinha@opengrowth.com",
+    "anmol.majithia@opengrowth.com",
+    "jatin@opengrowth.com",
+    "scott@opengrowth.com"
     "wasikul.islam@cern.ch",
+
 ]
 if _test_email := os.environ.get("DIGEST_TEST_EMAIL"):
     EMAIL_RECIPIENTS = [_test_email]
