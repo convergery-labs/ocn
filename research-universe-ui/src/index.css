@@ -185,7 +185,7 @@ button { font-family: inherit; cursor: pointer; }
 .btn-send:disabled { background: #c2c8d2; box-shadow: none; cursor: default; }
 
 /* Message thread */
-.msg-thread { width: 100%; }
+.msg-thread { width: 100%; max-width: 860px; margin: 0 auto; }
 .msg-row { display: flex; gap: 12px; animation: fadeUp .22s ease-out; }
 .msg-row.user { flex-direction: row-reverse; }
 .msg-avatar { width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0; display: grid; place-items: center; font-size: 11px; font-weight: 800; color: #fff; margin-top: 2px; }

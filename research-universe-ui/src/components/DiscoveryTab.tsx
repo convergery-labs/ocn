@@ -227,14 +227,13 @@ export function DiscoveryTab({ onPendingCountChange }: DiscoveryTabProps) {
             <div style={{background:'var(--surface)',border:'1px solid var(--line)',borderRadius:'var(--r-xl)',padding:'28px 32px',boxShadow:'var(--shadow-card)'}}>
               <div style={{fontSize:16,fontWeight:700,color:'var(--ink)',marginBottom:8}}>Schedule</div>
               <p style={{fontSize:14,color:'var(--ink-3)',margin:'0 0 20px',lineHeight:1.6}}>
-                A full sweep of all 19 categories runs automatically every <strong style={{color:'var(--ink)'}}>Monday and Thursday at 09:00 UTC</strong>.<br/>
+                A full sweep of all 19 categories runs automatically every <strong style={{color:'var(--ink)'}}>15 days</strong>.<br/>
                 Each run scans globally, deduplicates against existing companies, and queues discoveries in Pending Review.
               </p>
-              <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12}}>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:12}}>
                 {[
-                  { day:'Monday',    time:'09:00 UTC', note:'Start of week scan' },
-                  { day:'Thursday',  time:'09:00 UTC', note:'Mid-week scan' },
-                  { day:'On-demand', time:'Any time',  note:'Run Scan tab' },
+                  { day:'Every 15 days', time:'09:00 UTC', note:'Automatic scan' },
+                  { day:'On-demand',     time:'Any time',  note:'Run Scan tab' },
                 ].map(s => (
                   <div key={s.day} style={{background:'var(--cream)',borderRadius:'var(--r-md)',padding:'16px 18px'}}>
                     <div style={{fontSize:13,fontWeight:700,color:'var(--ink)',marginBottom:4}}>{s.day}</div>

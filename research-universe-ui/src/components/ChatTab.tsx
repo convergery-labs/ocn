@@ -17,7 +17,6 @@ const IPlus   = () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
 const IPeers  = () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="2.5"/><circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="18" r="2"/><path d="M6.6 7.3 10 10.6M17.4 7.3 14 10.6M6.6 16.7 10 13.4M17.4 16.7 14 13.4"/></svg>;
 const IFolder = () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>;
 const IArrow  = () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>;
-const IGlobe  = () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>;
 
 const SUGGESTIONS = [
   { Icon: ISearch, text: 'Search for NVIDIA' },
@@ -231,7 +230,7 @@ function CompanyCard({ data, pending }: { data: Record<string,unknown>; pending:
           <div style={{gridColumn:'span 2'}}>
             <div className="label">Website</div>
             <a href={safeUrl(String(data.website))} target="_blank" rel="noreferrer noopener" style={{color:'var(--blue)',fontSize:13,textDecoration:'none'}}>
-              <IGlobe /> {String(data.website)}
+              {String(data.website)}
             </a>
           </div>
         )}

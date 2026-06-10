@@ -7,6 +7,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY shared/src/ /app/shared/
 COPY research-universe/src/ src/
+COPY research-universe/to_insert.json /app/to_insert.json
+COPY research-universe/dump_all.py /app/dump_all.py
+COPY research-universe/fix_categories.py /app/fix_categories.py
 
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app/src:/app/shared
