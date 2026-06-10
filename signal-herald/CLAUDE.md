@@ -1,7 +1,7 @@
 # signal-herald
 
 ## Overview
-A2A-compatible daily digest service. Polls the signal-detection-agent for classified articles, groups them into 11 AI-universe categories, generates LLM-powered investment summaries via OpenRouter, and sends formatted HTML email digests.
+A2A-compatible daily digest service. Polls the signal-detection-agent for classified articles, groups them into 19 AI-universe categories, generates LLM-powered investment summaries via OpenRouter, and sends a branded HTML email digest (AlphaStreet.ai) with a "Highest Conviction Today" strip, per-category article lists, and mobile-responsive layout.
 
 Runs on **port 8006**. Scheduled daily at **14:00 UTC** via CloudWatch Events in staging.
 
@@ -61,17 +61,20 @@ python -m src run --job-id <uuid>
 Secrets (`OPENROUTER_API_KEY`, `SMTP_*`) are pulled from AWS Secrets Manager in staging/production.
 
 ## Categories
-11 AI-universe investment categories (defined in `src/config.py`):
-Minerals, Energy, Semiconductors, Hardware, Thermal, Data Centers, Cloud, Software, AI Data, AI Models, Applications
+19 AI-universe investment categories (defined in `src/config.py`), aligned with signal-detection-agent taxonomy:
+Raw Materials & Critical Minerals, Energy & Grid Infrastructure, Nuclear & Advanced Energy, Semiconductor Manufacturing, Compute Hardware & Edge Systems, Networking Optical & Interconnect, Data Centers & Physical Infrastructure, Telecom & Connectivity, Cloud & Compute Platforms, AI Software Infrastructure, AI Data Infrastructure, AI Models & Intelligence Layer, Robotics & Physical AI, Quantum Computing & Sensing, Life Sciences & Healthcare AI, Defense Aerospace & Sovereign AI, Financial Infrastructure & AI Capital, Water & Resource Infrastructure, Applications & Digital Economy
 
 ## Digest Pipeline
 1. Check if a job already ran today (skip unless `--force`)
 2. Trigger `POST /run` on signal-detection-agent (or reuse an existing job)
 3. Poll job status every 30s, timeout after 1 hour
 4. Fetch all classified results (paginated)
-5. Group articles by category
-6. Generate 3-4 sentence investment summary per category via OpenRouter
-7. Render HTML email and dispatch via SMTP
+5. Filter to categories with at least one signal or weak_signal article
+6. Within each category: keep signal + weak_signal only, sort by score desc, cap at 10
+7. Order categories by highest signal_score descending
+8. Build "Highest Conviction Today" strip: top 10 articles across all categories (signals first, fill with weak_signal)
+9. Generate 3-4 sentence investment summary per category via OpenRouter
+10. Render branded HTML email and dispatch via SMTP
 
 ## Infra
 - ECS task: `{env}-signal-herald`, CPU 512 / Mem 1024
