@@ -8,6 +8,8 @@ import config
 
 logger = logging.getLogger(__name__)
 
+_SIGNAL_TIER_ORDER = {"signal": 0, "weak_signal": 1, "noise": 2}
+
 
 def _is_today(iso_timestamp: str | None) -> bool:
     if not iso_timestamp:
@@ -19,6 +21,13 @@ def _is_today(iso_timestamp: str | None) -> bool:
         return dt.date() == date.today()
     except ValueError:
         return False
+
+
+def _sort_key(a: dict[str, Any]) -> tuple:
+    return (
+        _SIGNAL_TIER_ORDER.get(a.get("signal_detection", "noise"), 2),
+        -float(a.get("signal_score") or 0),
+    )
 
 
 def run_digest_polling(force: bool = False) -> None:
@@ -55,26 +64,70 @@ def _build_and_send(job_id: int) -> None:
     results = signal_agent_client.get_job_results(job_id)
     logger.info("Fetched %d classification rows", len(results))
 
-    # Group all articles (signal + weak_signal + noise) by category
-    categorised: dict[str, list[dict[str, Any]]] = {}
+    # Group all articles by category
+    all_categorised: dict[str, list[dict[str, Any]]] = {}
     for r in results:
         category = r.get("category")
         if not category or category not in config.CATEGORIES:
             continue
-        categorised.setdefault(category, []).append(r)
+        all_categorised.setdefault(category, []).append(r)
 
-    logger.info(
-        "Grouped into %d categories: %s",
-        len(categorised),
-        list(categorised.keys()),
+    # Only keep categories that have at least one signal or weak_signal
+    categorised: dict[str, list[dict[str, Any]]] = {
+        cat: articles
+        for cat, articles in all_categorised.items()
+        if any(
+            a.get("signal_detection") in ("signal", "weak_signal")
+            for a in articles
+        )
+    }
+
+    # Within each category: only signal + weak_signal articles, signals first by score, max 10
+    visible: dict[str, list[dict[str, Any]]] = {
+        cat: sorted(
+            [a for a in articles if a.get("signal_detection") in ("signal", "weak_signal")],
+            key=_sort_key,
+        )[:10]
+        for cat, articles in categorised.items()
+    }
+
+    # Order categories by their highest signal_score descending
+    ordered_categories = sorted(
+        visible.keys(),
+        key=lambda cat: -float(visible[cat][0].get("signal_score") or 0),
     )
 
-    summaries: dict[str, str] = {}
-    for category, articles in categorised.items():
-        logger.info(
-            "Summarising category: %s (%d articles)", category, len(articles)
-        )
-        summaries[category] = llm_client.summarise_category(category, articles)
+    logger.info(
+        "Visible categories (%d): %s", len(ordered_categories), ordered_categories
+    )
 
-    smtp_sender.send_digest(summaries=summaries, categorised=categorised)
+    # Summarise each visible category (pass all articles incl. noise for richer context)
+    summaries: dict[str, str] = {}
+    for cat in ordered_categories:
+        articles = all_categorised[cat]
+        logger.info("Summarising category: %s (%d articles)", cat, len(articles))
+        summaries[cat] = llm_client.summarise_category(cat, articles)
+
+    # Top 10 highest-scoring across all categories: signals first, fill with weak_signal
+    all_visible = [a for articles in visible.values() for a in articles]
+    signals = sorted(
+        [a for a in all_visible if a.get("signal_detection") == "signal"],
+        key=lambda a: -float(a.get("signal_score") or 0),
+    )
+    if len(signals) < 10:
+        weak = sorted(
+            [a for a in all_visible if a.get("signal_detection") == "weak_signal"],
+            key=lambda a: -float(a.get("signal_score") or 0),
+        )
+        top_10 = (signals + weak)[:10]
+    else:
+        top_10 = signals[:10]
+
+    smtp_sender.send_digest(
+        summaries=summaries,
+        visible=visible,
+        ordered_categories=ordered_categories,
+        top_articles=top_10,
+        all_categorised=all_categorised,
+    )
     logger.info("Digest pipeline complete")
