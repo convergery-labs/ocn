@@ -10,28 +10,6 @@ import config
 
 logger = logging.getLogger(__name__)
 
-_CAT_LABEL: dict[str, str] = {
-    "Raw Materials & Critical Minerals": "Raw Materials &amp; Critical Minerals",
-    "Energy & Grid Infrastructure": "Energy &amp; Grid Infrastructure",
-    "Nuclear & Advanced Energy": "Nuclear &amp; Advanced Energy",
-    "Semiconductor Manufacturing": "Semiconductor Manufacturing",
-    "Compute Hardware & Edge Systems": "Compute Hardware &amp; Edge Systems",
-    "Networking, Optical & Interconnect": "Networking, Optical &amp; Interconnect",
-    "Data Centers & Physical Infrastructure": "Data Centers &amp; Physical Infrastructure",
-    "Telecom & Connectivity": "Telecom &amp; Connectivity",
-    "Cloud & Compute Platforms": "Cloud &amp; Compute Platforms",
-    "AI Software Infrastructure": "AI Software Infrastructure",
-    "AI Data Infrastructure": "AI Data Infrastructure",
-    "AI Models & Intelligence Layer": "AI Models &amp; Intelligence Layer",
-    "Robotics & Physical AI": "Robotics &amp; Physical AI",
-    "Quantum Computing & Sensing": "Quantum Computing &amp; Sensing",
-    "Life Sciences & Healthcare AI": "Life Sciences &amp; Healthcare AI",
-    "Defense, Aerospace & Sovereign AI": "Defense, Aerospace &amp; Sovereign AI",
-    "Financial Infrastructure & AI Capital": "Financial Infrastructure &amp; AI Capital",
-    "Water & Resource Infrastructure": "Water &amp; Resource Infrastructure",
-    "Applications & Digital Economy": "Applications &amp; Digital Economy",
-}
-
 
 def _html_escape(text: str) -> str:
     return (
@@ -164,7 +142,7 @@ def _render_html(
     )
     for i, article in enumerate(top_articles):
         cat = article.get("category", "")
-        cat_label = _CAT_LABEL.get(cat, _html_escape(cat))
+        cat_label = _html_escape(cat)
         border = "border-bottom:0.5px solid #E8E8E3" if i < len(top_articles) - 1 else ""
         parts.append(f'<tr style="{border}">')
         parts.append(
@@ -187,7 +165,7 @@ def _render_html(
     for i, cat in enumerate(ordered_categories):
         articles = visible.get(cat, [])
         summary = summaries.get(cat, "")
-        cat_label = _CAT_LABEL.get(cat, _html_escape(cat))
+        cat_label = _html_escape(cat)
         is_last = i == len(ordered_categories) - 1
         bottom_pad = "12px" if is_last else "28px"
 
