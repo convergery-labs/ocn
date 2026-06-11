@@ -15,20 +15,22 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     outputs:
-      auth:   ${{ steps.filter.outputs.auth }}
-      news:   ${{ steps.filter.outputs.news }}
-      signal: ${{ steps.filter.outputs.signal }}
-      lucky:  ${{ steps.filter.outputs.lucky }}
+      auth:             ${{ steps.filter.outputs.auth }}
+      news:             ${{ steps.filter.outputs.news }}
+      signal:           ${{ steps.filter.outputs.signal }}
+      signal_agent:     ${{ steps.filter.outputs.signal_agent }}
+      signal_herald:    ${{ steps.filter.outputs.signal_herald }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
         id: filter
         with:
           filters: |
-            auth:   ['auth-service/**']
-            news:   ['news-retrieval/**']
-            signal: ['signal-detection/**']
-            lucky:  ['lucky-clarke/**']
+            auth:          ['auth-service/**']
+            news:          ['news-retrieval/**']
+            signal:        ['signal-detection/**']
+            signal_agent:  ['signal-detection-agent/**']
+            signal_herald: ['signal-herald/**']
 
 
   test:
@@ -115,17 +117,6 @@ jobs:
           OPENROUTER_API_KEY: mock-key
           OPENROUTER_MODEL:   mock-model
           PYTHONPATH:         ${{ github.workspace }}/shared/src
-
-      - name: Test lucky-clarke
-        if: needs.changes.outputs.lucky == 'true'
-        working-directory: lucky-clarke
-        run: |
-          pip install -r requirements.txt -r requirements-test.txt pytest-mock
-          pytest tests/ -v
-        env:
-          SIGNAL_DETECTION_URL: http://localhost:8002
-          OPENROUTER_API_KEY:   mock-key
-          PYTHONPATH:           ${{ github.workspace }}/lucky-clarke/src
 
 
   deploy-auth:
@@ -249,9 +240,9 @@ jobs:
             --task-definition staging-signal-detection \
             --force-new-deployment
 
-  deploy-lucky:
+  deploy-signal-agent:
     needs: [changes, test]
-    if: needs.changes.outputs.lucky == 'true'
+    if: needs.changes.outputs.signal_agent == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -263,20 +254,20 @@ jobs:
         id: login-ecr
       - name: Build and push
         env:
-          IMAGE: ${{ secrets.ECR_REGISTRY }}/ocn/lucky-clarke
+          IMAGE: ${{ secrets.ECR_REGISTRY }}/ocn/signal-detection-agent
           TAG:   ${{ github.sha }}
         run: |
-          docker build --target base -t $IMAGE:$TAG -t $IMAGE:latest \
-            -f lucky-clarke/Dockerfile .
+          docker build --platform linux/amd64 --target base -t $IMAGE:$TAG -t $IMAGE:latest \
+            -f signal-detection-agent/Dockerfile .
           docker push $IMAGE:$TAG
           docker push $IMAGE:latest
       - name: Deploy
         env:
-          IMAGE: ${{ secrets.ECR_REGISTRY }}/ocn/lucky-clarke
+          IMAGE: ${{ secrets.ECR_REGISTRY }}/ocn/signal-detection-agent
           TAG:   ${{ github.sha }}
         run: |
           TASK_DEF=$(aws ecs describe-task-definition \
-            --task-definition staging-lucky-clarke \
+            --task-definition staging-signal-detection-agent \
             --query taskDefinition)
           NEW_TASK=$(echo $TASK_DEF | jq \
             --arg img "$IMAGE:$TAG" \
@@ -285,6 +276,29 @@ jobs:
           aws ecs register-task-definition --cli-input-json "$NEW_TASK"
           aws ecs update-service \
             --cluster staging-ocn-cluster \
-            --service staging-lucky-clarke \
-            --task-definition staging-lucky-clarke \
+            --service staging-signal-detection-agent \
+            --task-definition staging-signal-detection-agent \
             --force-new-deployment
+
+
+  deploy-signal-herald:
+    needs: [changes, test]
+    if: needs.changes.outputs.signal_herald == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region:     eu-north-1
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: login-ecr
+      - name: Build and push
+        env:
+          IMAGE: ${{ secrets.ECR_REGISTRY }}/ocn/signal-herald
+          TAG:   ${{ github.sha }}
+        run: |
+          docker build --platform linux/amd64 -t $IMAGE:$TAG -t $IMAGE:latest \
+            -f signal-herald/Dockerfile .
+          docker push $IMAGE:$TAG
+          docker push $IMAGE:latest
