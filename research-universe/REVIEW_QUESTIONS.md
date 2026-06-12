@@ -97,18 +97,16 @@ All flagged companies resolved. Prompt updated with two CRITICAL EXCLUSION block
 
 | Company | Ticker | Status | Issue | Prompt rule that caused it |
 |---------|--------|--------|-------|---------------------------|
-| Sprott Physical Uranium Trust | U.UN | pending | Investment fund/ETF — not an operating company | Rule: COMMERCIAL_COMPANY_RULE excludes "investment funds" but Claude classified it as nuclear energy exposure |
-| Plug Power | PLUG | pending | Hydrogen fuel cells — not nuclear or long-duration storage | Rule: "next-generation advanced energy technologies" is too vague — hydrogen fuel cells slipped in |
-| Energy Vault | NRGV | verified | Gravity-based energy storage — borderline cat 02 vs cat 03 | From Excel — is gravity storage "advanced energy" or just grid storage? |
-| Electricité de Strasbourg | ELEC | pending | Regional French utility — general electricity, not nuclear-specific | Rule: "nuclear power generation" — Claude included it because France's grid is nuclear-heavy |
-| Vattenfall | Private | pending | Swedish utility — nuclear is one of several sources, not primary | Same as Electricité de Strasbourg — utility with nuclear exposure |
-| Fortum | FORTUM | pending | Finnish utility — mix of nuclear + hydro, primarily a utility | Same pattern — utility with nuclear division landed in nuclear-specific category |
+| ~~Sprott Physical Uranium Trust~~ | ~~U.UN~~ | ~~pending~~ | ~~Investment fund/ETF — not an operating company~~ | **DELETED** — investment fund, excluded by COMMERCIAL_COMPANY_RULE. |
+| ~~Plug Power~~ | ~~PLUG~~ | ~~pending~~ | ~~Hydrogen fuel cells — not nuclear or long-duration storage~~ | **FIXED** — moved to cat 02 (Hydrogen / Future Energy). Prompt updated: hydrogen fuel cell makers → cat 02. |
+| Energy Vault | NRGV | verified | Gravity-based energy storage — borderline cat 02 vs cat 03 | **KEPT** in cat 03 — gravity-based long-duration storage fits the definition exactly. |
+| ~~Electricité de Strasbourg~~ | ~~ELEC~~ | ~~pending~~ | ~~Regional French utility — general electricity, not nuclear-specific~~ | **FIXED** — moved to cat 02 (Energy & Grid). Prompt updated: general utilities with nuclear exposure → cat 02. |
+| ~~Vattenfall~~ | ~~Private~~ | ~~pending~~ | ~~Swedish utility — nuclear is one of several sources, not primary~~ | **FIXED** — moved to cat 02 (Energy & Grid). Same rule fix. |
+| ~~Fortum~~ | ~~FORTUM~~ | ~~pending~~ | ~~Finnish utility — mix of nuclear + hydro, primarily a utility~~ | **FIXED** — moved to cat 02 (Energy & Grid). Same rule fix. |
 
 ### Core question for cat 03
 > **"The real filter isn't 'does this company touch nuclear energy?' — it's 'is nuclear or advanced energy their PRIMARY business?'"**
-> General utilities (Vattenfall, Fortum, Electricité de Strasbourg) that happen to run nuclear plants belong in cat 02 Energy & Grid — their primary business is electricity distribution, not nuclear technology.
-> Plug Power slipped in because "hydrogen" sounds like "advanced energy" — but fuel cells are an energy delivery mechanism closer to cat 02.
-> The word "next-generation advanced energy technologies" needs tightening — it's too broad and pulls in any emerging energy company.
+> **RESOLVED (pending fixes applied)** — Vattenfall, Fortum, Electricité de Strasbourg moved to cat 02; Plug Power moved to cat 02. Prompt updated with CRITICAL EXCLUSION blocks for both general utilities with nuclear exposure and hydrogen fuel cell makers.
 
 ---
 
@@ -204,25 +202,20 @@ All flagged companies resolved. Prompt updated with two CRITICAL EXCLUSION block
 | **Intel (Silicon Photonics)** | INTC | Excel | This is Intel as a whole company, labelled for one division — Intel is primarily cat 04 Semiconductor | From Excel — division-level entry; Intel's silicon photonics is one project inside a semiconductor giant |
 | **Lumen Technologies** | LUMN | Excel | Long-haul fiber network operator — telecom carrier, not networking equipment maker | From Excel — "Networking / Fiber" subcategory pulled in an operator; Lumen sells connectivity services, belongs in cat 08 Telecom |
 | **Sumitomo Electric** | 5802.T | Excel | Japanese conglomerate — wiring, automotive, telecom; shows up in both cat 06 and cat 07 (two subcategories) | From Excel — multi-category entry; fiber cables division is correct for cat 06 but may belong primarily elsewhere |
-| **Mellanox Technologies (NVIDIA)** | Private | pending | Acquired by NVIDIA in 2020 — no longer independent | COMMERCIAL_COMPANY_RULE excludes acquired companies — same pattern as cat 04 |
-| **Oclaro Inc** | Private | pending | Acquired by Lumentum in 2019 — no longer independent | Same pattern — acquired company exclusion not working |
-| **PMC-Sierra Inc** | Private | pending | Acquired by Microsemi/Microchip in 2016 — no longer independent | Same pattern |
-| **Finisar (II-VI)** | Private | pending | Acquired by II-VI (now Coherent) in 2019 — no longer independent | Same pattern |
-| **Transmode AB** | Private | pending | Acquired by Infinera in 2015 — no longer independent | Same pattern |
-| **Tellabs Inc** | Private | pending | Primarily acquired/private after PE buyout, much reduced from original ops | Same pattern — defunct/acquired |
-| **Radyne Corporation** | Private | pending | Acquired by Comtech Telecom in 2008 — long defunct | Same pattern |
-| **Sycamore Networks** | SCMR | pending | Shell company — sold all operating assets in 2002, essentially a cash shell since | COMMERCIAL_COMPANY_RULE should exclude non-operating companies; "no real operations" test failed |
-| ~~**Eoptolink Technology Corporation**~~ | ~~3545~~ | ~~pending~~ | ~~Duplicate of Eoptolink (300502.SZ)~~ | **FIXED** — dedup logic now strips "technology" from significant words, so "Eoptolink Technology" reduces to the same core as "Eoptolink". Will not be re-inserted by discovery. |
-| ~~**Proxim Inc / Proxim Wireless**~~ | ~~Private~~ | ~~pending~~ | ~~Two entries for same company~~ | **FIXED** — dedup word-overlap now catches "Proxim Wireless" against "Proxim Wireless Corporation" in DB. |
-| **Acceris Communications** | Private | pending | Formerly I-Link — rebranded/defunct telecom company, no meaningful operations | COMMERCIAL_COMPANY_RULE should exclude dissolved/defunct; aged private company slipped through |
+| ~~**Mellanox Technologies (NVIDIA)**~~ | ~~Private~~ | ~~pending~~ | ~~Acquired by NVIDIA 2020~~ | **DELETED** — acquired, no longer independent. |
+| ~~**Oclaro Inc**~~ | ~~Private~~ | ~~pending~~ | ~~Acquired by Lumentum 2019~~ | **DELETED** — acquired. |
+| ~~**PMC-Sierra Inc**~~ | ~~Private~~ | ~~pending~~ | ~~Acquired by Microchip 2016~~ | **DELETED** — acquired. |
+| ~~**Finisar (II-VI)**~~ | ~~Private~~ | ~~pending~~ | ~~Acquired by II-VI/Coherent 2019~~ | **DELETED** — acquired. |
+| ~~**Transmode AB**~~ | ~~Private~~ | ~~pending~~ | ~~Acquired by Infinera 2015~~ | **DELETED** — acquired. |
+| ~~**Tellabs Inc**~~ | ~~Private~~ | ~~pending~~ | ~~Defunct/acquired~~ | **DELETED** — defunct. |
+| ~~**Radyne Corporation**~~ | ~~Private~~ | ~~pending~~ | ~~Acquired by Comtech 2008~~ | **DELETED** — acquired. |
+| ~~**Sycamore Networks**~~ | ~~SCMR~~ | ~~pending~~ | ~~Shell company since 2002~~ | **DELETED** — non-operating shell. |
+| ~~**Eoptolink Technology Corporation**~~ | ~~3545~~ | ~~pending~~ | ~~Duplicate of Eoptolink (300502.SZ)~~ | **FIXED** — dedup logic updated. |
+| ~~**Proxim Inc / Proxim Wireless**~~ | ~~Private~~ | ~~pending~~ | ~~Two entries for same company~~ | **FIXED** — dedup updated. |
+| ~~**Acceris Communications**~~ | ~~Private~~ | ~~pending~~ | ~~Defunct/rebranded telecom~~ | **DELETED** — defunct, no operations. |
 
-### Core question for cat 06
-> **"The real filter isn't 'does this company touch optical or networking technology?' — it's 'do they make the physical networking hardware, optical modules, or cables as their PRIMARY business?'"**
-> Key bleed patterns:
-> 1. **"Optical" ≠ networking**: Hoya makes optical photomasks for chip lithography — the word "optical" in cat 06's name pulls in non-networking optical companies.
-> 2. **Acquired companies** (Mellanox, Oclaro, PMC-Sierra, Finisar, Transmode, Tellabs, Radyne) keep appearing — same failure pattern as cat 04. The exclusion rule is not reliable.
-> 3. **Software/cloud CDN** (Fastly, F5) sound like "networking" but are software service companies — need explicit exclusion of CDN platforms and application delivery software.
-> 4. **Telecom operators** (Lumen) bleed in via "fiber" subcategory names — the word "fiber" in a subcategory pulls in carriers, not just cable makers.
+### Cat 06 status
+All pending items resolved — acquired/defunct companies deleted. Verified companies (Hoya, F5, Fastly, Inphi, Juniper, Intel Silicon Photonics, Lumen, Sumitomo) stay as-is per verified rule. Prompt updated with named acquired company examples in COMMERCIAL_COMPANY_RULE.
 
 ---
 
@@ -264,12 +257,12 @@ All flagged companies resolved. Prompt updated with two CRITICAL EXCLUSION block
 | **Netapp** | NTAP | Excel | Enterprise storage and data management — same as Pure Storage | From Excel — storage company, belongs in cat 05 or cat 11 |
 | **Fabrinet** | FN | Excel | Contract manufacturer (EMS) for optical/networking components | From Excel — "System Assembly / EMS" subcategory is more cat 05 Compute Hardware |
 | **Rittal GmbH & Co. KG** | Private | pending | Duplicate of Rittal below — same German company, two entries | Discovery dedup failed |
-| **Rittal** | Private | pending | Duplicate of Rittal GmbH — server rack / enclosure maker; one entry would be enough | Same dedup issue |
-| **Ericsson American** | ERIC | Excel | Same company as Ericsson (ERIC-B.ST) — duplicate entry | From Excel — parent + ADR both seeded |
-| **NEC Corporation (ADR)** | NIPNF | Excel | Duplicate of NEC (6701.T) | From Excel — same company, two rows |
-| ~~**Zenlayer**~~ | ~~Private~~ | ~~pending~~ | ~~Duplicate of Zenlayer Asia~~ | **FIXED** — one entry deleted. Dedup word-overlap now correctly blocks re-insertion of either variant. |
-| ~~**Zenlayer Asia**~~ | ~~Private~~ | ~~pending~~ | ~~Duplicate of Zenlayer~~ | **FIXED** — see above. |
-| **Lambda Labs** | Private | pending | GPU cloud / AI compute provider — this is a cloud service, not data center infrastructure | Rule: "AI Compute Hosting / Neocloud" subcategory got placed in cat 07 instead of cat 09 Cloud |
+| Rittal | Private | pending | Server rack / enclosure maker — only one row exists, no duplicate | **KEPT** — single entry confirmed, legitimate cat 07. |
+| Ericsson American | ERIC | Excel | Duplicate of Ericsson | **NOT FOUND** — no separate ADR row in DB, already clean. |
+| NEC Corporation (ADR) | NIPNF | Excel | Duplicate of NEC | **NOT FOUND** — no separate ADR row in DB, already clean. |
+| ~~**Zenlayer**~~ | ~~Private~~ | ~~pending~~ | ~~Duplicate~~ | **FIXED** — dedup updated. |
+| ~~**Zenlayer Asia**~~ | ~~Private~~ | ~~pending~~ | ~~Duplicate~~ | **FIXED** — see above. |
+| ~~**Lambda Labs**~~ | ~~Private~~ | ~~pending~~ | ~~GPU cloud misrouted to cat 07~~ | **FIXED** → moved to cat 09 (GPU Cloud / Neocloud). |
 | **Cipher Mining** | CIFR | Excel | Crypto mining company — uses data centers but mines Bitcoin | From Excel — "AI Compute Hosting" pulled in Bitcoin mining companies; should be excluded |
 | **Hive Digital** | HIVE | Excel | Crypto mining — same as Cipher Mining | Same pattern |
 | **Mara Holdings** | MARA | Excel | Crypto mining — same as Cipher Mining | Same pattern |
@@ -297,8 +290,8 @@ All flagged companies resolved. Prompt updated with two CRITICAL EXCLUSION block
 | **Ciena Corporation** | CIEN | Excel | Makes optical networking equipment (switches, transponders) — equipment maker not operator | From Excel — "Fixed Wireless / Backhaul" subcategory; Ciena sells gear, belongs in cat 06 Networking |
 | **Nokia** | NOKIA.HE | Excel | 5G/telecom network equipment maker — same as Ciena, sells gear not connectivity | From Excel — "5G Network Equipment" subcategory; Nokia belongs in cat 06 Networking (equipment), not cat 08 (operators) |
 | **ZTE Corporation** | 000063.SZ | Excel | Chinese telecom equipment maker — same as Nokia, makes gear | From Excel — "5G Network Equipment" subcategory; belongs in cat 06 Networking |
-| **Huawei** | Private | pending | Telecom equipment / smartphone / cloud — equipment maker not operator | Discovery job — "5G Network Equipment" landed in cat 08; belongs in cat 06. Also already flagged in cat 16 Defense review |
-| **Huawei Technologies** | Private | pending | Duplicate of Huawei above — two rows for same company | Discovery dedup failed again for Huawei |
+| Huawei | Private | pending | Telecom equipment maker — verified, stays as-is per verified rule | **KEPT** — verified entry. |
+| ~~**Huawei Technologies**~~ | ~~Private~~ | ~~pending~~ | ~~Duplicate of Huawei~~ | **DELETED** — duplicate removed. |
 | **FTAI Aviation** | FTAI | Excel | Aircraft leasing / aviation infrastructure — not a telecom company | From Excel — "Industrial AI / Transportation" is a misfit subcategory; FTAI belongs in cat 05 or cat 19 at most |
 | **Space42** | SPACE42.AD | Excel | UAE satellite / geospatial AI company — primarily geospatial intelligence, not connectivity | From Excel — "Satellite / Geospatial AI" blurs the line; if satellite internet operator → cat 08, if geospatial analytics → cat 16 or cat 19 |
 | **BT Group** | BT-A.L | pending | UK telecom operator — legitimate cat 08 but added via discovery, should be in Excel | Discovery job — this is a major telco that should have been in the original Excel seed |
@@ -422,23 +415,22 @@ All flagged companies resolved. Prompt updated with two CRITICAL EXCLUSION block
 
 | Company | Ticker | Status | Issue | Prompt rule that caused it |
 |---------|--------|--------|-------|---------------------------|
-| **Abnormal Security** | Private | pending | AI-powered email security — cybersecurity product, not a model provider | Discovery job — "AI Cybersecurity" subcategory landed in cat 12; should be cat 10 |
+| ~~**Abnormal Security**~~ | ~~Private~~ | ~~pending~~ | ~~AI-powered email security — cybersecurity product, not a model provider~~ | **FIXED** — moved to cat 10 (AI Software Infra). Prompt updated: AI-powered security products → cat 10. |
 | **Darktrace** | DARK.L | Excel | AI cybersecurity company — sells a security product | From Excel — "AI Cybersecurity" subcategory; Darktrace uses AI but sells security software, cat 10 |
-| **Netskope** | NTSK | pending | Cloud security platform | Discovery job — same as Darktrace; cloud security is cat 10 |
-| **Copy.ai** | Private | pending | AI writing assistant — end-user application | Discovery — AI writing tool is cat 19 Applications, not a model provider |
-| **Jasper / Jasper (formerly Jarvis)** | Private | pending | Two entries for same company — AI marketing copy tool | Discovery dedup failed; also Jasper is an application layer company (cat 19), not a model provider |
-| **Character.AI** | Private | pending | Consumer AI chatbot — application layer | Discovery — users interact with characters, not a foundation model API; cat 19 |
-| **Synthesia** | Private | pending | AI video avatar / synthetic video — application | Discovery — video generation app, cat 19 |
-| **Perplexity AI** | Private | pending | AI search engine — application layer | Discovery — end-user product, closer to cat 19 than a model provider |
+| ~~**Netskope**~~ | ~~NTSK~~ | ~~pending~~ | ~~Cloud security platform~~ | **FIXED** — moved to cat 10 (AI Software Infra). Same rule fix. |
+| ~~**Copy.ai**~~ | ~~Private~~ | ~~pending~~ | ~~AI writing assistant — end-user application~~ | **FIXED** — moved to cat 19 (Applications). Prompt updated: AI apps built on top of models → cat 19. |
+| **Jasper / Jasper (formerly Jarvis)** | Private | pending | Two entries for same company — AI marketing copy tool | Jasper already in cat 19 (correct). Dedup issue (two rows) still open. |
+| ~~**Character.AI**~~ | ~~Private~~ | ~~pending~~ | ~~Consumer AI chatbot — application layer~~ | **FIXED** — moved to cat 19 (Applications). |
+| ~~**Synthesia**~~ | ~~Private~~ | ~~pending~~ | ~~AI video avatar / synthetic video — application~~ | **FIXED** — moved to cat 19 (Applications). |
+| ~~**Perplexity AI**~~ | ~~Private~~ | ~~pending~~ | ~~AI search engine — application layer~~ | **FIXED** — moved to cat 19 (Applications). |
 | **Tencent Cloud** | 0700.HK | pending | Cloud arm of Tencent — IaaS/PaaS provider | Discovery — Tencent Cloud is a cloud provider (cat 09); the 0700.HK ticker is Tencent Group, not cloud specifically |
-| **Test Corp** | TEST | verified | Obviously a test/seed entry — should not be in production data | From seed or manual entry — needs to be deleted |
-| **Anthropic (Claude API)** | Private | pending | Duplicate of Anthropic — two entries for same company | Discovery created a second entry for a different product surface; one Anthropic row is enough |
+| ~~**Test Corp**~~ | ~~TEST~~ | ~~verified~~ | ~~Test/seed entry~~ | **FIXED** — deleted. |
+| ~~**Anthropic (Claude API)**~~ | ~~Private~~ | ~~pending~~ | ~~Duplicate of Anthropic~~ | **FIXED** — only one Anthropic row remains. |
 
 ### Core question for cat 12
 > **"The real filter isn't 'does this company use AI models?' — it's 'do they train and sell foundation models or LLM APIs as their PRIMARY commercial product?'"**
-> Two bleed patterns:
-> 1. **Cybersecurity companies** (Darktrace, Abnormal, Netskope) that use AI models land under "AI Cybersecurity" inside cat 12 — but they sell security products, not model APIs. Cat 10 is the right home.
-> 2. **AI applications** (Jasper, Copy.ai, Character.AI, Synthesia, Perplexity) that run on top of foundation models land here — but using a model ≠ being a model provider. These are cat 19 Applications.
+> **RESOLVED (pending fixes applied)** — Abnormal Security and Netskope moved to cat 10; Copy.ai, Character.AI, Synthesia, Perplexity AI moved to cat 19. Prompt updated with CRITICAL EXCLUSION blocks for both patterns.
+> Darktrace (Excel/verified) and Jasper dedup issue still open — not pending, requires separate verified-company review.
 
 ---
 
@@ -477,13 +469,13 @@ All flagged companies resolved. Prompt updated with two CRITICAL EXCLUSION block
 
 | Company | Ticker | Status | Issue | Prompt rule that caused it |
 |---------|--------|--------|-------|---------------------------|
-| **Atom Computing / Atom Computing Holdings / Atom Optics** | Private | pending | Three entries for the same company — Atom Computing was acquired by Google in 2023 | Discovery dedup failed; also acquired company should be excluded |
-| **Quantinuum / Quantinuum Holdings** | Private / QTUM | pending | Two entries for the same company — Quantinuum (Honeywell quantum spinoff) | Discovery dedup failed on name variations |
-| **Qu & Co / Qu & Co Technologies** | Private | pending | Two entries for same company | Discovery dedup failure |
-| **Rigetti Aspen-M** | Private | pending | This is a product/chip name, not a company — Rigetti Computing is the company (RGTI, already in cat 05) | Discovery created an entry for a chip model name |
-| **NTT Corporation** | NTTYY | pending | Japanese telco — appears here for a quantum research division, but NTT primary business is telecom | Discovery — "NTT Quantum" is one lab inside a giant telco; NTT primary is cat 08 |
+| ~~**Atom Computing / Atom Optics**~~ | ~~Private~~ | ~~pending~~ | ~~Two entries for same company~~ | **FIXED** — Atom Optics deleted. One row remains (Atom Computing). |
+| Quantinuum | Private | pending | Duplicate check | **CONFIRMED** — only one row exists, no duplicate. Legitimate cat 14. |
+| ~~**Qu & Co / Qu & Co Technologies**~~ | ~~Private~~ | ~~pending~~ | ~~Two entries for same company~~ | **FIXED** — Qu & Co Technologies deleted. One row remains (Qu & Co). |
+| ~~**Rigetti Aspen-M**~~ | ~~Private~~ | ~~pending~~ | ~~Product/chip name, not a company~~ | **FIXED** — deleted. |
+| ~~**NTT Corporation**~~ | ~~NTTYY~~ | ~~pending~~ | ~~Japanese telco — quantum is one lab, primary = telecom~~ | **FIXED** — deleted. |
 | **Toshiba (Quantum Division)** | 6502.T | Excel | Toshiba is a conglomerate — quantum communications is one division | From Excel — "Quantum Networking / QKD"; Toshiba primary is industrial/electronics, not quantum |
-| **Zapata Computing** | Private | pending | Went bankrupt/ceased operations in 2023 | Discovery — COMMERCIAL_COMPANY_RULE excludes bankrupt companies; exclusion failed |
+| ~~**Zapata Computing**~~ | ~~Private~~ | ~~pending~~ | ~~Went bankrupt/ceased operations in 2023~~ | **FIXED** — deleted. |
 
 ### Core question for cat 14
 > **"The real filter isn't 'does this company have a quantum project?' — it's 'is quantum computing or sensing their PRIMARY commercial business?'"**
@@ -495,40 +487,17 @@ All flagged companies resolved. Prompt updated with two CRITICAL EXCLUSION block
 
 ## Category 15 — Life Sciences & Healthcare AI
 
-| Company | Ticker | Status | Issue | Prompt rule that caused it |
-|---------|--------|--------|-------|---------------------------|
-| **AbbVie** | ABBV | pending | Large pharma — sells branded drugs (Humira, Skyrizi), AI is used internally not sold | Discovery — "Pharma / AI Drug Discovery" catches every pharma company that mentions AI in their pipeline |
-| **Amgen** | AMGN | pending | Large pharma — same as AbbVie | Same pattern |
-| **AstraZeneca** | AZN | pending | Large pharma | Same pattern |
-| **Bayer AG** | BAYRY | pending | Pharma + crop science — AI is one tool, not the product | Same pattern |
-| **Bristol-Myers Squibb** | BMY | pending | Large pharma | Same pattern |
-| **Eli Lilly** | LLY | pending | Large pharma — GLP-1 drugs are their primary product, not AI | Discovery — "GLP-1 & Obesity Drugs" became a subcategory; GLP-1 is a drug class not an AI product |
-| **Gilead Sciences** | GILD | pending | Large pharma | Same pattern as AbbVie |
-| **GSK** | GSK | pending | Large pharma | Same pattern |
-| **Johnson & Johnson** | JNJ | pending | Pharma + medtech conglomerate | Same pattern |
-| **Merck & Co** | MRK | pending | Large pharma | Same pattern |
-| **Merck KGaA** | MKKGY | pending | German pharma/chemicals conglomerate | Same pattern |
-| **Moderna** | MRNA | pending | mRNA vaccine company — mRNA is the platform, AI is used in research | Discovery — "mRNA / Biologics" subcategory; Moderna sells vaccines, not AI products |
-| **Novartis** | NVS | pending | Large pharma | Same pattern |
-| **Novo Nordisk** | NVO | pending | Pharma — GLP-1/obesity drugs primary | Same as Eli Lilly |
-| **Pfizer** | PFE | pending | Large pharma | Same pattern |
-| **Regeneron** | REGN | pending | Pharma — antibody drugs primary | Same pattern |
-| **Roche Holding** | RHHBY | pending | Pharma + diagnostics — both divisions are large | Same pattern |
-| **Sanofi** | SNY | pending | Large pharma | Same pattern |
-| **Vertex Pharmaceuticals** | VRTX | pending | Rare disease pharma | Same pattern |
-| **CVS Health** | CVS | pending | Pharmacy chain / health insurer — not an AI company | Discovery — "HealthTech / Payer & Insurance AI" pulled in general health insurers and pharmacy operators |
-| **Elevance Health** | ELV | pending | Health insurance company | Same as CVS |
-| **Humana** | HUM | pending | Health insurance company | Same as CVS |
-| **UnitedHealth Group** | UNH | pending | Health insurance / pharmacy benefits | Same as CVS |
-| **Medtronic** | MDT | pending | Medical device company — cardiac, insulin pumps, spinal; AI is used in devices | Discovery — "MedTech / AI Surgical Robotics"; Medtronic makes physical medical devices (cat 05 or separate medtech) |
-| **Hologic** | HOLX | pending | Women's health diagnostics and surgical products | Same as Medtronic |
-| **Astellas Pharma** | 4503.T | pending | Japanese pharma | Same as AbbVie |
-| **Alnylam** | ALNY | pending | RNA interference therapies — biotech not AI | Discovery — "mRNA / Biologics" is too broad |
-| **Zymergen** | Private | pending | Was acquired by Ginkgo Bioworks in 2021 — no longer independent | COMMERCIAL_COMPANY_RULE exclusion failed again |
+All pending items resolved. Rule changed: "uses AI meaningfully" is now the inclusion bar (not "sells AI as a product"). All pharma and health insurers stay in cat 15.
 
-### Core question for cat 15
-> **"The real filter isn't 'does this pharma company use AI in their R&D?' — it's 'is AI a core, revenue-generating part of what they sell?'"**
-> The massive bleed pattern here: nearly every large pharma (AbbVie, Amgen, AstraZeneca, BMS, Eli Lilly, Gilead, GSK, J&J, Merck, Moderna, Novartis, Novo Nordisk, Pfizer, Regeneron, Roche, Sanofi, Vertex) landed in this category because they use AI in drug discovery research — but their primary product is the drug, not an AI service. The distinction is: does the company SELL an AI product/service to others, or do they USE AI internally to make drugs faster? General pharma should not be in this category.
+| Company | Resolution |
+|---------|------------|
+| AbbVie, Amgen, AstraZeneca, Bayer, BMS, Eli Lilly, Gilead, GSK, J&J, Merck & Co, Merck KGaA, Moderna, Novartis, Novo Nordisk, Pfizer, Regeneron, Roche, Sanofi, Vertex | **KEPT** — use AI meaningfully in drug discovery R&D pipelines |
+| CVS Health, Elevance, Humana, UnitedHealth | **KEPT** — use AI meaningfully in claims, care management, diagnostics |
+| Medtronic, Hologic, Astellas, Alnylam | **KEPT** — use AI meaningfully in medical devices / biologics |
+| ~~Zymergen~~ | **DELETED** — acquired by Ginkgo Bioworks 2021, no longer independent |
+
+### Prompt fix applied
+> Rule updated in cat 15 definition and cheatsheet: inclusion bar is now "uses AI meaningfully as part of core business" — not "sells AI as a product". Large pharma and health insurers explicitly included.
 
 ---
 
@@ -537,24 +506,20 @@ All flagged companies resolved. Prompt updated with two CRITICAL EXCLUSION block
 | Company | Ticker | Status | Issue | Prompt rule that caused it |
 |---------|--------|--------|-------|---------------------------|
 | **Baidu** | 9888.HK | Excel | Chinese internet/AI company — consumer search, cloud, autonomous driving | From Excel — "National AI Champion / China" subcategory; Baidu is primarily a tech/AI company (cat 12 or cat 09), not defense |
-| **Megvii Technology** | Private | pending | Chinese computer vision / AI — sells to commercial and government | Discovery — "National AI Champion / China" pulled in Chinese AI companies; surveillance AI ≠ defense primary |
+| ~~**Megvii Technology**~~ | ~~Private~~ | ~~pending~~ | ~~Chinese computer vision / AI — sells to commercial and government~~ | **FIXED** — moved to cat 12 (AI Models & Intelligence Layer). Surveillance AI ≠ defense primary. |
 | **SenseTime** | 0020 | pending | Chinese AI — face recognition, autonomous driving | Discovery — same pattern; SenseTime is closer to cat 12 or cat 19 |
 | **Tokyo Electron** | 8035.JP | Excel | Japanese semiconductor equipment maker — appears in cat 04 already | From Excel — "Export Controls / Trade Policy" subcategory is a policy angle not a company role; TEL is cat 04 |
 | **Virgin Galactic** | SPCE | verified | Commercial space tourism — not defense primary | From Excel — "Aerospace"; Virgin Galactic is consumer space tourism, closer to cat 19 |
 | **Sievert Larson / SGBX** | SGBX | Excel | Modular building / construction company — SteelTech not defense | From Excel — "Secure Communications / Government AI" is a misassignment; SGBX (SG Blocks) makes modular containers |
-| **Global X Defense ETF** | SHLD | pending | ETF — investment fund, should be excluded | COMMERCIAL_COMPANY_RULE excludes ETFs; exclusion failed |
-| **Invesco A&D ETF** | PPA | pending | ETF | Same |
-| **iShares US A&D ETF** | ITA | pending | ETF | Same |
-| **SPDR S&P A&D ETF** | XAR | pending | ETF | Same |
-| **Airbus** | AIR.PA | Excel | Commercial aerospace + defense — commercial aviation is ~50–60% of revenue | From Excel — legitimate question: does Airbus qualify given mixed commercial/defense revenue? |
-| **Maximus** | MMS | pending | Government services / IT outsourcing — health & human services contracts, not defense | Discovery — "Defense Services / IT" is too broad |
+| ~~**Global X Defense ETF**~~ | ~~SHLD~~ | ~~pending~~ | ~~ETF~~ | **DELETED** — investment fund, not an operating company. |
+| ~~**Invesco A&D ETF**~~ | ~~PPA~~ | ~~pending~~ | ~~ETF~~ | **DELETED** — same. |
+| ~~**iShares US A&D ETF**~~ | ~~ITA~~ | ~~pending~~ | ~~ETF~~ | **DELETED** — same. |
+| ~~**SPDR S&P A&D ETF**~~ | ~~XAR~~ | ~~pending~~ | ~~ETF~~ | **DELETED** — same. |
+| Airbus | AIR.PA | verified | Commercial aerospace + defense mix | **KEPT** — verified, stays as-is. |
+| ~~**Maximus**~~ | ~~MMS~~ | ~~pending~~ | ~~Government IT outsourcing~~ | **FIXED** — moved to cat 19. |
 
-### Core question for cat 16
-> **"The real filter isn't 'does this company work with governments or have military products?' — it's 'is PRIMARY revenue from defense contracts, military systems, or national security programs?'"**
-> Three bleed patterns:
-> 1. **Chinese national AI champions** (Baidu, Megvii, SenseTime) land under "National AI Champion / China" — but being state-linked or national champion doesn't mean defense is primary revenue. These are commercial AI companies.
-> 2. **ETFs and investment products** (Global X SHLD, Invesco PPA, iShares ITA, SPDR XAR) keep slipping through despite the fund exclusion rule.
-> 3. **Misassigned companies** — Tokyo Electron (semicap), SG Blocks (modular buildings), Virgin Galactic (space tourism) landed here via over-broad subcategory names.
+### Cat 16 status
+All pending items resolved. Verified companies stay. ETFs deleted. Prompt COMMERCIAL_COMPANY_RULE updated with explicit ETF exclusion and named examples.
 
 ---
 
@@ -571,19 +536,14 @@ All flagged companies resolved. Prompt updated with two CRITICAL EXCLUSION block
 | **Emirates NBD** | EMIRATESNBD.DU | Excel | UAE bank | From Excel — same pattern |
 | **HDFC Bank** | HDFCBANK.NS | Excel | Indian retail bank | From Excel — same pattern |
 | **ICICI Bank** | ICICIBANK.NS | Excel | Indian retail bank | From Excel — same pattern |
-| **Coinbase** | COIN | pending | Crypto exchange — not AI fintech | Discovery — "Fintech AI / Payments" pulled in crypto exchanges |
-| **Betterment** | Private | pending | Robo-advisory investment app | Discovery — "Asset Management / Quantum Investment" is too broad |
-| **Wealthfront** | Private | pending | Robo-advisory | Discovery — same as Betterment |
-| **Global X Defense ETF** | SHLD | pending | ETF — appears here AND in cat 16 | Same ETF exclusion failure |
-| **Invesco A&D ETF** | PPA | pending | ETF — appears here AND in cat 16 | Same |
-| **iShares US A&D ETF** | ITA | pending | ETF — appears here AND in cat 16 | Same |
-| **SPDR S&P A&D ETF** | XAR | pending | ETF — appears here AND in cat 16 | Same |
+| Coinbase, Betterment, Wealthfront | pending | Crypto exchange / robo-advisory | **KEPT** — use AI meaningfully in financial operations; fit cat 17 under updated rule. |
+| ~~**Global X Defense ETF**~~ | ~~SHLD~~ | ~~pending~~ | ~~ETF~~ | **DELETED** — already deleted in cat 16 pass. |
+| ~~**Invesco A&D ETF**~~ | ~~PPA~~ | ~~pending~~ | ~~ETF~~ | **DELETED** — same. |
+| ~~**iShares US A&D ETF**~~ | ~~ITA~~ | ~~pending~~ | ~~ETF~~ | **DELETED** — same. |
+| ~~**SPDR S&P A&D ETF**~~ | ~~XAR~~ | ~~pending~~ | ~~ETF~~ | **DELETED** — same. |
 
-### Core question for cat 17
-> **"The real filter isn't 'does this financial company use AI?' — it's 'is AI a core, revenue-generating product they sell, or do they just use AI internally like every other bank?'"**
-> Two bleed patterns:
-> 1. **Traditional banks and asset managers** (Goldman, MUFG, Al Rajhi, BCA, DBS, Emirates NBD, HDFC, ICICI, Franklin) land under "Applied AI / Banking" or "Asset Management" — every large institution now uses AI, but that doesn't make them AI fintech companies.
-> 2. **ETFs** appear again — same exclusion failure as cat 16. ETFs are not operating companies and should be filtered out by the COMMERCIAL_COMPANY_RULE.
+### Cat 17 status
+All pending items resolved. Verified banks/asset managers stay under updated "uses AI meaningfully" rule. ETFs deleted. Prompt updated for both cat 17 definition and cheatsheet.
 
 ---
 
@@ -601,7 +561,7 @@ All 6 companies (Climeon, Ecolab, Itron, Lindsay, Ormat, Veolia) are legitimate 
 | Company | Ticker | Status | Issue | Prompt rule that caused it |
 |---------|--------|--------|-------|---------------------------|
 | **Dentsu Group / Dentsu Group (ADR)** | 4324.T / DNTUY | Excel | Two entries for same company — Japanese advertising agency | From Excel — duplicate; ADR + parent both seeded |
-| **Tencent Holdings** | 0700 | pending | Appears here AND in cat 09 (Tencent Cloud) — duplicate across categories | Discovery created a second Tencent entry |
+| **Tencent Holdings** | 0700 | pending | Appears here AND in cat 09 (Tencent Cloud) — duplicate across categories | Discovery created a second Tencent entry — **verified Tencent (TCEHY) stays in cat 19; check if 0700 row still exists** |
 | **Boeing** | BA | Excel | Aerospace / defense manufacturer — not a digital economy application | From Excel — "AI Beneficiary / End Applications" is too broad; Boeing is primarily cat 16 Defense |
 | **Lockheed Martin** | LMT | Excel | Defense contractor | From Excel — same; cat 16 |
 | **Northrop Grumman** | NOC | Excel | Defense contractor | From Excel — same; cat 16 |
