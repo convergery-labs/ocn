@@ -19,18 +19,20 @@ jobs:
       news:             ${{ steps.filter.outputs.news }}
       signal:           ${{ steps.filter.outputs.signal }}
       signal_agent:     ${{ steps.filter.outputs.signal_agent }}
-      signal_herald:    ${{ steps.filter.outputs.signal_herald }}
+      signal_herald:       ${{ steps.filter.outputs.signal_herald }}
+      research_universe:   ${{ steps.filter.outputs.research_universe }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
         id: filter
         with:
           filters: |
-            auth:          ['auth-service/**']
-            news:          ['news-retrieval/**']
-            signal:        ['signal-detection/**']
-            signal_agent:  ['signal-detection-agent/**']
-            signal_herald: ['signal-herald/**']
+            auth:               ['auth-service/**']
+            news:               ['news-retrieval/**']
+            signal:             ['signal-detection/**']
+            signal_agent:       ['signal-detection-agent/**']
+            signal_herald:      ['signal-herald/**']
+            research_universe:  ['research-universe/**']
 
 
   test:
@@ -302,3 +304,44 @@ jobs:
             -f signal-herald/Dockerfile .
           docker push $IMAGE:$TAG
           docker push $IMAGE:latest
+
+
+  deploy-research-universe:
+    needs: [changes, test]
+    if: needs.changes.outputs.research_universe == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region:     eu-north-1
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: login-ecr
+      - name: Build and push
+        env:
+          IMAGE: ${{ secrets.ECR_REGISTRY }}/ocn/research-universe
+          TAG:   ${{ github.sha }}
+        run: |
+          docker build --platform linux/amd64 --target base -t $IMAGE:$TAG -t $IMAGE:latest \
+            -f research-universe/Dockerfile .
+          docker push $IMAGE:$TAG
+          docker push $IMAGE:latest
+      - name: Deploy
+        env:
+          IMAGE: ${{ secrets.ECR_REGISTRY }}/ocn/research-universe
+          TAG:   ${{ github.sha }}
+        run: |
+          TASK_DEF=$(aws ecs describe-task-definition \
+            --task-definition staging-research-universe \
+            --query taskDefinition)
+          NEW_TASK=$(echo $TASK_DEF | jq \
+            --arg img "$IMAGE:$TAG" \
+            'del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy)
+            | .containerDefinitions[0].image = $img')
+          aws ecs register-task-definition --cli-input-json "$NEW_TASK"
+          aws ecs update-service \
+            --cluster staging-ocn-cluster \
+            --service staging-research-universe \
+            --task-definition staging-research-universe \
+            --force-new-deployment

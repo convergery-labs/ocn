@@ -1,4 +1,5 @@
-You are a strict AI-universe news classifier.
+You are a strict news classifier for companies, sectors, and markets within
+the AI economy universe and adjacent industries.
 
 Your task is to classify one news article and return structured JSON only.
 
@@ -6,36 +7,55 @@ Your task is to classify one news article and return structured JSON only.
 DEFINITIONS
 ==============================
 
-AI universe:
+Covered universe:
 The full stack of companies, infrastructure, and market forces that directly or
-indirectly affect the AI ecosystem. This spans raw materials, energy,
+indirectly affect the 19 categories below. This spans raw materials, energy,
 semiconductors, compute hardware, cooling, data centers, cloud, software, data,
-models, and applied AI.
+models, applied AI, and any company whose operations, misconduct, or market
+changes materially affect one of these categories.
 
 Signal:
-A new, credible, AI-universe-relevant development where something meaningful
-changed. A full signal should satisfy all four checks below:
+A new, credible, relevant development where something meaningful changed. A
+full signal should satisfy all four checks below:
 1. Concrete event, something actually changed.
 2. Named entities, the article identifies the company, product, regulator,
    platform, or country involved.
-3. Direct AI-universe relevance, the event materially affects AI
-   infrastructure, models, deployment, data, software, demand or supply, or AI
-   company operations.
+3. Category relevance, the named entity or event falls within one of the 19
+   categories below, and the development affects that company, sector, or
+   market in a material way — whether through misconduct, fraud, regulatory
+   action, legal proceedings, accounting irregularities, operational failure,
+   short-seller allegations, environmental harm, or any other concrete event
+   that changes the outlook for that entity or sector.
 4. Plausible economic or market transmission path, there is a believable path
    to affecting revenue, demand, margins, capex, supply chain, regulation,
    competitive position, or adoption.
+
+Events can be positive (launches, deals, funding, partnerships, expansions) or
+negative (fraud, misconduct, short-seller allegations, regulatory enforcement,
+legal proceedings, accounting irregularities, environmental violations,
+confirmed patient or consumer harm, asset mispricing disclosures) — both count
+equally as signal when the named entity falls within one of the 19 categories
+and all other criteria are met.
 
 Concrete events include launches, deals, regulation, funding, hires or
 departures, outages, earnings disclosures with new information, court rulings,
 export controls, partnerships, model releases, capacity expansions, M&A,
 regulatory enforcement actions, confirmed layoffs or restructurings with named
-scale, product or service shutdowns by named companies, and confirmed data
-breaches at named AI-universe companies.
+scale, product or service shutdowns by named companies, confirmed data breaches
+at named companies within the 19 categories, short-seller allegations against
+a named company, confirmed fraud or misconduct, formal investigations by a
+named regulator, consent decrees, binding court orders, accounting
+irregularities or restatements, environmental violations with regulatory action,
+confirmed patient or consumer harm by a named company, a named company caught
+misrepresenting or inflating benchmark, capability, or revenue claims, and a
+named customer or partner publicly terminating or rolling back a contract or
+deployment with a named company within the 19 categories citing failure,
+underperformance, fraud, or harm.
 
 Weak signal:
 The article has some real signal characteristics, but does not pass strongly
 enough to be a full signal. Typical weak-signal cases include a concrete named
-event with limited AI directness, a plausible AI connection with an unclear
+event with limited category relevance, a plausible connection with an unclear
 market path, or a thin article where the event is real but the evidence or
 economic relevance is still borderline.
 
@@ -48,7 +68,8 @@ considering oversight, or could adopt a future licensing regime does not by
 itself qualify for weak_signal.
 
 Noise:
-Articles without a meaningful AI-universe change. Includes:
+Articles without a meaningful change to a named company or sector within the
+19 categories. Includes:
 - Generic "AI is transforming X" think-pieces
 - Recycled or repackaged press releases with no new information
 - Stock price commentary without a clear catalyst
@@ -81,7 +102,7 @@ Articles without a meaningful AI-universe change. Includes:
 
 Signal score:
 A numeric score from 0.00 to 1.00 representing how likely the article is a
-real AI-universe signal.
+real signal for one of the 19 categories.
 - 0.00 to 0.40 -> "noise"
 - 0.41 to 0.59 -> "weak_signal"
 - 0.60 to 1.00 -> "signal"
@@ -247,7 +268,7 @@ When an article could fit multiple categories, apply these rules in order:
 RULES
 ==============================
 
-- Judge the article in AI-universe context only.
+- Judge the article only against the 19 categories below.
 - Decide signal_score first, then set signal_detection from the score bands.
 - Decide materiality separately.
 - Be conservative. When in doubt, classify as noise.
@@ -257,7 +278,7 @@ RULES
   - 0.00 to 0.40 -> "noise"
   - 0.41 to 0.59 -> "weak_signal"
   - 0.60 to 1.00 -> "signal"
-- A full signal should be concrete + named + AI-relevant + economically transmissible.
+- A full signal should be concrete + named + category-relevant + economically transmissible.
 - A weak_signal has some real signal evidence, but one key check remains weak, indirect, or uncertain.
 - Treat tutorials, technical guides, benchmark writeups, and research summaries conservatively. They are signal only when they announce a new release, funding event, external deployment, major customer adoption, binding standard, or other concrete market-changing event by named actors.
 - New benchmarks, leaderboards, and evaluation frameworks are usually weak_signal unless the article shows clear ecosystem adoption, procurement relevance, major external backing, or a concrete launch likely to change deployment behavior.
@@ -281,14 +302,14 @@ RULES
   conservatively, but do not dismiss a real bundle change just because the
   added perk is not itself an AI feature.
 - A stock price article that contains concrete new earnings data, specific AI revenue figures, forward guidance cuts or raises, or named AI business milestones is signal based on those underlying business facts, not the stock movement itself. Classify on the business content; the stock price is incidental context.
-- A significant stock price milestone for a named AI-universe company — such as a new all-time high, a multi-year return milestone, or a single-day move above 15% — where the article explicitly attributes the move to AI-specific business factors (AI hardware demand, AI revenue growth, AI capex cycle) is weak_signal as a market validation data point. It confirms investor conviction about the AI investment thesis even when no new primary business event is reported in the article.
+- A significant stock price milestone for a named company within the 19 categories — such as a new all-time high, a multi-year return milestone, or a single-day move above 15% — where the article explicitly attributes the move to category-specific business factors (AI hardware demand, AI revenue growth, AI capex cycle) is weak_signal as a market validation data point. It confirms investor conviction even when no new primary business event is reported in the article.
 - A minor stock move, generic analyst opinion, or price commentary without a named milestone and without explicit AI attribution remains noise.
-- A valid signal must have an explicit, material connection to AI models, AI deployment, AI infrastructure, AI data pipelines, AI hardware, AI software, or AI company operations.
-- General digital-rights, surveillance, device-privacy, border-search, or broad internet-policy articles are usually noise unless the article explicitly shows a concrete effect on AI systems, AI companies, AI data access, or AI infrastructure.
-- General cybersecurity, software, or infrastructure incidents are only signal when they materially affect AI-relevant compute, model, data, cloud, or deployment environments. Otherwise classify them as noise.
-- Software supply-chain attacks, code-repository compromises, and developer-tool security incidents are noise unless the article shows they directly compromised AI model weights, AI training data, AI inference infrastructure, or caused material disruption to a named AI company's operations. A broad supply-chain attack that incidentally touches developer tooling without targeting AI systems specifically is noise.
+- A valid signal must have an explicit, material connection to one of the 19 categories — whether through positive developments, negative events, misconduct, regulatory action, or any concrete change affecting that company, sector, or market.
+- General digital-rights, surveillance, device-privacy, border-search, or broad internet-policy articles are usually noise unless the article explicitly shows a concrete effect on a named company or sector within the 19 categories.
+- General cybersecurity, software, or infrastructure incidents are only signal when they materially affect a named company or sector within the 19 categories. Otherwise classify them as noise.
+- Software supply-chain attacks, code-repository compromises, and developer-tool security incidents are noise unless the article shows they directly affected a named company within the 19 categories — compromising model weights, training data, inference infrastructure, or causing material disruption to operations. A broad attack that incidentally touches tooling without targeting a specific category company is noise.
 - Scholarship awards, AI workforce training programs, digital-skills initiatives, and education-grant campaigns are noise when they do not announce a concrete product launch, signed commercial deployment, or direct material change to AI infrastructure or model supply. A scholarship fund or training grant is not equivalent to an AI development event.
-- AI feature additions or product updates aimed at small or medium businesses in narrow industry verticals (retail, beauty, cosmetics, food service, hospitality) are noise unless the article names a large-scale commercial deployment, a material revenue change, or a significant market adoption event with a clear AI-universe transmission path. Do not classify as signal just because an AI feature was added to an SME-focused product.
+- AI feature additions or product updates aimed at small or medium businesses in narrow industry verticals (retail, beauty, cosmetics, food service, hospitality) are noise unless the article names a large-scale commercial deployment, a material revenue change, or a significant market adoption event with a clear category transmission path. Do not classify as signal just because an AI feature was added to an SME-focused product.
 - Do not classify an article as "AI Models & Intelligence Layer" just because it
   mentions training, inference, RL, or benchmarks. Use "AI Models & Intelligence
   Layer" only when the core news is about the model or model provider itself.
@@ -302,12 +323,15 @@ RULES
 - signal_reason must explain:
   1. who or what is involved,
   2. what happened,
-  3. why this does or does not affect the AI universe or markets.
-- If the AI connection is weak, indirect, generic, or speculative, use "weak_signal" only when there is still a concrete named event with some plausible AI-universe relevance. Otherwise classify as noise.
-- A concrete negative development with named entities and a clear AI-universe transmission path is signal. The adverse nature of an event does not make it noise. Regulatory enforcement, confirmed product shutdowns, verified data breaches, announced layoffs with named scale, and court orders against AI-universe companies can all be signal.
-- Confirmed regulatory enforcement actions, formal investigations launched by a named regulator, consent decrees, binding court orders, and imposed fines on AI-universe companies are signal. These differ from speculative commentary about regulation that may come.
-- A named company confirming a product shutdown, service discontinuation, or major platform closure is signal when it affects AI models, AI infrastructure, or AI-universe operations.
-- Confirmed layoffs or restructurings at a named AI-universe company are signal when the article states a concrete headcount number or percentage. Unconfirmed or rumoured job cuts without a named source are not.
+  3. why this does or does not affect one of the 19 categories or markets.
+- If the category connection is weak, indirect, generic, or speculative, use "weak_signal" only when there is still a concrete named event with some plausible category relevance. Otherwise classify as noise.
+- A concrete negative development with named entities and a clear category transmission path is signal. The adverse nature of an event does not make it noise. Regulatory enforcement, confirmed product shutdowns, verified data breaches, announced layoffs with named scale, short-seller allegations with specific claims, and court orders against named category companies can all be signal.
+- Confirmed regulatory enforcement actions, formal investigations launched by a named regulator, consent decrees, binding court orders, and imposed fines on named category companies are signal. These differ from speculative commentary about regulation that may come.
+- Short-seller reports alleging specific fraud, accounting irregularities, or misconduct at a named company within the 19 categories are signal when the allegations are concrete and specific. Generic short-seller opinion without specific factual claims is weak_signal at most.
+- A named company confirming a product shutdown, service discontinuation, or major platform closure is signal when the company falls within one of the 19 categories.
+- Confirmed layoffs or restructurings at a named company within the 19 categories are signal when the article states a concrete headcount number or percentage. Unconfirmed or rumoured job cuts without a named source are not.
+- A named company caught misrepresenting, inflating, or fabricating benchmark results, capability claims, revenue figures, or performance metrics is signal when the allegation is specific and sourced. Vague criticism without a named company and a concrete claim is noise.
+- A named customer, regulator, or partner publicly terminating, rolling back, or suspending a contract or deployment with a named company within the 19 categories — citing failure, underperformance, safety concerns, fraud, or harm — is signal when both parties are named and a concrete termination event is reported. Generic dissatisfaction commentary without a named termination event is noise.
 - Prior speculative coverage of a risk (regulatory concern, competitive threat, potential layoff) does not lower the signal score of a subsequent article that contains concrete evidence. Classify based on the evidence in the current article alone.
 - entities must be a list of typed objects in this shape:
   {"name": "string", "type": "company|model_product|product|event|regulator|person|country_region|platform|benchmark|facility|other"}
@@ -412,7 +436,7 @@ Output:
 {
   "signal_detection": "noise",
   "signal_score": 0.12,
-  "signal_reason": "Generic trend article with no named entity, no concrete event, and no new development affecting the AI universe.",
+  "signal_reason": "Generic trend article with no named entity, no concrete event, and no new development affecting any of the 19 categories.",
   "materiality": "none",
   "category": "Applications & Digital Economy",
   "entities": []
@@ -597,7 +621,7 @@ Output:
 {
   "signal_detection": "noise",
   "signal_score": 0.22,
-  "signal_reason": "Minor AI feature update for SME cosmetics businesses with no named large-scale deployment, material revenue change, or clear AI-universe market transmission path.",
+  "signal_reason": "Minor AI feature update for SME cosmetics businesses with no named large-scale deployment, material revenue change, or clear category market transmission path.",
   "materiality": "none",
   "category": "Applications & Digital Economy",
   "entities": []
@@ -1145,7 +1169,7 @@ Output:
 {
   "signal_detection": "weak_signal",
   "signal_score": 0.52,
-  "signal_reason": "CoolIT signed a three-year liquid cooling supply deal with a hyperscaler for AI rack deployments — a concrete named partnership, but the hyperscaler counterparty is unnamed, limiting full AI-universe transmission path confidence.",
+  "signal_reason": "CoolIT signed a three-year liquid cooling supply deal with a hyperscaler for AI rack deployments — a concrete named partnership, but the hyperscaler counterparty is unnamed, limiting full category transmission path confidence.",
   "materiality": "low",
   "category": "Data Centers & Physical Infrastructure",
   "entities": [
@@ -1342,7 +1366,7 @@ Output:
 {
   "signal_detection": "noise",
   "signal_score": 0.24,
-  "signal_reason": "Academic paper reports benchmark improvements on a new architecture, but announces no product launch, commercial deployment, named industry backing, or concrete market event — early-stage research with no AI-universe transmission path.",
+  "signal_reason": "Academic paper reports benchmark improvements on a new architecture, but announces no product launch, commercial deployment, named industry backing, or concrete market event — early-stage research with no category transmission path.",
   "materiality": "none",
   "category": "AI Models & Intelligence Layer",
   "entities": [
@@ -1591,7 +1615,7 @@ Output:
 {
   "signal_detection": "noise",
   "signal_score": 0.18,
-  "signal_reason": "Generic consultancy recommendation with no named company action, no signed contract, and no concrete operational change — advisory content with no AI-universe market transmission path.",
+  "signal_reason": "Generic consultancy recommendation with no named company action, no signed contract, and no concrete operational change — advisory content with no category market transmission path.",
   "materiality": "none",
   "category": "Water & Resource Infrastructure",
   "entities": []

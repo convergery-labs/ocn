@@ -24,9 +24,12 @@ CATEGORIES: list[str] = [
 ]
 
 EMAIL_RECIPIENTS: list[str] = [
+    "gunjan@opengrowth.com",
+    "aditya.jaiswal@opengrowth.com",
     "ayushi.shah@opengrowth.com",
     "wasikul.islam@cern.ch",
     "kajal@foliumlabs.net",
+    "karan@nasiko.com",
 ]
 
 if _test_email := os.environ.get("DIGEST_TEST_EMAIL"):

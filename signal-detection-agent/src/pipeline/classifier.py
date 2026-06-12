@@ -46,9 +46,10 @@ SMART_SUMMARY_MIN_CHARS = 220
 
 def has_usable_body(article: dict[str, Any]) -> bool:
     body = article.get('body')
-    if not isinstance(body, str):
-        return False
-    return bool(norm(body))
+    if isinstance(body, str) and bool(norm(body)):
+        return True
+    summary = article.get('summary')
+    return isinstance(summary, str) and bool(norm(summary))
 
 
 def norm(value: str) -> str:
