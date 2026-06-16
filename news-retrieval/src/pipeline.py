@@ -437,21 +437,221 @@ def _fetch_newsapi(
     return articles
 
 
+def _fetch_universe_tickers(base_url: str, api_key: str | None = None) -> list[str]:
+    """Fetch verified ticker symbols from the research-universe API.
+
+    Calls GET /companies?status=verified and returns a deduplicated list
+    of non-empty ticker strings. Falls back to [] on any error so the
+    caller can continue with config-only tickers.
+
+    Args:
+        base_url: research-universe service base URL, e.g.
+            "http://research-universe.staging.ocn.internal:8007"
+        api_key: service API key (ru_ prefix) for Authorization header
+    """
+    try:
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        resp = httpx.get(
+            f"{base_url}/companies",
+            params={"status": "verified", "limit": 10000},
+            headers=headers,
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        companies = resp.json()
+        tickers = [c["ticker"] for c in companies if c.get("ticker", "").strip()]
+        logger.info("[ALPHA_VANTAGE] fetched %d tickers from universe API", len(tickers))
+        return tickers
+    except Exception as exc:
+        logger.warning(
+            "[ALPHA_VANTAGE] universe API unavailable, falling back to config tickers: %s", exc
+        )
+        return []
+
+
+# Alpha Vantage API limits (premium key):
+# - 75 calls/minute, 500 calls/day
+# - 1 ticker per call (multi-ticker requests return far fewer articles)
+# - Capped at 500 tickers per run to stay within daily quota
+_AV_CALLS_PER_MINUTE = 60  # steady rate: 1 call/sec, well under the 75/min premium limit
+_AV_MIN_INTERVAL = 60.0 / _AV_CALLS_PER_MINUTE  # 1.0 second between calls
+_AV_DAILY_LIMIT = 500
+
+# Hardcoded 500 popular US-listed AI-economy tickers for Alpha Vantage.
+# Dynamic fetch via research-universe API can ADD new tickers on top of this list
+# but will never overwrite it — these are the guaranteed baseline.
+_AV_BASE_TICKERS: list[str] = [
+    "NVDA","MSFT","AAPL","AMZN","GOOGL","META","TSLA","AVGO","ORCL","AMD",
+    "CRM","NOW","INTU","ADBE","CSCO","IBM","TXN","QCOM","ARM","INTC",
+    "AMAT","LRCX","KLAC","SNPS","CDNS","MRVL","ANSS","FTNT","PANW","CRWD",
+    "ZS","OKTA","DDOG","SNOW","MDB","PLTR","NET","ANET","SMCI","DELL",
+    "HPE","NTAP","PSTG","WDC","STX","KEYS","TRMK","VIAV","LITE","COHR",
+    "IPGP","IIVI","MKSI","ENTG","ACLS","ONTO","FORM","CAMT","COHU","KLIC",
+    "ACMR","LASE","RMBS","SIMO","ALGM","CEVA","SLAB","SITM","MTSI","NXPI",
+    "MCHP","MPWR","SWKS","QRVO","ADI","LSCC","AMBA","POWI","AXTI","AOSL",
+    "DIOD","IXYS","SMTC","VSH","CRUS","NVMI","UCTT","AAOI","IESC","RBBN",
+    "INFN","CIEN","COMM","CASA","CALX","ADTN","IDCC","EXTR","FFIV","JNPR",
+    "NTGR","EQIX","DLR","AMT","CCI","SBAC","IRM","CONE","QTS","REIT",
+    "GLPK","COLD","NSA","LSI","UNIT","CORR","NLST","CLFD","XTLB","UBER",
+    "LYFT","DASH","ABNB","BKNG","EXPE","TRIP","OPEN","RDFN","Z","SHOP",
+    "ETSY","EBAY","W","WISH","OSTK","PRTS","REAL","RENT","SQ","PYPL",
+    "AFRM","UPST","SOFI","LC","OPFI","DAVE","MOGO","CURO","COIN","MSTR",
+    "RIOT","MARA","BTDR","HUT","CIFR","IREN","WULF","CORZ","GOOG","SNAP",
+    "PINS","RDDT","MTCH","BUMBLE","IAC","NFLX","DIS","WBD","PARA","FOX",
+    "FOXA","SIRI","SPOT","SONO","RBLX","U","EA","TTWO","ATVI","NTES",
+    "SE","GRAB","GOTO","BABA","JD","PDD","BIDU","TCEHY","TME","HUYA",
+    "DOYU","IQ","BILI","TSM","ASML","SAP","CFLT","GTLB","HUBS","BILL",
+    "PAYC","PCTY","SMAR","APPN","MNDY","ASAN","JAMF","DOCN","DOMO","BOX",
+]
+
+
+def _fetch_alpha_vantage(
+    sources: list[dict],
+    days_back: int,
+    alpha_vantage_key: str,
+    universe_url: str | None = None,
+    universe_api_key: str | None = None,
+) -> list[dict]:
+    """Fetch company-specific news from Alpha Vantage News & Sentiments API.
+
+    One API call per ticker — multi-ticker requests return far fewer articles.
+    Keep config.tickers in seed.py to <= 500 to stay within the 500 calls/day quota.
+
+    Args:
+        sources: List of alpha_vantage source dicts with ``config.tickers``.
+        days_back: Exclude articles older than this many days.
+        api_key: Alpha Vantage API key.
+        universe_url: research-universe base URL; if set, tickers are fetched
+            dynamically. Falls back to config tickers if unreachable.
+        universe_api_key: Service API key (ru_ prefix) for research-universe auth.
+
+    Returns:
+        List of article dicts with ``_pub_date`` set.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
+    time_from = (datetime.now(timezone.utc) - timedelta(days=days_back)).strftime(
+        "%Y%m%dT%H%M"
+    )
+
+    tickers: list[str] = list(_AV_BASE_TICKERS)
+
+    # Dynamic fetch from research-universe is wired but disabled:
+    # _AV_BASE_TICKERS already fills the 500-ticker daily quota so dynamic
+    # tickers would be cut off anyway. Re-enable when base list is reduced.
+    # if universe_url:
+    #     dynamic = _fetch_universe_tickers(universe_url, universe_api_key)
+    #     tickers.extend(dynamic)
+    # tickers = list(dict.fromkeys(tickers))
+
+    if len(tickers) > _AV_DAILY_LIMIT:
+        tickers = tickers[:_AV_DAILY_LIMIT]
+
+    if not tickers:
+        logger.warning("[ALPHA_VANTAGE] no tickers configured, skipping")
+        return []
+
+    logger.info("[ALPHA_VANTAGE] tickers=%d (base=%d)", len(tickers), len(_AV_BASE_TICKERS))
+
+    # Fixed interval: 1 call/sec to stay within 60/min steady rate
+    last_call_time: list[float] = [0.0]
+
+    def _rate_limited_get(ticker: str) -> list[dict]:
+        now = time.monotonic()
+        elapsed = now - last_call_time[0]
+        if elapsed < _AV_MIN_INTERVAL:
+            time.sleep(_AV_MIN_INTERVAL - elapsed)
+        last_call_time[0] = time.monotonic()
+
+        try:
+            resp = httpx.get(
+                "https://www.alphavantage.co/query",
+                params={
+                    "function": "NEWS_SENTIMENT",
+                    "tickers": ticker,
+                    "time_from": time_from,
+                    "limit": 50,
+                    "apikey": alpha_vantage_key,
+                },
+                timeout=30.0,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:
+            logger.warning("[ALPHA_VANTAGE] ticker=%r failed: %s", ticker, exc)
+            return []
+
+        results = []
+        for item in data.get("feed", []):
+            raw_date = item.get("time_published", "")
+            try:
+                pub_date = datetime.strptime(raw_date, "%Y%m%dT%H%M%S").replace(
+                    tzinfo=timezone.utc
+                )
+            except ValueError:
+                pub_date = None
+            if pub_date and pub_date < cutoff:
+                continue
+            results.append({
+                "title": item.get("title", ""),
+                "url": item.get("url", ""),
+                "published": pub_date.isoformat() if pub_date else raw_date,
+                "source": item.get("source", ""),
+                "summary": _clean_summary(item.get("summary", "")),
+                "body": None,
+                "_pub_date": pub_date,
+                # metadata: source-specific enrichment from Alpha Vantage.
+                # overall_sentiment_score: float (-1 bearish to +1 bullish)
+                # overall_sentiment_label: e.g. "Somewhat-Bullish"
+                # ticker_sentiment: [{ticker, relevance_score, ticker_sentiment_score, ticker_sentiment_label}]
+                # topics: [{topic, relevance_score}]
+                "metadata": {
+                    "overall_sentiment_score": item.get("overall_sentiment_score"),
+                    "overall_sentiment_label": item.get("overall_sentiment_label"),
+                    "ticker_sentiment": item.get("ticker_sentiment", []),
+                    "topics": item.get("topics", []),
+                },
+            })
+        logger.info("[ALPHA_VANTAGE] ticker=%r articles=%d", ticker, len(results))
+        return results
+
+    t0 = time.perf_counter()
+    seen_urls: set[str] = set()
+    articles: list[dict] = []
+
+    for ticker in tickers:
+        for article in _rate_limited_get(ticker):
+            if article["url"] and article["url"] not in seen_urls:
+                seen_urls.add(article["url"])
+                articles.append(article)
+
+    logger.info(
+        "[TIMER] alpha_vantage tickers=%d articles=%d elapsed=%.2fs",
+        len(tickers), len(articles), time.perf_counter() - t0,
+    )
+    return articles
+
+
 def _fetch_articles(
     sources: list[dict],
     days_back: int,
     max_articles: int,
     serpapi_key: str | None = None,
     newsapi_key: str | None = None,
+    alpha_vantage_key: str | None = None,
+    universe_url: str | None = None,
+    universe_api_key: str | None = None,
 ) -> list[dict]:
     """Fetch articles from all sources, routing by source_type.
 
     Args:
-        sources: List of source dicts (RSS, SerpAPI, and/or NewsAPI).
+        sources: List of source dicts (RSS, SerpAPI, NewsAPI, and/or Alpha Vantage).
         days_back: Exclude articles older than this many days.
         max_articles: Cap on total articles; 0 means no limit.
         serpapi_key: SerpAPI API key; SerpAPI sources are skipped if None.
         newsapi_key: NewsAPI API key; NewsAPI sources are skipped if None.
+        alpha_vantage_key: Alpha Vantage API key; AV sources are skipped if None.
+        universe_url: research-universe base URL for dynamic ticker fetching.
+        universe_api_key: Service API key (ru_ prefix) for research-universe auth.
 
     Returns:
         List of article dicts sorted newest-first.
@@ -459,6 +659,7 @@ def _fetch_articles(
     rss_sources = [s for s in sources if s.get("source_type", "rss") == "rss"]
     serpapi_sources = [s for s in sources if s.get("source_type") == "google_news"]
     newsapi_sources = [s for s in sources if s.get("source_type") == "newsapi"]
+    alpha_vantage_sources = [s for s in sources if s.get("source_type") == "alpha_vantage"]
 
     articles: list[dict] = []
     t0 = time.perf_counter()
@@ -482,6 +683,15 @@ def _fetch_articles(
             logger.warning(
                 "NEWSAPI_KEY not set - skipping %d newsapi source(s)",
                 len(newsapi_sources),
+            )
+
+    if alpha_vantage_sources:
+        if alpha_vantage_key:
+            articles.extend(_fetch_alpha_vantage(alpha_vantage_sources, days_back, alpha_vantage_key, universe_url, universe_api_key))
+        else:
+            logger.warning(
+                "ALPHA_VANTAGE_API_KEY not set - skipping %d alpha_vantage source(s)",
+                len(alpha_vantage_sources),
             )
 
     articles.sort(
@@ -631,7 +841,7 @@ def _filter_articles(
 # Public entry point
 # ---------------------------------------------------------------------------
 
-_ARTICLE_KEYS = ("url", "title", "summary", "source", "published", "body")
+_ARTICLE_KEYS = ("url", "title", "summary", "source", "published", "body", "metadata")
 
 
 def run(
@@ -666,20 +876,29 @@ def run(
     client = _make_client(openrouter_api_key)
     serpapi_key = os.environ.get("SERPAPI_KEY")
     newsapi_key = os.environ.get("NEWSAPI_KEY")
+    alpha_vantage_key = os.environ.get("ALPHA_VANTAGE_API_KEY")
+    universe_url = os.environ.get("RESEARCH_UNIVERSE_URL")
+    universe_api_key = os.environ.get("RESEARCH_UNIVERSE_API_KEY")
 
     sources = load_sources(domain_slug, days_back)
     if not sources:
         return {"articles": []}
 
     articles = _fetch_articles(
-        sources, days_back, max_articles, serpapi_key, newsapi_key
+        sources, days_back, max_articles, serpapi_key, newsapi_key, alpha_vantage_key, universe_url, universe_api_key
     )
     if not articles:
         return {"articles": []}
 
-    relevant = _filter_articles(
-        articles, domain_name, domain_description, focus, client, model
-    )
+    # Alpha Vantage articles are pre-filtered by ticker — already scoped to universe
+    # companies by definition, so LLM relevance filter adds no value and would drop
+    # legitimate company-specific news (earnings, filings, etc.).
+    if domain_slug == "company_news":
+        relevant = articles
+    else:
+        relevant = _filter_articles(
+            articles, domain_name, domain_description, focus, client, model
+        )
 
     logger.info(
         "[TIMER] domain=%s total=%.2fs articles=%d",

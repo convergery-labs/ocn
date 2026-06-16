@@ -45,6 +45,18 @@ export interface ChatResponse {
   conversation_id: string;
 }
 
+export interface ChatThinkingEvent {
+  tool: string;
+  label: string;
+}
+
+export interface ChatDoneEvent {
+  message: string;
+  card_type: string | null;
+  card_data: Record<string, unknown> | null;
+  conversation_id: string;
+}
+
 export interface ScanJob {
   job_id: string;
   status: 'running' | 'completed' | 'failed';

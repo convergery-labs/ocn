@@ -114,8 +114,9 @@ resource "aws_ecs_task_definition" "news_retrieval" {
         { name = "POSTGRES_DB",      value = "news_retrieval_db" },
         { name = "POSTGRES_USER",    value = "news_user" },
         { name = "PGSSLMODE",        value = "require" },
-        { name = "AUTH_SERVICE_URL", value = "http://auth-service.${var.env}.ocn.internal:8001" },
-        { name = "OPENROUTER_MODEL", value = "openrouter/elephant-alpha" }
+        { name = "AUTH_SERVICE_URL",        value = "http://auth-service.${var.env}.ocn.internal:8001" },
+        { name = "RESEARCH_UNIVERSE_URL",   value = "http://research-universe.${var.env}.ocn.internal:8007" },
+        { name = "OPENROUTER_MODEL",        value = "openrouter/elephant-alpha" }
       ]
       secrets = [
         {
@@ -133,6 +134,14 @@ resource "aws_ecs_task_definition" "news_retrieval" {
         {
           name      = "NEWSAPI_KEY"
           valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:ocn/${var.env}/news-retrieval:NEWSAPI_KEY::"
+        },
+        {
+          name      = "ALPHA_VANTAGE_API_KEY"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:ocn/${var.env}/news-retrieval:ALPHA_VANTAGE_API_KEY::"
+        },
+        {
+          name      = "RESEARCH_UNIVERSE_API_KEY"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:ocn/${var.env}/news-retrieval:RESEARCH_UNIVERSE_API_KEY::"
         }
       ]
       logConfiguration = {
@@ -178,6 +187,35 @@ resource "aws_ecs_service" "news_retrieval" {
   service_registries {
     registry_arn = aws_service_discovery_service.news_retrieval.arn
   }
+}
+
+resource "aws_cloudwatch_event_rule" "news_retrieval_company_news_daily" {
+  name                = "${var.env}-news-retrieval-company-news-daily"
+  schedule_expression = "cron(0 1 * * ? *)"
+}
+
+resource "aws_cloudwatch_event_target" "news_retrieval_company_news_daily" {
+  rule     = aws_cloudwatch_event_rule.news_retrieval_company_news_daily.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+
+  ecs_target {
+    task_definition_arn = aws_ecs_task_definition.news_retrieval.arn
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets         = var.private_subnet_ids
+      security_groups = [var.news_sg_id]
+    }
+  }
+
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "news-retrieval"
+        command = ["python", "__main__.py", "trigger", "--domain", "company_news", "--days-back", "1"]
+      }
+    ]
+  })
 }
 
 resource "aws_ecs_task_definition" "signal_detection" {
@@ -667,7 +705,7 @@ resource "aws_ecs_service" "signal_herald" {
 
 resource "aws_cloudwatch_event_rule" "signal_herald_daily" {
   name                = "${var.env}-signal-herald-daily"
-  schedule_expression = "cron(0 14 * * ? *)"
+  schedule_expression = "cron(0 14 ? * MON,THU *)"
 }
 
 

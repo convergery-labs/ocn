@@ -46,6 +46,32 @@ DOMAINS: list[dict[str, Any]] = [
             " detection, and enterprise treasury automation."
         ),
     },
+    {
+        "name": "Adverse Media",
+        "slug": "adverse_media",
+        "description": (
+            "Covers corporate misconduct, fraud, short-seller research,"
+            " regulatory actions, and investigative journalism targeting"
+            " companies in the AI economy universe."
+        ),
+    },
+    {
+        "name": "VC Commentary",
+        "slug": "vc_commentary",
+        "description": (
+            "Covers venture capital theses, startup investing, AI economy"
+            " market dynamics, and operator insights from leading VCs and"
+            " founders."
+        ),
+    },
+    {
+        "name": "Company News",
+        "slug": "company_news",
+        "description": (
+            "Company-specific news for entities in the AI economy universe,"
+            " fetched via Alpha Vantage News & Sentiments API by ticker symbol."
+        ),
+    },
 ]
 
 
@@ -1089,6 +1115,135 @@ SUBSTACK_SOURCES: list[dict[str, Any]] = [
     },
 ]
 
+# Company-specific news via Alpha Vantage News & Sentiments API.
+# Tickers are sourced from the AI economy universe.
+# Fetcher (source_type: "alpha_vantage") implemented in pipeline.py.
+COMPANY_NEWS_SOURCES: list[dict[str, Any]] = [
+    {
+        "domain_slug": "company_news",
+        "url": "alpha_vantage:company_news",
+        "name": "Alpha Vantage Company News",
+        "source_type": "alpha_vantage",
+        "frequency_name": "daily",
+        "description": (
+            "Company-specific news and sentiment for AI economy universe"
+            " entities, fetched by ticker symbol via Alpha Vantage."
+        ),
+        # Tickers are now managed via _AV_BASE_TICKERS in pipeline.py.
+        # This config is kept empty — the source row is required for domain registration.
+        "config": {},
+    },
+]
+
+# VC commentary / investor blogs.
+VC_COMMENTARY_SOURCES: list[dict[str, Any]] = [
+    {
+        "domain_slug": "vc_commentary",
+        "url": "https://medium.com/feed/mayfield-perspectives",
+        "name": "Mayfield Viewpoints",
+        "frequency_name": "weekly",
+        "description": "Navin Chaddha / Mayfield on AI-economy theses and founder leadership.",
+    },
+    {
+        "domain_slug": "vc_commentary",
+        "url": "https://techcrunch.com/author/navin-chaddha/feed/",
+        "name": "Navin Chaddha (TechCrunch)",
+        "frequency_name": "weekly",
+        "description": "Op-eds on AI, startups, and markets from Mayfield Managing Partner.",
+    },
+    {
+        "domain_slug": "vc_commentary",
+        "url": "https://www.mayfield.com/feed",
+        "name": "Mayfield",
+        "frequency_name": "weekly",
+        "description": "Mayfield Fund firm perspectives and portfolio insights.",
+    },
+    {
+        "domain_slug": "vc_commentary",
+        "url": "http://avc.com/feed/",
+        "name": "AVC",
+        "frequency_name": "daily",
+        "description": "Fred Wilson (USV) — daily VC commentary since 2003.",
+    },
+    {
+        "domain_slug": "vc_commentary",
+        "url": "https://abovethecrowd.com/feed",
+        "name": "Above the Crowd",
+        "frequency_name": "weekly",
+        "description": "Bill Gurley (Benchmark) on platforms, valuations, and regulation.",
+    },
+    {
+        "domain_slug": "vc_commentary",
+        "url": "https://andrewchen.com/feed",
+        "name": "Andrew Chen",
+        "frequency_name": "weekly",
+        "description": "Andrew Chen (a16z) on growth, consumer, and AI products.",
+    },
+    {
+        "domain_slug": "vc_commentary",
+        "url": "https://tomtunguz.com/index.xml",
+        "name": "Tomasz Tunguz",
+        "frequency_name": "daily",
+        "description": "Tomasz Tunguz (Theory) — data-driven SaaS and AI market analysis.",
+    },
+    {
+        "domain_slug": "vc_commentary",
+        "url": "https://blog.eladgil.com/feed",
+        "name": "Elad Gil",
+        "frequency_name": "weekly",
+        "description": "Elad Gil on startups, AI, and high-growth company building.",
+    },
+    {
+        "domain_slug": "vc_commentary",
+        "url": "https://www.saastr.com/feed",
+        "name": "SaaStr",
+        "frequency_name": "daily",
+        "description": "Jason Lemkin on SaaS and AI GTM strategies.",
+    },
+    {
+        "domain_slug": "vc_commentary",
+        "url": "https://www.lennysnewsletter.com/feed",
+        "name": "Lenny's Newsletter",
+        "frequency_name": "weekly",
+        "description": "Lenny Rachitsky on product, growth, and AI product strategy.",
+    },
+    {
+        "domain_slug": "vc_commentary",
+        "url": "https://www.newcomer.co/feed",
+        "name": "Newcomer",
+        "frequency_name": "weekly",
+        "description": "Eric Newcomer on VC, tech politics, and startup industry news.",
+    },
+    {
+        "domain_slug": "vc_commentary",
+        "url": "https://feld.com/feed",
+        "name": "Feld Thoughts",
+        "frequency_name": "weekly",
+        "description": "Brad Feld (Foundry) on VC, startups, and entrepreneurship.",
+    },
+]
+
+# Adverse media / investigative sources.
+# Kept separate so they can be toggled independently for testing.
+# To enable: uncomment the *ADVERSE_SOURCES line at the bottom of SOURCES.
+ADVERSE_SOURCES: list[dict[str, Any]] = [
+    {
+        "domain_slug": "adverse_media",
+        "url": "https://thebearcave.substack.com/feed",
+        "name": "The Bear Cave",
+        "frequency_name": "weekly",
+        "description": "Edwin Dorsey's investigative research exposing corporate misconduct and short-sell targets.",
+    },
+    {
+        "domain_slug": "adverse_media",
+        "url": "https://hntrbrk.com/feed",
+        "name": "Hunterbrook",
+        "frequency_name": "weekly",
+        "description": "Investigative journalism uncovering corporate and financial misconduct.",
+    },
+]
+
+
 SOURCES: list[dict[str, Any]] = [
     # ------------------------------------------------------------------
     # AI News
@@ -1399,8 +1554,22 @@ SOURCES: list[dict[str, Any]] = [
     # NewsAPI top-headlines
     # ------------------------------------------------------------------
     *NEWSAPI_SOURCES,
+    # ------------------------------------------------------------------
+    # Adverse media / investigative 
+    # ------------------------------------------------------------------
+     *ADVERSE_SOURCES,
+    # ------------------------------------------------------------------
+    # VC commentary / investor blogs
+    # ------------------------------------------------------------------
+    *VC_COMMENTARY_SOURCES,
+    # ------------------------------------------------------------------
+    # Company-specific news (Alpha Vantage)
+    # ------------------------------------------------------------------
+    *COMPANY_NEWS_SOURCES,
 ]
 
+# VC commentary / investor blogs.
+# Kept separate so they can be toggled independently for testing.
 # ---------------------------------------------------------------------------
 # Seeding logic
 # ---------------------------------------------------------------------------

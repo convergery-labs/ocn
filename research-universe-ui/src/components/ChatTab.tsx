@@ -78,28 +78,39 @@ export function ChatTab({ onPendingCountChange, onNavigateToPending }: ChatTabPr
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [thinkingLabel, setThinkingLabel] = useState<string>('');
   const [conversationId, setConversationId] = useState<string | undefined>();
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, loading]);
 
   const send = useCallback(async (text: string) => {
     const trimmed = text.trim();
     if (!trimmed || loading) return;
-    setInput(''); setLoading(true);
+    setInput(''); setLoading(true); setThinkingLabel('');
     setMessages(prev => [...prev, { id: nextId(), role: 'user', text: trimmed, timestamp: new Date() }]);
+    abortRef.current = new AbortController();
     try {
-      const res = await api.chat(trimmed, conversationId);
+      const res = await api.chat(
+        trimmed,
+        conversationId,
+        evt => setThinkingLabel(evt.label),
+        abortRef.current.signal,
+      );
       setConversationId(res.conversation_id);
       const cleanText = (res.message ?? '').replace(/```json[\s\S]*?```/g,'').replace(/```[\s\S]*?```/g,'').trim();
       setMessages(prev => [...prev, { id: nextId(), role: 'agent', text: cleanText, cardType: res.card_type, cardData: res.card_data, timestamp: new Date() }]);
       if (res.card_type === 'proposed_entry' || res.card_type === 'review_nudge') {
         api.pending().then(p => onPendingCountChange(p.length)).catch(() => {});
       }
-    } catch {
-      setMessages(prev => [...prev, { id: nextId(), role: 'agent', text: '⚠️ Could not reach the server. Please try again.', timestamp: new Date() }]);
-    } finally { setLoading(false); setTimeout(() => inputRef.current?.focus(), 50); }
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === 'AbortError') return;
+      console.error('[chat error]', err);
+      const msg = err instanceof Error ? err.message : String(err);
+      setMessages(prev => [...prev, { id: nextId(), role: 'agent', text: `⚠️ ${msg}`, timestamp: new Date() }]);
+    } finally { setLoading(false); setThinkingLabel(''); setTimeout(() => inputRef.current?.focus(), 50); }
   }, [loading, conversationId, onPendingCountChange]);
 
   const handleKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -136,8 +147,13 @@ export function ChatTab({ onPendingCountChange, onNavigateToPending }: ChatTabPr
               {loading && (
                 <div className="msg-row" style={{ marginTop: 16 }}>
                   <div className="msg-avatar agent">AI</div>
-                  <div className="typing-dots">
-                    <div className="typing-dot" /><div className="typing-dot" /><div className="typing-dot" />
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <div className="typing-dots">
+                      <div className="typing-dot" /><div className="typing-dot" /><div className="typing-dot" />
+                    </div>
+                    {thinkingLabel && (
+                      <span style={{ fontSize: 11, color: 'var(--ink-4)', paddingLeft: 4 }}>{thinkingLabel}</span>
+                    )}
                   </div>
                 </div>
               )}
@@ -177,7 +193,7 @@ function MessageRow({ message: msg, onNavigateToPending }: { message: ChatMessag
   return (
     <div className={`msg-row${isUser ? ' user' : ''}`} style={{ marginBottom: 16 }}>
       <div className={`msg-avatar ${isUser ? 'user' : 'agent'}`}>{isUser ? 'U' : 'AI'}</div>
-      <div style={{ display:'flex', flexDirection:'column', gap:4, maxWidth:'78%', alignItems: isUser ? 'flex-end' : 'flex-start' }}>
+      <div style={{ display:'flex', flexDirection:'column', gap:4, minWidth:0, flex:1, alignItems: isUser ? 'flex-end' : 'flex-start' }}>
         {msg.text && (
           <div className={`msg-bubble ${isUser ? 'user' : 'agent'}`}>
             {isUser ? msg.text : (

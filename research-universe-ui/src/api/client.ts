@@ -1,4 +1,5 @@
-import type { Category, ChatResponse, Company, ScheduleSummary, ScanJob, User } from '../types';
+import { fetchEventSource } from '@microsoft/fetch-event-source';
+import type { Category, ChatDoneEvent, ChatThinkingEvent, Company, ScheduleSummary, ScanJob, User } from '../types';
 
 const API_BASE_KEY = 'ru_api_base';
 const API_KEY_KEY = 'ru_api_key';
@@ -68,11 +69,43 @@ export const api = {
 
   me: () => request<User>('/users/me'),
 
-  chat: (message: string, conversationId?: string) =>
-    request<ChatResponse>('/chat', {
-      method: 'POST',
-      body: JSON.stringify({ message, conversation_id: conversationId }),
-    }),
+  chat: (
+    message: string,
+    conversationId: string | undefined,
+    onThinking: (evt: ChatThinkingEvent) => void,
+    signal?: AbortSignal,
+  ): Promise<ChatDoneEvent> => {
+    const key = getApiKey();
+    return new Promise((resolve, reject) => {
+      fetchEventSource(`${getApiBase()}/chat`, {
+        method: 'POST',
+        signal,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(key ? { Authorization: `Bearer ${key}` } : {}),
+        },
+        body: JSON.stringify({ message, conversation_id: conversationId }),
+        onopen: async (res) => {
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            const detail = (body as { detail?: string }).detail ?? `HTTP ${res.status}`;
+            if (res.status === 401) { clearAuth(); onSessionExpired?.(); }
+            throw new Error(detail);
+          }
+        },
+        onmessage: (ev) => {
+          const data = JSON.parse(ev.data);
+          if (ev.event === 'thinking') onThinking(data as ChatThinkingEvent);
+          if (ev.event === 'error')    reject(new Error((data as { message: string }).message));
+          if (ev.event === 'done')     resolve(data as ChatDoneEvent);
+        },
+        onerror: (err) => {
+          reject(err);
+          throw err; // stops fetchEventSource from retrying
+        },
+      });
+    });
+  },
 
   stats: () => request<{ total: number; verified: number; pending: number }>('/companies/stats'),
 
