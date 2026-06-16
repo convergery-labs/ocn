@@ -8,5 +8,10 @@ def test_app_created() -> None:
     """App factory returns a configured FastAPI instance."""
     application = create_app()
     assert isinstance(application, FastAPI)
-    routes = [r.path for r in application.routes if hasattr(r, "path")]
-    assert "/health" in routes
+    paths = []
+    for r in application.routes:
+        if hasattr(r, "path"):
+            paths.append(r.path)
+        if hasattr(r, "routes"):
+            paths.extend(sr.path for sr in r.routes if hasattr(sr, "path"))
+    assert "/health" in paths
