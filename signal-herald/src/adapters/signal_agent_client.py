@@ -45,7 +45,7 @@ def trigger_run(domain: str = "ai_news") -> int:
             "/run",
             json={"domain": domain},
             headers=_headers(),
-            timeout=180,
+            timeout=900,
         )
     if resp.status_code not in (200, 202):
         raise SignalAgentError(

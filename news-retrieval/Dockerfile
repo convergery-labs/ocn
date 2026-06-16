@@ -11,7 +11,7 @@ COPY news-retrieval/src/ /app/
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app/shared
 
-CMD ["python", "__main__.py", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "__main__.py", "serve", "--host", "0.0.0.0", "--port", "8000"]
 
 FROM base AS dev
 

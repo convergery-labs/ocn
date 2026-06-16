@@ -66,6 +66,9 @@ infra/
 | `OPENROUTER_MODEL` | hardcoded | `openrouter/elephant-alpha` |
 | `SERPAPI_KEY` | Secrets Manager | `ocn/{env}/news-retrieval:SERPAPI_KEY` - optional; SerpAPI key for `google_news` sources |
 | `NEWSAPI_KEY` | Secrets Manager | `ocn/{env}/news-retrieval:NEWSAPI_KEY` - optional; NewsAPI key for `newsapi` sources |
+| `ALPHA_VANTAGE_API_KEY` | Secrets Manager | `ocn/{env}/news-retrieval:ALPHA_VANTAGE_API_KEY` - optional; Alpha Vantage key for `company_news` domain |
+| `RESEARCH_UNIVERSE_URL` | hardcoded | `http://research-universe.{env}.ocn.internal:8007` - optional; used to fetch tickers dynamically for `company_news` domain |
+| `RESEARCH_UNIVERSE_API_KEY` | Secrets Manager | `ocn/{env}/news-retrieval:RESEARCH_UNIVERSE_API_KEY` - optional; service API key (ru_ prefix) for authenticating calls to research-universe |
 
 ### signal-detection
 | Variable | Source | Notes |

@@ -205,3 +205,7 @@ def init_db() -> None:
             ON articles (run_id, LOWER(title))
             WHERE title IS NOT NULL
         """)
+        conn.execute(
+            "ALTER TABLE articles"
+            " ADD COLUMN IF NOT EXISTS metadata JSONB"
+        )

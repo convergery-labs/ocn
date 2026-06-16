@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from collections.abc import Generator
 from typing import Any
 
 from openai import OpenAI
@@ -211,3 +212,103 @@ def run(
         "card_data": card_data,
         "conversation_id": conv_id,
     }
+
+
+def run_streaming(
+    message: str,
+    conversation_id: str | None,
+    user_id: str,
+    user_name: str,
+) -> Generator[dict[str, Any], None, None]:
+    """Run the agent, yielding SSE-style event dicts as work progresses.
+
+    Yields:
+        {"event": "thinking", "data": {"tool": str, "label": str}}  — one per tool call
+        {"event": "done",     "data": {message, card_type, card_data, conversation_id}}
+        {"event": "error",    "data": {"message": str}}
+    """
+    model = os.environ.get("OPENROUTER_MODEL", "anthropic/claude-sonnet-4-6")
+    client = _llm_client()
+
+    conv_id, history = conv_model.get_or_create(conversation_id, user_id)
+
+    user_ctx = f"[user_id={user_id} user_name={user_name}]"
+    history.append({"role": "user", "content": f"{user_ctx}\n{message}"})
+
+    final_text: str = ""
+    card_type: str | None = None
+    card_data: dict | None = None
+    last_card_tool: str | None = None
+    last_card_result: str | None = None
+
+    _TOOL_LABELS = {
+        "search_companies": "Searching companies…",
+        "get_company": "Fetching company profile…",
+        "create_company": "Adding company to universe…",
+        "update_company": "Updating company record…",
+        "verify_company": "Verifying company…",
+        "list_pending": "Checking pending queue…",
+        "search_taxonomy": "Searching taxonomy…",
+        "create_taxonomy_entry": "Creating taxonomy entry…",
+        "find_peers": "Finding peer companies…",
+    }
+
+    try:
+        for iteration in range(MAX_TOOL_ITERATIONS):
+            response = client.chat.completions.create(
+                model=model,
+                max_tokens=4096,
+                temperature=0.2,
+                messages=[{"role": "system", "content": SYSTEM_PROMPT}] + history,
+                tools=TOOL_DEFINITIONS,
+                tool_choice="auto",
+            )
+
+            choice = response.choices[0]
+            assistant_msg = choice.message
+            history.append(_message_to_dict(assistant_msg))
+
+            if choice.finish_reason == "tool_calls" and assistant_msg.tool_calls:
+                for tc in assistant_msg.tool_calls:
+                    args = json.loads(tc.function.arguments)
+                    label = _TOOL_LABELS.get(tc.function.name, f"{tc.function.name}…")
+                    log.info("Tool call: %s(%s)", tc.function.name, list(args.keys()))
+                    yield {"event": "thinking", "data": {"tool": tc.function.name, "label": label}}
+                    result = execute_tool(tc.function.name, args)
+                    history.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": result,
+                    })
+                    if tc.function.name in _CARD_TOOLS:
+                        last_card_tool = tc.function.name
+                        last_card_result = result
+            else:
+                final_text, _parsed_card_type, _parsed_card_data = _parse_response(
+                    assistant_msg.content or ""
+                )
+                if last_card_tool and last_card_result:
+                    card_type, card_data = _card_from_tool(last_card_tool, last_card_result)
+                if card_type is None:
+                    card_type, card_data = _parsed_card_type, _parsed_card_data
+                log.info("Agent finished after %d iteration(s) | card=%s", iteration + 1, card_type)
+                break
+        else:
+            log.warning("Agent hit MAX_TOOL_ITERATIONS (%d)", MAX_TOOL_ITERATIONS)
+            final_text = "I reached the maximum number of steps. Please try a simpler request."
+
+        conv_model.save(conv_id, history)
+
+        final_text = final_text.replace("—", "-").replace("–", "-")
+        yield {
+            "event": "done",
+            "data": {
+                "message": final_text,
+                "card_type": card_type,
+                "card_data": card_data,
+                "conversation_id": conv_id,
+            },
+        }
+    except Exception as exc:
+        log.exception("Agent streaming error")
+        yield {"event": "error", "data": {"message": str(exc)}}

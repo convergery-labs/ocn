@@ -3,7 +3,7 @@
 ## Overview
 A2A-compatible daily digest service. Polls the signal-detection-agent for classified articles, groups them into 19 AI-universe categories, generates LLM-powered investment summaries via OpenRouter, and sends a branded HTML email digest (AlphaStreet.ai) with a "Highest Conviction Today" strip, per-category article lists, and mobile-responsive layout.
 
-Runs on **port 8006**. Scheduled daily at **14:00 UTC** via CloudWatch Events in staging.
+Runs on **port 8006**. Scheduled **Monday and Thursday at 14:00 UTC** via CloudWatch Events in staging.
 
 ## Architecture
 
@@ -78,7 +78,7 @@ Raw Materials & Critical Minerals, Energy & Grid Infrastructure, Nuclear & Advan
 
 ## Infra
 - ECS task: `{env}-signal-herald`, CPU 512 / Mem 1024
-- CloudWatch rule: daily at 14:00 UTC, runs `python -m src run --force`
+- CloudWatch rule: Monday and Thursday at 14:00 UTC, runs `python -m src run --force`
 - ECR repo: `ocn/signal-herald`
 - Security group: ingress port 8006 from VPC CIDR `10.0.0.0/16`
 - Log group: `/ecs/{env}/signal-herald` (30-day retention)

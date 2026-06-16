@@ -1,4 +1,5 @@
 """DB query functions for article records."""
+import json
 from datetime import date
 from typing import Optional
 
@@ -29,7 +30,7 @@ def create_articles(articles: list[dict]) -> None:
     with get_db() as conn:
         conn.execute_values(
             "INSERT INTO articles"
-            " (run_id, url, title, summary, source, published, body)"
+            " (run_id, url, title, summary, source, published, body, metadata)"
             " VALUES %s"
             " ON CONFLICT DO NOTHING",
             [
@@ -41,6 +42,7 @@ def create_articles(articles: list[dict]) -> None:
                     a.get("source"),
                     a.get("published"),
                     a.get("body"),
+                    json.dumps(a["metadata"]) if a.get("metadata") else None,
                 )
                 for a in articles
             ],

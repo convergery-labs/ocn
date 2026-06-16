@@ -8,17 +8,17 @@ from db import get_db
 
 # Subquery fragments reused across queries
 _CATEGORY_NAMES = """
-    (SELECT array_agg(name ORDER BY name)
-     FROM universe_taxonomy WHERE id = ANY(c.category_ids))
+    COALESCE((SELECT array_agg(name ORDER BY name)
+     FROM universe_taxonomy WHERE id = ANY(c.category_ids)), '{}')
 """
 _SUBCATEGORY_NAMES = """
-    (SELECT array_agg(name ORDER BY name)
-     FROM universe_taxonomy WHERE id = ANY(c.subcategory_ids))
+    COALESCE((SELECT array_agg(name ORDER BY name)
+     FROM universe_taxonomy WHERE id = ANY(COALESCE(c.subcategory_ids, '{}'))), '{}')
 """
 _PROPOSED_SUBCATEGORY_NAMES = """
-    (SELECT array_agg(name ORDER BY name)
+    COALESCE((SELECT array_agg(name ORDER BY name)
      FROM universe_taxonomy
-     WHERE id = ANY(c.subcategory_ids) AND agent_proposed = TRUE)
+     WHERE id = ANY(COALESCE(c.subcategory_ids, '{}')) AND agent_proposed = TRUE), '{}')
 """
 
 _DETAIL_COLS = f"""
@@ -92,6 +92,31 @@ def get_company(company_id: str) -> dict[str, Any] | None:
         return dict(row) if row else None
 
 
+def list_companies(
+    status: str | None = None,
+    limit: int = 5000,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    """Return companies, optionally filtered by status. Ordered by company_name."""
+    params: dict[str, Any] = {"limit": limit, "offset": offset}
+    where = "WHERE c.ticker != ''"
+    if status:
+        where += " AND c.status = :status"
+        params["status"] = status
+    with get_db() as conn:
+        cur = conn.execute(
+            f"""
+            SELECT {_BRIEF_COLS}
+            FROM universe_companies c
+            {where}
+            ORDER BY c.company_name ASC
+            LIMIT :limit OFFSET :offset
+            """,
+            params,
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
 def get_pending_companies(limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
     """Return pending_review companies, newest first. Paginated - default page size 100."""
     with get_db() as conn:
@@ -152,6 +177,8 @@ def get_companies_by_category_id(category_id: int) -> list[dict[str, Any]]:
 
 def create_company(fields: dict[str, Any]) -> dict[str, Any]:
     """Insert a new company row. Returns the created record."""
+    fields.setdefault("subcategory_ids", [])
+    fields.setdefault("category_ids", [])
     with get_db() as conn:
         cur = conn.execute(
             """
@@ -179,6 +206,10 @@ def update_company(company_id: str, fields: dict[str, Any]) -> dict[str, Any] | 
         "category_ids", "subcategory_ids", "multi_category_reason",
     }
     updates = {k: v for k, v in fields.items() if k in allowed}
+    if updates.get("subcategory_ids") is None:
+        updates["subcategory_ids"] = []
+    if updates.get("category_ids") is None:
+        updates["category_ids"] = []
     if not updates:
         return get_company(company_id)
 

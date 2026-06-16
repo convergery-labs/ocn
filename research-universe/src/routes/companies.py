@@ -1,12 +1,9 @@
 """Companies API routes."""
 from __future__ import annotations
-
 from datetime import datetime
 from typing import Any
-
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-
 import models.company as company_model
 from auth import get_current_user
 
@@ -26,8 +23,8 @@ class CompanyBrief(BaseModel):
     status: str
     agent_added: bool
     added_at: datetime
-    categories: list[str]
-    subcategories: list[str]
+    categories: list[str] = []
+    subcategories: list[str] = []
     match_score: float | None = None
 
 
@@ -38,15 +35,16 @@ class CompanyDetail(BaseModel):
     market: str
     country: str
     website: str
-    multi_category_reason: str | None
+    multi_category_reason: str | None = None
     status: str
     agent_added: bool
-    added_by: str | None
+    added_by: str | None = None
     added_at: datetime
-    verified_by: str | None
-    verified_at: datetime | None
-    categories: list[str]
-    subcategories: list[str]
+    verified_by: str | None = None
+    verified_at: datetime | None = None
+    categories: list[str] = []
+    subcategories: list[str] = []
+    proposed_subcategories: list[str] = []
 
 
 class VerifyRequest(BaseModel):
@@ -56,6 +54,16 @@ class VerifyRequest(BaseModel):
 # --------------------------------------------------------------------------- #
 # Routes                                                                       #
 # --------------------------------------------------------------------------- #
+
+@router.get("", response_model=list[CompanyBrief])
+def list_companies(
+    status: str | None = Query(default=None, description="Filter by status: 'verified' or 'pending_review'"),
+    limit: int = Query(default=5000, ge=1, le=10000),
+    offset: int = Query(default=0, ge=0),
+) -> list[dict[str, Any]]:
+    """Return all companies with tickers, optionally filtered by status."""
+    return company_model.list_companies(status=status, limit=limit, offset=offset)
+
 
 @router.get("/stats")
 def stats() -> dict:
