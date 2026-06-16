@@ -906,6 +906,6 @@ def run(
     )
     return {
         "articles": [
-            {k: a[k] for k in _ARTICLE_KEYS} for a in relevant
+           {k: a.get(k) for k in _ARTICLE_KEYS} for a in relevant
         ],
     }
