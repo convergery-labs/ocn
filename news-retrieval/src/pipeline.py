@@ -480,6 +480,7 @@ _AV_DAILY_LIMIT = 500
 # Hardcoded 500 popular US-listed AI-economy tickers for Alpha Vantage.
 # Dynamic fetch via research-universe API can ADD new tickers on top of this list
 # but will never overwrite it — these are the guaranteed baseline.
+#count = 453
 _AV_BASE_TICKERS: list[str] = [
     "NVDA","MSFT","AAPL","AMZN","GOOGL","META","TSLA","AVGO","ORCL","AMD",
     "CRM","NOW","INTU","ADBE","CSCO","IBM","TXN","QCOM","ARM","INTC",
@@ -502,6 +503,31 @@ _AV_BASE_TICKERS: list[str] = [
     "SE","GRAB","GOTO","BABA","JD","PDD","BIDU","TCEHY","TME","HUYA",
     "DOYU","IQ","BILI","TSM","ASML","SAP","CFLT","GTLB","HUBS","BILL",
     "PAYC","PCTY","SMAR","APPN","MNDY","ASAN","JAMF","DOCN","DOMO","BOX",
+    "ALB","FCX","MP","RIO","CCJ","NEE","VST","CEG","GEV","NRG",
+    "TOELY","MU","VRT","TT","MOD","FIX","ETN","APH","PWR","ISRG",
+    "LMT","AXON","WDAY","VEEV","TEAM","ZM","DOCU","S","TENB","RPD",
+    "CYBR","QLYS","VRNT","SAIL","ENFN","RDWR","AI","BBAI","SOUN","GFAI",
+    "HOOD","NU","FLUT","MELI","BRZE","PATH","IROBOT","NVTS","ACHR","JOBY",
+    "RKLB","LUNR","PL","SPIR","HII","RTX","BA","NOC","GD","RIVN",
+    "LCID","FSR","XPEV","LI","NIO","SDGR","RXRX","TWST","ILMN","TEM",
+    "MDAI","VZ","T","TMUS","KAKAO","9984.T","ADSK","ANGI","AZPN","BL",
+    "CDAY","CORT","CWAN","ESTC","FIVN","FOUR","FRSH","GENI","GWRE","HCP",
+    "HIMS","IO","KROS","LPSN","MANH","NCNO","NTNX","PCVX","PRGS","RAMP",
+    "RNG","SAMSF","SPT","TASK","TOST","TXRH","TYRA","VNET","VRNS","WEX",
+    "WOLF","XPOF","ZI","AMKR","AEHR","ASYS","CAVM","CLAR","CMGE","ENVX",
+    "GFS","HIMX","IMOS","INTF","IPSN","IXHL","KOPN","MRAM","NUVL","NVEC",
+    "PCYG","PLAB","PRCT","PSI","ACAD","APLT","ARWR","BEAM","BLUE","CGEM",
+    "DNLI","EDIT","FOLD","GERN","GRPH","IMVT","IONS","IOVA","ITRI","KDNY",
+    "KRYS","LOGC","NKLA","NTLA","PACB","PRME","PTGX","REGN","RGEN","RLAY",
+    "RNA","ROOF","SAGE","ACIW","ACVA","BWXT","CACI","DRS","ESIT","FLIR",
+    "HEI","KTOS","LDOS","MANT","MRCY","PSN","SAIC","SPCE","SPY","SWAV",
+    "TDY","TXT","VRSN","CMBM","CSGS","DSGX","EGHT","EXLX","FSLY","GCMG",
+    "GLBE","GWAV","ITRN","LMND","LPTH","MIME","MNKD","MXIM","BNTX","CFFE",
+    "CHX","CNXC","CREE","DOOO","DSEY","ESYS","FARO","FLEX","FROG","GCBC",
+    "HLIO","IRBT","ITIC","JMIA","KPLT","LIQT","MNSO","MOXC","NCTY","NEPT",
+    "NFLY","NKTR","NLOK","NOVA","NUAN","AKAM","ALTR","APPF","APPM","ARIS",
+    "AVLR","BCOV","BFLY","BIGC","BLKB","BVS","CARG","CGNT","CHKP","CLOU",
+    "CODA","CPRT","DCBO",
 ]
 
 

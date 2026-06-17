@@ -427,6 +427,7 @@ resource "aws_iam_role_policy" "ecs_events_run_task" {
           aws_ecs_task_definition.signal_detection.arn,
           aws_ecs_task_definition.signal_herald.arn,
           aws_ecs_task_definition.research_universe.arn,
+          aws_ecs_task_definition.news_retrieval.arn,
         ]
       },
       {
