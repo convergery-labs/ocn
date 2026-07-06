@@ -270,8 +270,8 @@ def _process_category(
             skipped_count += 1
             continue
 
-        # If subcategory doesn't match any existing entry, skip rather than invent
-        if subcategory_name and not sub_ids:
+        # Require a resolved subcategory — skip if name was empty or didn't match
+        if not sub_ids:
             log.warning(
                 "[scan %s] Skipping '%s' — subcategory '%s' not in taxonomy",
                 job_id, name, subcategory_name,

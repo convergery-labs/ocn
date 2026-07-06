@@ -63,5 +63,39 @@ def trigger(domain: str, days_back: int) -> None:
     logger.info("Pipeline complete — run_id=%d", result["run_id"])
 
 
+@cli.command("poll-market")
+@click.option(
+    "--mode",
+    type=click.Choice(["quotes", "daily"]),
+    required=True,
+    help="quotes: price/indices/status every 15 min. daily: overview/earnings/history once a day.",
+)
+@click.option(
+    "--tickers",
+    default=None,
+    help="Comma-separated ticker list. Falls back to MARKET_POLL_TICKERS env var.",
+)
+def poll_market(mode: str, tickers: str | None) -> None:
+    """Fetch market data from Alpha Vantage and write to Amazon Timestream."""
+    import os
+    from poller import run_daily, run_quotes
+
+    av_key = os.environ.get("ALPHA_VANTAGE_API_KEY", "")
+    if not av_key:
+        logger.error("ALPHA_VANTAGE_API_KEY is not set")
+        sys.exit(1)
+
+    from pipeline import _AV_BASE_TICKERS
+    ticker_list = list(_AV_BASE_TICKERS)
+    if tickers:
+        ticker_list = [t.strip().upper() for t in tickers.split(",") if t.strip()]
+    logger.info("[POLLER] tickers=%d", len(ticker_list))
+
+    if mode == "daily":
+        run_daily(ticker_list, av_key)
+    else:
+        run_quotes(ticker_list, av_key)
+
+
 if __name__ == "__main__":
     cli()

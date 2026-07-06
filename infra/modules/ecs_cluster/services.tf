@@ -15,11 +15,12 @@ resource "aws_ecs_task_definition" "auth_service" {
         { containerPort = 8001 }
       ]
       environment = [
-        { name = "AUTH_POSTGRES_HOST", value = var.rds_endpoint },
-        { name = "AUTH_POSTGRES_PORT", value = "5432" },
-        { name = "AUTH_POSTGRES_DB",   value = "auth_db" },
-        { name = "AUTH_POSTGRES_USER", value = "auth_user" },
-        { name = "PGSSLMODE",          value = "require" }
+        { name = "AUTH_POSTGRES_HOST",       value = var.rds_endpoint },
+        { name = "AUTH_POSTGRES_PORT",       value = "5432" },
+        { name = "AUTH_POSTGRES_DB",         value = "auth_db" },
+        { name = "AUTH_POSTGRES_USER",       value = "auth_user" },
+        { name = "PGSSLMODE",                value = "require" },
+        { name = "AUTH_JWT_EXPIRY_SECONDS",  value = "86400" }
       ]
       secrets = [
         {
@@ -99,7 +100,7 @@ resource "aws_ecs_task_definition" "news_retrieval" {
   cpu                      = "512"
   memory                   = "1024"
   execution_role_arn       = aws_iam_role.ecs_task_execution.arn
-
+  task_role_arn            = aws_iam_role.ecs_task_execution.arn
 
   container_definitions = jsonencode([
     {
@@ -115,8 +116,17 @@ resource "aws_ecs_task_definition" "news_retrieval" {
         { name = "POSTGRES_USER",    value = "news_user" },
         { name = "PGSSLMODE",        value = "require" },
         { name = "AUTH_SERVICE_URL",        value = "http://auth-service.${var.env}.ocn.internal:8001" },
+        { name = "NEWS_RETRIEVAL_URL",      value = "http://news-retrieval.${var.env}.ocn.internal:8000" },
         { name = "RESEARCH_UNIVERSE_URL",   value = "http://research-universe.${var.env}.ocn.internal:8007" },
-        { name = "OPENROUTER_MODEL",        value = "openrouter/elephant-alpha" }
+        { name = "OPENROUTER_MODEL",        value = "openrouter/elephant-alpha" },
+        { name = "AWS_REGION",                    value = var.aws_region },
+        { name = "DYNAMODB_TABLE_QUOTE",          value = "ocn-market-quote" },
+        { name = "DYNAMODB_TABLE_OVERVIEW",       value = "ocn-market-overview" },
+        { name = "DYNAMODB_TABLE_PRICE_HISTORY",  value = "ocn-market-price-history" },
+        { name = "DYNAMODB_TABLE_EARNINGS",       value = "ocn-market-earnings" },
+        { name = "DYNAMODB_TABLE_INDICES",        value = "ocn-market-indices" },
+        { name = "DYNAMODB_TABLE_MARKET_STATUS",  value = "ocn-market-status" },
+        { name = "DYNAMODB_TABLE_LOCK",           value = "ocn-market-lock" }
       ]
       secrets = [
         {
@@ -424,16 +434,18 @@ resource "aws_iam_role_policy" "ecs_events_run_task" {
         Effect = "Allow"
         Action = ["ecs:RunTask"]
         Resource = [
-          aws_ecs_task_definition.signal_detection.arn,
-          aws_ecs_task_definition.signal_herald.arn,
-          aws_ecs_task_definition.research_universe.arn,
-          aws_ecs_task_definition.news_retrieval.arn,
+          "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/staging-signal-detection:*",
+          "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/staging-signal-herald:*",
+          "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/staging-research-universe:*",
+          "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/staging-news-retrieval:*",
         ]
       },
       {
         Effect   = "Allow"
         Action   = ["iam:PassRole"]
-        Resource = [aws_iam_role.ecs_task_execution.arn]
+        Resource = [
+          aws_iam_role.ecs_task_execution.arn,
+        ]
       }
     ]
   })

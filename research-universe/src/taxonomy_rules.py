@@ -61,30 +61,30 @@ not the category where AI happens to use their output:
 # Short enough to fit in the system prompt without bloating token count.
 # Each line states what IS and what IS NOT in the category.
 CATEGORY_CHEATSHEET = """\
-01. Raw Materials & Critical Minerals - mining, extraction, or minimal processing of ANY mineral or raw material (lithium/copper/rare earths/potash/salt/graphite/specialty metals). Primary revenue must come from selling the raw or minimally-processed material itself (ore, concentrate, billet, refined metal) — NOT a fabricated product made from it. NOT energy utilities, NOT chip designers, NOT downstream manufacturers (PCB laminates → cat 04, specialty alloys → cat 04, structural steel → cat 07).
-02. Energy & Grid Infrastructure - electricity generation, transmission, grid, storage, EV charging. NOT nuclear-specific (cat 03), NOT chip/semiconductor makers (power chips like SiC/GaN/PMICs are cat 04 regardless of "power" in the name), NOT fuel/extraction companies (oil, gas, uranium producers are cat 01 or cat 03 — selling fuel to power plants ≠ operating grid infrastructure), NOT data center builders.
-03. Nuclear & Advanced Energy - nuclear power, SMRs, fusion, uranium enrichment, long-duration storage. NOT general utilities that happen to run nuclear plants (Vattenfall, Fortum, Electricité de Strasbourg → cat 02), NOT hydrogen fuel cell makers (Plug Power → cat 02), NOT companies whose nuclear involvement is limited to one division.
-04. Semiconductor Manufacturing - chip design, foundries, OSAT, EDA, lithography, semiconductor equipment & materials. INCLUDES industrial gas companies (Air Products, Linde) and specialty chemicals/materials conglomerates (DOW, Dupont, Celanese, Eastman, BASF) that supply critical process materials to fabs — even if semiconductor is not their largest division. NOT server assemblers, NOT cloud.
-05. Compute Hardware & Edge Systems - AI servers, GPUs, edge devices, ODMs, EMS, robotics hardware components (component/subsystem suppliers, NOT full robot systems → cat 13). NOT chip fabs, NOT cloud services.
-06. Networking, Optical & Interconnect - switches, optical transceivers, silicon photonics, high-speed interconnects. NOT telecom operators, NOT data center builders.
-07. Data Centers & Physical Infrastructure - colocation, cooling, power distribution, data center construction & REITs. NOT cloud software, NOT networking chips.
-08. Telecom & Connectivity - mobile operators, fixed-line, satellite internet, 5G/6G network operators. NOT equipment makers (that is Networking), NOT cloud.
-09. Cloud & Compute Platforms - cloud IaaS/PaaS, GPU cloud, sovereign compute platforms. NOT SaaS applications, NOT on-premise hardware.
-10. AI Software Infrastructure - MLOps, AI dev tools, vector DBs, AI security, orchestration, enterprise AI platforms. NOT consumer apps, NOT hardware, NOT data labelling (Scale AI → cat 11), NOT model hubs (Hugging Face → cat 12).
-11. AI Data Infrastructure - data pipelines, labeling, annotation, synthetic data, data quality for AI. INCLUDES Scale AI (data labelling). NOT general BI tools.
-12. AI Models & Intelligence Layer - foundation model providers, LLM APIs, model hubs (Hugging Face), generative model trainers (Runway ML). NOT companies that only USE AI. NOT cybersecurity using AI (→ cat 10). NOT AI apps built on top of models (Copy.ai, Jasper, Character.AI, Synthesia, Perplexity → cat 19). Test: does the company SELL a model/API, or sell a product that uses one?
-13. Robotics & Physical AI - industrial robots, humanoids, drones, autonomous vehicles as primary product. NOT pure software for robotics.
-14. Quantum Computing & Sensing - quantum computers, quantum networking, quantum sensing as primary business. NOT companies with only a quantum research division.
-15. Life Sciences & Healthcare AI - companies that use AI meaningfully in drug discovery, medical imaging, genomics, diagnostics, or healthcare operations. INCLUDES large pharma (Pfizer, Roche, AstraZeneca etc.) and health insurers that use AI as a central tool. NOT hospital systems with no AI involvement.
-16. Defense, Aerospace & Sovereign AI - primary revenue from defense contracts, military systems, government intelligence, or space with direct defense application (defense revenue must be primary — exclude if under ~20% of total). NOT commercial tech companies, NOT telecom operators, NOT solar/energy companies, NOT general Chinese tech giants unless defense is their primary revenue.
-17. Financial Infrastructure & AI Capital - companies that use AI meaningfully in financial services — fintech, capital markets, payments, and traditional banks/asset managers that use AI in core operations (trading, risk, fraud, underwriting). NOT ETFs/investment funds that only invest in AI companies.
-18. Water & Resource Infrastructure - water treatment, resource efficiency, environmental tech with AI or advanced technology as a core product. NOT general utilities.
-19. Applications & Digital Economy - end-user AI apps, vertical SaaS with AI at core, consumer AI products. NOT infrastructure layers.\
+Raw Materials & Critical Minerals - mining, extraction, or minimal processing of ANY mineral or raw material (lithium/copper/rare earths/potash/salt/graphite/specialty metals). Primary revenue must come from selling the raw or minimally-processed material itself (ore, concentrate, billet, refined metal) — NOT a fabricated product made from it. NOT energy utilities, NOT chip designers, NOT downstream manufacturers (PCB laminates → Semiconductor Manufacturing, specialty alloys → Semiconductor Manufacturing, structural steel → Data Centers & Physical Infrastructure).
+Energy & Grid Infrastructure - electricity generation, transmission, grid, storage, EV charging. NOT nuclear-specific (Nuclear & Advanced Energy), NOT chip/semiconductor makers (power chips like SiC/GaN/PMICs are Semiconductor Manufacturing regardless of "power" in the name), NOT fuel/extraction companies (oil, gas, uranium producers are Raw Materials or Nuclear — selling fuel to power plants ≠ operating grid infrastructure), NOT data center builders.
+Nuclear & Advanced Energy - nuclear power, SMRs, fusion, uranium enrichment, long-duration storage. NOT general utilities that happen to run nuclear plants (Vattenfall, Fortum, Electricité de Strasbourg → Energy & Grid), NOT hydrogen fuel cell makers (Plug Power → Energy & Grid), NOT companies whose nuclear involvement is limited to one division.
+Semiconductor Manufacturing - chip design, foundries, OSAT, EDA, lithography, semiconductor equipment & materials. INCLUDES industrial gas companies (Air Products, Linde) and specialty chemicals/materials conglomerates (DOW, Dupont, Celanese, Eastman, BASF) that supply critical process materials to fabs — even if semiconductor is not their largest division. NOT server assemblers, NOT cloud.
+Compute Hardware & Edge Systems - AI servers, GPUs, edge devices, ODMs, EMS, robotics hardware components (component/subsystem suppliers, NOT full robot systems → Robotics & Physical AI). NOT chip fabs, NOT cloud services.
+Networking, Optical & Interconnect - switches, optical transceivers, silicon photonics, high-speed interconnects. NOT telecom operators, NOT data center builders.
+Data Centers & Physical Infrastructure - colocation, cooling, power distribution, data center construction & REITs. NOT cloud software, NOT networking chips.
+Telecom & Connectivity - mobile operators, fixed-line, satellite internet, 5G/6G network operators. NOT equipment makers (that is Networking), NOT cloud.
+Cloud & Compute Platforms - cloud IaaS/PaaS, GPU cloud, sovereign compute platforms. NOT SaaS applications, NOT on-premise hardware.
+AI Software Infrastructure - MLOps, AI dev tools, vector DBs, AI security, orchestration, enterprise AI platforms. NOT consumer apps, NOT hardware, NOT data labelling (Scale AI → AI Data Infrastructure), NOT model hubs (Hugging Face → AI Models & Intelligence Layer).
+AI Data Infrastructure - data pipelines, labeling, annotation, synthetic data, data quality for AI. INCLUDES Scale AI (data labelling). NOT general BI tools.
+AI Models & Intelligence Layer - foundation model providers, LLM APIs, model hubs (Hugging Face), generative model trainers (Runway ML). NOT companies that only USE AI. NOT cybersecurity using AI (→ AI Software Infrastructure). NOT AI apps built on top of models (Copy.ai, Jasper, Character.AI, Synthesia, Perplexity → Applications & Digital Economy). Test: does the company SELL a model/API, or sell a product that uses one?
+Robotics & Physical AI - industrial robots, humanoids, drones, autonomous vehicles as primary product. NOT pure software for robotics.
+Quantum Computing & Sensing - quantum computers, quantum networking, quantum sensing as primary business. NOT companies with only a quantum research division.
+Life Sciences & Healthcare AI - companies that use AI meaningfully in drug discovery, medical imaging, genomics, diagnostics, or healthcare operations. INCLUDES large pharma (Pfizer, Roche, AstraZeneca etc.) and health insurers that use AI as a central tool. NOT hospital systems with no AI involvement.
+Defense, Aerospace & Sovereign AI - primary revenue from defense contracts, military systems, government intelligence, or space with direct defense application (defense revenue must be primary — exclude if under ~20% of total). NOT commercial tech companies, NOT telecom operators, NOT solar/energy companies, NOT general Chinese tech giants unless defense is their primary revenue.
+Financial Infrastructure & AI Capital - companies that use AI meaningfully in financial services — fintech, capital markets, payments, and traditional banks/asset managers that use AI in core operations (trading, risk, fraud, underwriting). NOT ETFs/investment funds that only invest in AI companies.
+Water & Resource Infrastructure - water treatment, resource efficiency, environmental tech with AI or advanced technology as a core product. NOT general utilities.
+Applications & Digital Economy - end-user AI apps, vertical SaaS with AI at core, consumer AI products. NOT infrastructure layers.\
 """
 
 # ── Full category definitions (used in DISCOVERY_PROMPT per-category) ────────
 CATEGORY_DEFINITIONS: dict[str, str] = {
-    "01. Raw Materials & Critical Minerals": (
+    "Raw Materials & Critical Minerals": (
         "Companies whose PRIMARY revenue comes from mining, extracting, or minimally processing "
         "physical raw materials - any mineral, metal, or natural resource including lithium, "
         "cobalt, copper, nickel, rare earth elements, graphite, silica, specialty gases, potash, "
@@ -101,7 +101,7 @@ CATEGORY_DEFINITIONS: dict[str, str] = {
         "EXCLUDES: energy utilities and electricity generators (category 02), chip designers (category 04), "
         "software companies, and companies whose only link to this sector is supplying energy or services to miners."
     ),
-    "02. Energy & Grid Infrastructure": (
+    "Energy & Grid Infrastructure": (
         "Companies that generate, transmit, distribute, or store electricity - "
         "utilities, renewable energy producers (wind, solar, hydro, geothermal), grid operators, "
         "battery storage, EV charging infrastructure, and energy management systems. "
@@ -115,7 +115,7 @@ CATEGORY_DEFINITIONS: dict[str, str] = {
         "ALSO EXCLUDES: nuclear-specific companies (category 03), data center builders (category 07), "
         "and software-only energy management platforms."
     ),
-    "03. Nuclear & Advanced Energy": (
+    "Nuclear & Advanced Energy": (
         "Companies focused specifically on nuclear power generation, small modular reactors (SMRs), "
         "fusion energy, uranium enrichment, long-duration energy storage beyond batteries, "
         "and next-generation advanced energy technologies. "
@@ -133,7 +133,7 @@ CATEGORY_DEFINITIONS: dict[str, str] = {
         "general utilities with a nuclear division, and companies whose nuclear involvement is limited "
         "to a single research program."
     ),
-    "04. Semiconductor Manufacturing": (
+    "Semiconductor Manufacturing": (
         "Companies that design, fabricate, package, test, or supply equipment and materials for "
         "semiconductors - chip designers (fabless or IDM), foundries, OSAT, EDA software, "
         "lithography systems, semiconductor equipment, wafer/substrate suppliers, and metrology. "
@@ -144,7 +144,7 @@ CATEGORY_DEFINITIONS: dict[str, str] = {
         "EXCLUDES: server/hardware assemblers (category 05), cloud providers (category 09), "
         "and companies that only buy chips rather than make or design them."
     ),
-    "05. Compute Hardware & Edge Systems": (
+    "Compute Hardware & Edge Systems": (
         "Companies that design or manufacture physical computing hardware - AI servers, GPU systems, "
         "edge devices, embedded systems, ODMs, EMS/contract manufacturers, and hardware systems "
         "integrators. Also includes edge AI inference hardware, industrial IoT hardware, and "
@@ -152,34 +152,34 @@ CATEGORY_DEFINITIONS: dict[str, str] = {
         "EXCLUDES: chip fabs and designers (category 04), cloud software services (category 09), "
         "and pure software companies."
     ),
-    "06. Networking, Optical & Interconnect": (
+    "Networking, Optical & Interconnect": (
         "Companies that make networking hardware and optical components - switches, routers, "
         "optical transceivers, silicon photonics, fiber cables, optical modules, load balancers, "
         "and high-speed interconnects for data centers and telecoms. "
         "EXCLUDES: telecom network operators (category 08), data center builders (category 07), "
         "and cloud software networking (category 09)."
     ),
-    "07. Data Centers & Physical Infrastructure": (
+    "Data Centers & Physical Infrastructure": (
         "Companies that build, own, or operate data center facilities and physical infrastructure - "
         "colocation providers, hyperscaler facilities, cooling/thermal management, power distribution "
         "units, construction/engineering for data centers, and REITs owning digital infrastructure. "
         "EXCLUDES: cloud software services, networking equipment makers, and telecom operators."
     ),
-    "08. Telecom & Connectivity": (
+    "Telecom & Connectivity": (
         "Companies that operate telecommunications networks - mobile operators, fixed-line providers, "
         "satellite internet operators, submarine cable operators, and 5G/6G network operators. "
         "Revenue must come from operating networks and selling connectivity, not from making equipment. "
         "EXCLUDES: networking equipment makers (category 06), cloud providers (category 09), "
         "and data center builders (category 07)."
     ),
-    "09. Cloud & Compute Platforms": (
+    "Cloud & Compute Platforms": (
         "Companies that sell cloud computing services, managed infrastructure, or GPU cloud - "
         "hyperscalers, neoclouds, sovereign cloud providers, cloud-native platforms offering "
         "IaaS or PaaS. "
         "EXCLUDES: SaaS application vendors (category 10 or 19), on-premise hardware makers (05), "
         "and telecom operators that resell cloud (category 08)."
     ),
-    "10. AI Software Infrastructure": (
+    "AI Software Infrastructure": (
         "Companies that build the software layer enabling AI development and deployment - "
         "MLOps platforms, AI development tools, vector databases, AI security and observability, "
         "orchestration frameworks, and enterprise AI middleware platforms. "
@@ -187,7 +187,7 @@ CATEGORY_DEFINITIONS: dict[str, str] = {
         "— e.g. Scale AI belongs in cat 11 not cat 10), foundation model providers and model hubs "
         "(category 12 — e.g. Hugging Face belongs in cat 12 not cat 10), and pure hardware."
     ),
-    "11. AI Data Infrastructure": (
+    "AI Data Infrastructure": (
         "Companies that provide data pipelines, labeling, annotation, synthetic data generation, "
         "data integration, data quality, and data observability tools specifically for AI training "
         "and inference workloads. "
@@ -196,7 +196,7 @@ CATEGORY_DEFINITIONS: dict[str, str] = {
         "EXCLUDES: general BI and analytics tools that are not AI-specific, "
         "and AI model providers (category 12)."
     ),
-    "12. AI Models & Intelligence Layer": (
+    "AI Models & Intelligence Layer": (
         "Companies that develop and commercialise foundation models, large language models, "
         "multimodal models, or AI APIs as their primary commercial product — the model itself "
         "is what they sell (via API, licence, or hosted inference). "
@@ -219,21 +219,21 @@ CATEGORY_DEFINITIONS: dict[str, str] = {
         "cybersecurity companies using AI (category 10), AI application companies (category 19), "
         "and MLOps/tooling companies (category 10)."
     ),
-    "13. Robotics & Physical AI": (
+    "Robotics & Physical AI": (
         "Companies that build physical robots, autonomous systems, drones, or physical AI hardware "
         "as their primary commercial product - industrial robots, humanoids, warehouse automation "
         "systems, autonomous vehicles (full stack), and drone platforms. "
         "EXCLUDES: pure software for robotics, component-only suppliers (category 05), "
         "and defense-primary companies (category 16)."
     ),
-    "14. Quantum Computing & Sensing": (
+    "Quantum Computing & Sensing": (
         "Companies developing quantum computers, quantum processors, quantum networking hardware, "
         "or quantum sensing devices as a primary commercial business. "
         "EXCLUDES: companies that only have a quantum research lab as a side project, "
         "classical computing companies with quantum branding, and pure quantum software "
         "without hardware (those belong in category 10)."
     ),
-    "15. Life Sciences & Healthcare AI": (
+    "Life Sciences & Healthcare AI": (
         "Companies that use AI meaningfully as part of their core business in drug discovery, "
         "medical imaging, clinical trials, genomics, diagnostics, or healthcare operations. "
         "INCLUDES: large pharma companies (Pfizer, AstraZeneca, Roche, Novartis etc.) that use AI "
@@ -244,7 +244,7 @@ CATEGORY_DEFINITIONS: dict[str, str] = {
         "EXCLUDES: hospital systems and pure healthcare providers with no AI involvement, "
         "and companies whose only AI use is a generic chatbot or basic automation."
     ),
-    "16. Defense, Aerospace & Sovereign AI": (
+    "Defense, Aerospace & Sovereign AI": (
         "Companies whose PRIMARY revenue comes from defense contracts, military AI systems, "
         "government intelligence platforms, border/surveillance technology sold to governments, "
         "or space technology with direct defense/national security applications. "
@@ -255,7 +255,7 @@ CATEGORY_DEFINITIONS: dict[str, str] = {
         "'Sovereign AI' means government-contracted AI for national security - NOT simply being "
         "a state-linked tech company or a national champion in a non-defense sector."
     ),
-    "17. Financial Infrastructure & AI Capital": (
+    "Financial Infrastructure & AI Capital": (
         "Companies that use AI meaningfully as part of their core financial services business — "
         "AI-focused fintech platforms, capital markets technology, AI-powered payments, "
         "lending platforms, and traditional financial institutions (banks, asset managers, exchanges) "
@@ -267,12 +267,12 @@ CATEGORY_DEFINITIONS: dict[str, str] = {
         "EXCLUDES: investment funds, ETFs, and VCs that simply invest in AI companies without "
         "using AI themselves, and financial companies with only superficial AI deployment."
     ),
-    "18. Water & Resource Infrastructure": (
+    "Water & Resource Infrastructure": (
         "Companies focused on water treatment, water technology, resource efficiency, "
         "or environmental infrastructure using AI or advanced technology as a core product. "
         "EXCLUDES: general utilities (category 02) and general environmental services."
     ),
-    "19. Applications & Digital Economy": (
+    "Applications & Digital Economy": (
         "Companies building end-user AI applications, vertical SaaS with AI at the core, "
         "consumer AI products, or digital platforms whose primary revenue comes from "
         "AI-powered application services. "

@@ -17,8 +17,10 @@
 | `src/db.py` | Thin adapter: `_new_connection()` (reads `POSTGRES_*` env vars), `init_db()`, and `db_utils.configure()`; re-exports `get_db`, `transaction`, and `DuplicateError` from `shared/src/db_utils.py` so all other imports are unaffected |
 | `src/auth.py` | FastAPI dependency functions: `require_auth` (validate Bearer token), `require_admin` (role gate) |
 | `src/seed.py` | Idempotent batch seed for `run_statuses`, `frequencies`, `domains`, `sources`, and admin API key |
+| `src/poller.py` | Background market data poller: fetches from Alpha Vantage (GLOBAL_QUOTE, OVERVIEW, EARNINGS, TIME_SERIES_DAILY_ADJUSTED, MARKET_STATUS) and writes to DynamoDB; two modes — `quotes` (every 15 min) and `daily` (once a day); distributed lock via `ocn-market-lock` prevents overlapping runs |
 | `src/models/` | Pydantic request models + SQL query functions per entity |
 | `src/routes/` | FastAPI `APIRouter` definitions, one file per resource |
+| `src/routes/market.py` | Market data read endpoints: 6 `GET` routes reading from DynamoDB, served at `/market/*` |
 
 ## App layers
 
@@ -155,6 +157,46 @@ pytest news-retrieval/tests/
 | RSS feeds (various) | Source articles - managed via `POST /sources` API or seed data in `src/seed.py` |
 | SerpAPI (`serpapi.com/search?engine=google_news`) | Google News article fetch for sources with `source_type = 'google_news'` |
 | NewsAPI (`newsapi.org/v2`) | Top-headlines article fetch for sources with `source_type = 'newsapi'` |
+| Alpha Vantage (`alphavantage.co/query`) | Market data (quotes, fundamentals, price history, earnings, market status) — polled every 15 min / daily by `poller.py` |
+
+### DynamoDB tables (eu-north-1, IAM auth, PAY_PER_REQUEST)
+
+All tables use TTL on the `ttl` attribute for automatic expiry. Created manually via AWS CLI; will be managed by Terraform after local testing is complete.
+
+| Table | Partition key | Sort key | TTL | Poll mode | Description |
+|-------|--------------|----------|-----|-----------|-------------|
+| `ocn-market-quote` | `ticker` | `recorded_at` | 7 days | quotes | Current price, change%, volume, previous close |
+| `ocn-market-indices` | `ticker` | `recorded_at` | 7 days | quotes | SPY/QQQ/SOXX price and change% |
+| `ocn-market-status` | `market` | `recorded_at` | 1 day | quotes | US market open/closed status |
+| `ocn-market-overview` | `ticker` | `recorded_at` | 30 days | daily | Fundamentals: market cap, P/E, 52-week range, analyst target, beta, sector |
+| `ocn-market-price-history` | `ticker` | `date` | 1 year | daily | Last 10 trading days adjusted close (for actual-vs-simulation chart) |
+| `ocn-market-earnings` | `ticker` | `recorded_at` | 30 days | daily | Next earnings date, estimated EPS, last quarter surprise % |
+| `ocn-market-lock` | `lock_key` | — | 20 min | both | Distributed lock — prevents overlapping poller runs; auto-expires if poller crashes |
+
+### Market data env vars
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ALPHA_VANTAGE_API_KEY` | - | Required for poller. Premium key (75 calls/min). |
+| `AWS_REGION` | `eu-north-1` | AWS region for DynamoDB |
+| `DYNAMODB_TABLE_QUOTE` | `ocn-market-quote` | DynamoDB table for quotes |
+| `DYNAMODB_TABLE_INDICES` | `ocn-market-indices` | DynamoDB table for index strips |
+| `DYNAMODB_TABLE_MARKET_STATUS` | `ocn-market-status` | DynamoDB table for market status |
+| `DYNAMODB_TABLE_LOCK` | `ocn-market-lock` | DynamoDB table for distributed poller lock |
+| `DYNAMODB_TABLE_OVERVIEW` | `ocn-market-overview` | DynamoDB table for fundamentals |
+| `DYNAMODB_TABLE_PRICE_HISTORY` | `ocn-market-price-history` | DynamoDB table for price history |
+| `DYNAMODB_TABLE_EARNINGS` | `ocn-market-earnings` | DynamoDB table for earnings |
+
+### Market data HTTP endpoints (served via api-gateway at `/news/market/*`)
+
+| Endpoint | DynamoDB table | Response |
+|----------|---------------|----------|
+| `GET /market/quote/{ticker}` | `ocn-market-quote` | price, change, change_percent, volume, previous_close |
+| `GET /market/overview/{ticker}` | `ocn-market-overview` | market_cap, pe_ratio, week_52_high, week_52_low, analyst_target, beta, sector |
+| `GET /market/price-history/{ticker}` | `ocn-market-price-history` | last 10 days of adjusted_close |
+| `GET /market/earnings/{ticker}` | `ocn-market-earnings` | next_report_date, estimated_eps, last_surprise_pct |
+| `GET /market/indices` | `ocn-market-indices` | SPY/QQQ/SOXX price and change_percent |
+| `GET /market/status` | `ocn-market-status` | current_status, local_open, local_close |
 
 ### Database schema
 

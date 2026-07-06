@@ -64,16 +64,58 @@ news-retrieval/
     ├── controllers/      # Business logic and multi-step orchestration
     │   ├── domains.py
     │   └── run.py
+    ├── poller.py         # Background market data poller: AV fetch → DynamoDB; run_quotes (every 15 min) + run_daily (once daily); distributed lock via ocn-market-lock table
     └── routes/           # Thin HTTP adapters (FastAPI APIRouters)
         ├── grants.py
         ├── articles.py
         ├── domains.py
         ├── frequencies.py
         ├── health.py
+        ├── market.py     # Market data read endpoints — 6 GET routes reading from DynamoDB, served at /market/*
         ├── run.py
         ├── runs.py
         └── sources.py
 ```
+
+## Market Data
+
+AV (Alpha Vantage) data is never fetched on the request path. A background poller writes to DynamoDB; the read endpoints serve from there.
+
+### Poll modes
+
+| Mode | Schedule | What it fetches |
+|------|----------|----------------|
+| `quotes` | Every 15 min (CloudWatch) | `GLOBAL_QUOTE` per ticker, SPY/QQQ/SOXX indices, `MARKET_STATUS` |
+| `daily` | 00:30 UTC daily (CloudWatch) | `OVERVIEW`, `EARNINGS`, `TIME_SERIES_DAILY_ADJUSTED` per ticker |
+
+Run manually: `python __main__.py poll-market --mode quotes`
+
+### DynamoDB tables (eu-north-1, PAY_PER_REQUEST, IAM auth)
+
+| Table | Partition key | Sort key | TTL | Mode |
+|-------|--------------|----------|-----|------|
+| `ocn-market-quote` | `ticker` | `recorded_at` | 2 days | quotes |
+| `ocn-market-indices` | `ticker` | `recorded_at` | 2 days | quotes |
+| `ocn-market-status` | `market` | `recorded_at` | 2 days | quotes |
+| `ocn-market-overview` | `ticker` | `recorded_at` | 30 days | daily |
+| `ocn-market-price-history` | `ticker` | `date` | 1 year | daily |
+| `ocn-market-earnings` | `ticker` | `recorded_at` | 30 days | daily |
+| `ocn-market-lock` | `lock_key` | — | 20 min | both |
+
+### Market data HTTP endpoints (proxied via api-gateway at `/news/market/*`)
+
+| Endpoint | Returns | 503 if |
+|----------|---------|--------|
+| `GET /market/quote/{ticker}` | price, change, change_percent, volume, previous_close | no data |
+| `GET /market/overview/{ticker}` | market_cap, pe_ratio, 52w high/low, analyst_target, beta, sector | no data |
+| `GET /market/price-history/{ticker}` | last 10 days of adjusted_close | no data |
+| `GET /market/earnings/{ticker}` | next_report_date, estimated_eps, last_surprise_pct | no data |
+| `GET /market/indices` | SPY, QQQ, SOXX price + change_percent | no data |
+| `GET /market/status` | current_status, local_open, local_close | no data |
+
+### Ticker universe
+
+Single source of truth: `_AV_BASE_TICKERS` in `src/pipeline.py` (453 tickers). Poller always uses this list — no separate env var.
 
 ## Guidance
 - Read only the docs relevant to your task - not all of them

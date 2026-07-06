@@ -22,6 +22,7 @@ const IconLogout = () => (
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: 'chat',      label: 'Chat' },
+  { id: 'companies', label: 'Companies' },
   { id: 'pending',   label: 'Pending Review' },
   { id: 'discovery', label: 'Discovery' },
 ];
