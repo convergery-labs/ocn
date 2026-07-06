@@ -9,9 +9,11 @@ __all__ = [
     "create_user",
     "get_user_by_id",
     "get_user_by_username",
+    "get_user_by_email",
     "list_users",
     "update_last_login",
     "update_user_fields",
+    "delete_user",
 ]
 
 
@@ -67,6 +69,16 @@ def get_user_by_username(username: str) -> Optional[UserRow]:
     return dict(row) if row else None  # type: ignore[return-value]
 
 
+def get_user_by_email(email: str) -> Optional[UserRow]:
+    """Return the user row for *email*, or ``None`` if not found."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM users WHERE email = ?",
+            (email,),
+        ).fetchone()
+    return dict(row) if row else None  # type: ignore[return-value]
+
+
 def update_last_login(user_id: int) -> None:
     """Set last_login_at to now for *user_id*."""
     with get_db() as conn:
@@ -99,11 +111,12 @@ def update_user_fields(
     user_id: int,
     is_active: Optional[bool],
     role: Optional[str],
+    username: Optional[str] = None,
 ) -> Optional[UserRow]:
-    """Update ``is_active`` and/or ``role`` for *user_id*.
+    """Update ``is_active``, ``role``, and/or ``username`` for *user_id*.
 
     Returns the updated row, or ``None`` if the user does not exist.
-    If neither field is provided, returns the current row unchanged.
+    If no fields are provided, returns the current row unchanged.
     """
     updates: list[str] = []
     params: list = []
@@ -113,6 +126,9 @@ def update_user_fields(
     if role is not None:
         updates.append("role = ?")
         params.append(role)
+    if username is not None:
+        updates.append("username = ?")
+        params.append(username)
     if not updates:
         return get_user_by_id(user_id)
     params.append(user_id)
@@ -123,3 +139,12 @@ def update_user_fields(
             tuple(params),
         ).fetchone()
     return dict(row) if row else None  # type: ignore[return-value]
+
+
+def delete_user(user_id: int) -> bool:
+    """Delete user by *user_id*. Returns True if a row was deleted."""
+    with get_db() as conn:
+        result = conn.execute(
+            "DELETE FROM users WHERE id = ? RETURNING id", (user_id,)
+        ).fetchone()
+    return result is not None

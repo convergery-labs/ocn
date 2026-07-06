@@ -49,6 +49,7 @@ infra/
 | `AUTH_POSTGRES_PASSWORD` | Secrets Manager | `ocn/{env}/auth-service:POSTGRES_PASSWORD` |
 | `AUTH_ADMIN_API_KEY` | Secrets Manager | `ocn/{env}/auth-service:ADMIN_API_KEY` |
 | `AUTH_JWT_PRIVATE_KEY` | Secrets Manager | `ocn/{env}/auth-service:JWT_PRIVATE_KEY` - PEM-encoded RS256 private key |
+| `AUTH_JWT_EXPIRY_SECONDS` | hardcoded | `86400` (24 hours) — overrides default 1h TTL |
 | `ADMIN_USERNAME` | Secrets Manager | `ocn/{env}/auth-service:ADMIN_USERNAME` - seed admin user |
 | `ADMIN_EMAIL` | Secrets Manager | `ocn/{env}/auth-service:ADMIN_EMAIL` - seed admin user |
 | `ADMIN_PASSWORD` | Secrets Manager | `ocn/{env}/auth-service:ADMIN_PASSWORD` - seed admin user |
@@ -69,6 +70,14 @@ infra/
 | `ALPHA_VANTAGE_API_KEY` | Secrets Manager | `ocn/{env}/news-retrieval:ALPHA_VANTAGE_API_KEY` - optional; Alpha Vantage key for `company_news` domain |
 | `RESEARCH_UNIVERSE_URL` | hardcoded | `http://research-universe.{env}.ocn.internal:8007` - optional; used to fetch tickers dynamically for `company_news` domain |
 | `RESEARCH_UNIVERSE_API_KEY` | Secrets Manager | `ocn/{env}/news-retrieval:RESEARCH_UNIVERSE_API_KEY` - optional; service API key (ru_ prefix) for authenticating calls to research-universe |
+| `AWS_REGION` | hardcoded | `eu-north-1` — DynamoDB region for market data tables |
+| `DYNAMODB_TABLE_QUOTE` | hardcoded | `ocn-market-quote` |
+| `DYNAMODB_TABLE_OVERVIEW` | hardcoded | `ocn-market-overview` |
+| `DYNAMODB_TABLE_PRICE_HISTORY` | hardcoded | `ocn-market-price-history` |
+| `DYNAMODB_TABLE_EARNINGS` | hardcoded | `ocn-market-earnings` |
+| `DYNAMODB_TABLE_INDICES` | hardcoded | `ocn-market-indices` |
+| `DYNAMODB_TABLE_MARKET_STATUS` | hardcoded | `ocn-market-status` |
+| `DYNAMODB_TABLE_LOCK` | hardcoded | `ocn-market-lock` — distributed poller lock |
 
 ### signal-detection
 | Variable | Source | Notes |

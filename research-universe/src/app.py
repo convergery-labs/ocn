@@ -50,7 +50,7 @@ def create_app() -> FastAPI:
     protected = {"dependencies": [Depends(get_current_user)]}
 
     app.include_router(chat_router, **protected)
-    app.include_router(companies_router, **protected)
+    app.include_router(companies_router)   # GET /companies is public; other routes handle their own auth
     app.include_router(taxonomy_router, **protected)
     app.include_router(jobs_router, **protected)
     app.include_router(users_router)   # users routes handle their own auth via Depends

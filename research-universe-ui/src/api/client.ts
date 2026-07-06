@@ -109,6 +109,9 @@ export const api = {
 
   stats: () => request<{ total: number; verified: number; pending: number }>('/companies/stats'),
 
+  listCompanies: (status?: string) =>
+    request<Company[]>(`/companies${status ? `?status=${status}` : ''}`),
+
   pending: (limit = 50, offset = 0) =>
     request<Company[]>(`/companies/pending?limit=${limit}&offset=${offset}`),
 

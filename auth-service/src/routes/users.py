@@ -5,13 +5,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from auth import require_admin
-from db import transaction
+from db import DuplicateError, transaction
 from models.domains import (
     get_domain_slugs_for_user,
     get_domains_by_slugs,
     replace_user_domains,
 )
-from models.users import get_user_by_id, list_users, update_user_fields
+from models.users import get_user_by_id, list_users, update_user_fields, delete_user
 
 router = APIRouter()
 
@@ -63,6 +63,7 @@ class PatchUserIn(BaseModel):
     is_active: Optional[bool] = None
     role: Optional[Literal["admin", "user"]] = None
     domain_slugs: Optional[list[str]] = None
+    username: Optional[str] = None
 
 
 @router.patch("/users/{user_id}")
@@ -94,9 +95,26 @@ async def patch_user(
                 user_id, [r["id"] for r in domain_rows]
             )
 
-        updated = update_user_fields(
-            user_id, body.is_active, body.role
-        )
+        try:
+            updated = update_user_fields(
+                user_id, body.is_active, body.role, body.username
+            )
+        except DuplicateError:
+            raise HTTPException(status_code=409, detail="Username already taken.")
         user = updated if updated is not None else user
         domains = get_domain_slugs_for_user(user_id)
     return _serialize(user, domains)
+
+
+@router.delete("/users/{user_id}", status_code=204)
+async def delete_user_route(
+    user_id: int,
+    caller: dict = Depends(require_admin),
+) -> None:
+    """Delete a user permanently - admin only."""
+    user = get_user_by_id(user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found.")
+    if user["id"] == int(caller["id"]):
+        raise HTTPException(status_code=400, detail="Cannot delete yourself.")
+    delete_user(user_id)

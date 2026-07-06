@@ -76,4 +76,4 @@ export interface ScheduleSummary {
   next_run_at: string | null;
 }
 
-export type Tab = 'chat' | 'pending' | 'discovery';
+export type Tab = 'chat' | 'pending' | 'discovery' | 'companies';

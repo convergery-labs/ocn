@@ -5,7 +5,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 import models.company as company_model
-from auth import get_current_user
+from auth import get_current_user, get_optional_user
 
 router = APIRouter(prefix="/companies", tags=["companies"])
 
@@ -60,13 +60,21 @@ def list_companies(
     status: str | None = Query(default=None, description="Filter by status: 'verified' or 'pending_review'"),
     limit: int = Query(default=5000, ge=1, le=10000),
     offset: int = Query(default=0, ge=0),
+    _user: dict | None = Depends(get_optional_user),
 ) -> list[dict[str, Any]]:
-    """Return all companies with tickers, optionally filtered by status."""
+    """Return all companies. Auth optional — public read access allowed."""
     return company_model.list_companies(status=status, limit=limit, offset=offset)
 
 
+@router.get("/count")
+def count() -> dict:
+    """Return total company count. Public."""
+    stats = company_model.get_stats()
+    return {"total": stats["total"], "verified": stats["verified"], "pending": stats["pending"]}
+
+
 @router.get("/stats")
-def stats() -> dict:
+def stats(_user: dict = Depends(get_current_user)) -> dict:
     """Return total, verified, and pending company counts."""
     return company_model.get_stats()
 
@@ -75,6 +83,7 @@ def stats() -> dict:
 def search(
     q: str = Query(..., min_length=1, description="Company name or ticker"),
     limit: int = Query(10, ge=1, le=50),
+    _user: dict = Depends(get_current_user),
 ) -> list[dict[str, Any]]:
     """Fuzzy search companies by name or exact ticker match."""
     return company_model.search_companies(q, limit)
@@ -84,13 +93,14 @@ def search(
 def pending(
     limit: int = Query(100, ge=1, le=5000),
     offset: int = Query(0, ge=0),
+    _user: dict = Depends(get_current_user),
 ) -> list[dict[str, Any]]:
     """Return pending_review companies. Paginated - default 100 per page."""
     return company_model.get_pending_companies(limit=limit, offset=offset)
 
 
 @router.get("/{company_id}", response_model=CompanyDetail)
-def get_company(company_id: str) -> dict[str, Any]:
+def get_company(company_id: str, _user: dict = Depends(get_current_user)) -> dict[str, Any]:
     """Return full company profile by ID."""
     company = company_model.get_company(company_id)
     if not company:

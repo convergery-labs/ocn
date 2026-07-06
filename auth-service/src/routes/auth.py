@@ -10,7 +10,7 @@ from models.domains import (
     get_domain_slugs_for_user,
     get_domains_by_slugs,
 )
-from models.users import create_user, get_user_by_username, update_last_login
+from models.users import create_user, get_user_by_username, get_user_by_email, update_last_login
 
 router = APIRouter()
 
@@ -72,7 +72,7 @@ async def register(body: RegisterIn) -> dict:
 @router.post("/login")
 async def login(body: LoginIn) -> dict:
     """Verify credentials and return a signed JWT."""
-    user = get_user_by_username(body.username)
+    user = get_user_by_username(body.username) or get_user_by_email(body.username)
     if user is None or not bcrypt.checkpw(
         body.password.encode(), user["password_hash"].encode()
     ):

@@ -62,7 +62,7 @@ module "ecs_cluster" {
   research_universe_tg_arn       = module.alb.research_universe_tg_arn
   api_gateway_tg_arn    = module.alb.api_gateway_tg_arn
   qdrant_host           = var.qdrant_host
-  gateway_cors_origins  = "https://${aws_cloudfront_distribution.frontend.domain_name}"
+  gateway_cors_origins  = "https://${aws_cloudfront_distribution.frontend.domain_name},https://alpha-psi-gray.vercel.app,https://platform.alphastreet.ai"
 }
 
 module "alb" {

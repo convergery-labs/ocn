@@ -73,3 +73,15 @@ def get_current_user(
         detail="Unrecognised token format",
         headers={"WWW-Authenticate": "Bearer"},
     )
+
+
+def get_optional_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+) -> dict[str, Any] | None:
+    """Like get_current_user but returns None instead of 401 when no token is provided."""
+    if credentials is None:
+        return None
+    try:
+        return get_current_user(credentials)
+    except HTTPException:
+        return None

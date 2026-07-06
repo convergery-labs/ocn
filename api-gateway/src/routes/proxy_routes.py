@@ -2,7 +2,7 @@
 import os
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 
 from auth import optional_auth, require_admin
@@ -32,6 +32,8 @@ async def proxy_news(
     caller: Optional[dict[str, Any]] = Depends(optional_auth),
 ) -> Response:
     """Proxy requests under /news/* to news-retrieval."""
+    if path.startswith("market/") and caller is None:
+        raise HTTPException(status_code=401, detail="Authentication required.")
     return await forward_request(
         os.environ.get("GATEWAY_NEWS_URL", ""), path, request, caller
     )

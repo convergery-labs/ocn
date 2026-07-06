@@ -7,7 +7,7 @@ from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
 __all__ = ["issue_token"]
 
-_DEFAULT_EXPIRY = 3600
+_DEFAULT_EXPIRY = 86400
 
 
 def _private_key() -> object:

@@ -6,7 +6,7 @@ import type { Company } from '../types';
 const PAGE_SIZE = 50;
 
 const SECTOR_COLORS = ['#c98a2b','#e07b39','#d65745','#d64f7d','#b357c9','#8a5cf0','#5b6ef0','#2f7be0','#2ba6d9','#16a39a','#1f9e84','#3a9e54','#6f9e2e','#6b78a8','#189e6e','#5e7a8f','#b8902a','#2898b0','#7d5ad0'];
-const sectorColor = (cat: string) => { const m = /^(\d+)/.exec(cat || ''); const i = m ? parseInt(m[1],10)-1 : 0; return SECTOR_COLORS[i] ?? SECTOR_COLORS[0]; };
+const sectorColor = (cat: string) => { let h = 0; for (let i = 0; i < cat.length; i++) h = (h * 31 + cat.charCodeAt(i)) >>> 0; return SECTOR_COLORS[h % SECTOR_COLORS.length]; };
 
 const ICheck   = () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5"/></svg>;
 const IGlobe   = () => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>;

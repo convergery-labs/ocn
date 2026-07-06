@@ -5,6 +5,7 @@ import { Sidebar } from './components/Sidebar';
 import { ChatTab } from './components/ChatTab';
 import { PendingTab } from './components/PendingTab';
 import { DiscoveryTab } from './components/DiscoveryTab';
+import { CompaniesTab } from './components/CompaniesTab';
 import type { Tab, User } from './types';
 
 export default function App() {
@@ -83,6 +84,7 @@ export default function App() {
         {activeTab === 'chat' && (
           <ChatTab onPendingCountChange={setPendingCount} onNavigateToPending={() => handleTabChange('pending')} />
         )}
+        {activeTab === 'companies' && <CompaniesTab />}
         {activeTab === 'pending' && <PendingTab onPendingCountChange={setPendingCount} />}
         {activeTab === 'discovery' && <DiscoveryTab onPendingCountChange={setPendingCount} />}
       </main>
