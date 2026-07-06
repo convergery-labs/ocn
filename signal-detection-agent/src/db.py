@@ -88,6 +88,10 @@ def init_db() -> None:
                 ADD COLUMN IF NOT EXISTS verification_qa JSONB
         """)
         conn.execute("""
+            ALTER TABLE agent_classifications
+                ADD COLUMN IF NOT EXISTS published TIMESTAMPTZ
+        """)
+        conn.execute("""
             UPDATE agent_classifications
             SET entity_names_normalized = ARRAY(
                 SELECT LOWER(e->>'name')
