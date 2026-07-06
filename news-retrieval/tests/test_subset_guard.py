@@ -51,15 +51,15 @@ _ARTICLES_14D = [
         "title": "Old Article",
         "summary": "",
         "source": "Test",
-        "published": "Mon, 01 Jan 2024 00:00:00 +0000",
+        "published": "2024-01-01T00:00:00+00:00",
     },
     {
         "url": "http://example.com/recent",
         "title": "Recent Article",
         "summary": "",
         "source": "Test",
-        # published is empty → treated as None → always included
-        "published": "",
+        # published is None → always included
+        "published": None,
     },
 ]
 

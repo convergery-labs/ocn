@@ -110,7 +110,7 @@ def init_db() -> None:
                 summary     TEXT,
                 body        TEXT,
                 source      TEXT,
-                published   TEXT,
+                published   TIMESTAMPTZ,
                 created_at  TIMESTAMPTZ NOT NULL
                             DEFAULT CURRENT_TIMESTAMP
             )
@@ -209,3 +209,25 @@ def init_db() -> None:
             "ALTER TABLE articles"
             " ADD COLUMN IF NOT EXISTS metadata JSONB"
         )
+        # Migrate published from TEXT to TIMESTAMPTZ.
+        # Existing rows may have unparseable source-format strings (e.g. SerpAPI
+        # "05/14/2026, 02:17 PM, +0000 UTC") that Postgres cannot cast natively,
+        # so null them out first then retype the column.
+        conn.execute("""
+            DO $$ BEGIN
+              IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'articles'
+                  AND column_name = 'published'
+                  AND data_type = 'text'
+              ) THEN
+                UPDATE articles
+                  SET published = NULL
+                  WHERE published IS NOT NULL
+                    AND published !~ '^\d{4}-\d{2}-\d{2}';
+                ALTER TABLE articles
+                  ALTER COLUMN published TYPE TIMESTAMPTZ
+                  USING published::TIMESTAMPTZ;
+              END IF;
+            END $$
+        """)

@@ -77,8 +77,9 @@ def insert_classification(job_id: int, article: dict[str, Any], result: dict[str
                 base_signal_detection, base_signal_score,
                 novelty, novelty_basis, confidence, confidence_basis,
                 refinement_reason, entity_names_normalized,
-                pre_verification_score, verification_qa
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                pre_verification_score, verification_qa,
+                published
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT DO NOTHING
             """,
             (
@@ -102,6 +103,7 @@ def insert_classification(job_id: int, article: dict[str, Any], result: dict[str
                 entity_names_normalized,
                 result.get("pre_verification_score"),
                 json.dumps(result.get("verification_qa") or [], ensure_ascii=False),
+                article.get("published"),
             ),
         )
 

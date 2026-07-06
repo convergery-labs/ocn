@@ -729,7 +729,7 @@ def _fetch_articles(
     if max_articles:
         articles = articles[:max_articles]
     for a in articles:
-        del a["_pub_date"]
+        a["published"] = a.pop("_pub_date")  # normalised UTC datetime; None if source omitted date
 
     logger.info(
         "[TIMER] fetch total: sources=%d articles=%d elapsed=%.2fs",
