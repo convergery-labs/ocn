@@ -116,6 +116,7 @@ infra/
 | `NEWS_RETRIEVAL_URL` | hardcoded | `http://news-retrieval.{env}.ocn.internal:8000` |
 | `OPENAI_BASE_URL` | hardcoded | `https://openrouter.ai/api/v1` |
 | `SIGNAL_DETECTION_MODEL` | hardcoded | `anthropic/claude-sonnet-4-6` |
+| `SIGNAL_DETECTION_MODEL_V2` | hardcoded | `anthropic/claude-haiku-4.5` - second pass only |
 | `OPENAI_API_KEY` | Secrets Manager | `ocn/{env}/signal-detection-agent:OPENAI_API_KEY` - OpenRouter key |
 
 ### api-gateway
