@@ -203,11 +203,11 @@ resource "aws_iam_role_policy" "news_retrieval_dynamodb_market" {
 # CloudWatch scheduled rules — poller
 # ---------------------------------------------------------------------------
 
-# Quotes mode: every 15 min (price, indices, market status)
+# Quotes mode: every 30 min during US market hours (Mon-Fri, 14:30-21:00 UTC)
 resource "aws_cloudwatch_event_rule" "market_poll_quotes" {
   name                = "${var.env}-market-poll-quotes"
-  description         = "Poll AV GLOBAL_QUOTE + MARKET_STATUS every 15 min → DynamoDB"
-  schedule_expression = "rate(15 minutes)"
+  description         = "Poll AV GLOBAL_QUOTE + MARKET_STATUS every 30 min during market hours → DynamoDB"
+  schedule_expression = "cron(0,30 14-20 ? * MON-FRI *)"
 }
 
 resource "aws_cloudwatch_event_target" "market_poll_quotes" {
@@ -219,8 +219,9 @@ resource "aws_cloudwatch_event_target" "market_poll_quotes" {
     task_definition_arn = replace(aws_ecs_task_definition.news_retrieval.arn, "/:\\d+$/", "")
     launch_type         = "FARGATE"
     network_configuration {
-      subnets         = var.private_subnet_ids
-      security_groups = [var.news_sg_id]
+      subnets          = var.public_subnet_ids
+      security_groups  = [var.news_sg_id]
+      assign_public_ip = true
     }
   }
 
@@ -251,8 +252,9 @@ resource "aws_cloudwatch_event_target" "market_poll_daily" {
     task_definition_arn = replace(aws_ecs_task_definition.news_retrieval.arn, "/:\\d+$/", "")
     launch_type         = "FARGATE"
     network_configuration {
-      subnets         = var.private_subnet_ids
-      security_groups = [var.news_sg_id]
+      subnets          = var.public_subnet_ids
+      security_groups  = [var.news_sg_id]
+      assign_public_ip = true
     }
   }
 
