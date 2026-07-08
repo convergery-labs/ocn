@@ -11,6 +11,7 @@ from typing import Any
 from urllib.request import Request, urlopen
 
 from pipeline.categories import ALLOWED_CATEGORIES
+from pipeline.example_selector import ExampleSelector, build_prompt_with_selected_examples, parse_examples
 
 ALLOWED_SIGNAL = {'signal', 'weak_signal', 'noise'}
 ALLOWED_MATERIALITY = {'high', 'medium', 'low', 'none'}
@@ -212,6 +213,7 @@ def classify_with_model(
     *,
     validator=None,
     max_tokens: int = 1200,
+    cache_system_prompt: bool = False,
 ) -> dict[str, Any]:
     if validator is None:
         validator = validate_classification
@@ -219,13 +221,23 @@ def classify_with_model(
         'Authorization': f'Bearer {api_key}',
         'Content-Type': 'application/json',
     }
+    if cache_system_prompt:
+        system_content = [
+            {
+                'type': 'text',
+                'text': system_prompt,
+                'cache_control': {'type': 'ephemeral'},
+            }
+        ]
+    else:
+        system_content = system_prompt
     request_payload = {
         'model': model,
         'temperature': 0,
         'seed': 42,
         'max_tokens': max_tokens,
         'messages': [
-            {'role': 'system', 'content': system_prompt},
+            {'role': 'system', 'content': system_content},
             {'role': 'user', 'content': user_prompt},
         ],
     }
@@ -257,13 +269,17 @@ def classify_article(
     max_attempts: int,
     category_hints: list[dict[str, Any]] | None = None,
     content_mode: str = 'smart',
+    cache_system_prompt: bool = False,
 ) -> dict[str, Any]:
     user_prompt = build_user_prompt(article, category_hints=category_hints, content_mode=content_mode)
     errors: list[str] = []
     for model in models:
         for attempt in range(1, max_attempts + 1):
             try:
-                result = classify_with_model(system_prompt, user_prompt, model, api_key, base_url, timeout)
+                result = classify_with_model(
+                    system_prompt, user_prompt, model, api_key, base_url, timeout,
+                    cache_system_prompt=cache_system_prompt,
+                )
                 result['id'] = article.get('id')
                 if article.get('run_id') is not None:
                     result['run_id'] = article.get('run_id')
@@ -406,6 +422,7 @@ def classify_article_two_stage(
     entity_history_fn,
     web_search_fn,
     models: list[str],
+    models_v2: list[str] | None = None,
     api_key: str,
     base_url: str,
     timeout: int,
@@ -413,11 +430,21 @@ def classify_article_two_stage(
     category_hints: list[dict[str, Any]] | None = None,
     content_mode: str = 'smart',
     batch_context: list[dict[str, Any]] | None = None,
+    cache_system_prompts: bool = True,
+    example_selector: ExampleSelector | None = None,
 ) -> dict[str, Any]:
-    # Stage 1: base pass (existing logic unchanged)
+    # Stage 1: base pass — optionally trim examples to a targeted subset
+    if example_selector is not None:
+        article_text = f"{article.get('title', '')} {article.get('summary', '')} {article.get('body', '')}"
+        effective_prompt_v1 = build_prompt_with_selected_examples(
+            system_prompt_v1, example_selector, article_text
+        )
+    else:
+        effective_prompt_v1 = system_prompt_v1
+
     base = classify_article(
         article,
-        system_prompt=system_prompt_v1,
+        system_prompt=effective_prompt_v1,
         models=models,
         api_key=api_key,
         base_url=base_url,
@@ -425,6 +452,7 @@ def classify_article_two_stage(
         max_attempts=max_attempts,
         category_hints=category_hints,
         content_mode=content_mode,
+        cache_system_prompt=cache_system_prompts,
     )
     base_signal_detection = base['signal_detection']
     base_signal_score = base['signal_score']
@@ -461,7 +489,7 @@ def classify_article_two_stage(
         content_mode=content_mode,
     )
     errors: list[str] = []
-    for model in models:
+    for model in (models_v2 or models):
         for attempt in range(1, max_attempts + 1):
             try:
                 final = classify_with_model(
@@ -473,6 +501,7 @@ def classify_article_two_stage(
                     timeout,
                     validator=validate_classification_v2,
                     max_tokens=2000,
+                    cache_system_prompt=cache_system_prompts,
                 )
                 final['id'] = article.get('id')
                 if article.get('run_id') is not None:

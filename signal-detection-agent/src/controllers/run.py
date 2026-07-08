@@ -23,6 +23,7 @@ from models.jobs import (
     update_job_status,
 )
 from pipeline.classifier import classify_article_two_stage, has_usable_body, load_prompt
+from pipeline.example_selector import ExampleSelector, parse_examples
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,8 @@ async def run_agent_pipeline(job_id: int, domain: str, news_run_id: int, limit: 
     system_prompt_v1 = load_prompt(config.DEFAULT_PROMPT)
     system_prompt_v2 = load_prompt(config.DEFAULT_PROMPT_V2)
     models = [config.OPENAI_MODEL]
+    example_selector = ExampleSelector(parse_examples(system_prompt_v1))
+    models_v2 = [config.OPENAI_MODEL_V2]
 
     def entity_history_fn(entity_names: list[str]) -> list[dict]:
         return get_recent_entity_classifications(entity_names)
@@ -135,6 +138,8 @@ async def run_agent_pipeline(job_id: int, domain: str, news_run_id: int, limit: 
                         timeout=config.OPENAI_TIMEOUT,
                         max_attempts=config.OPENAI_MAX_ATTEMPTS,
                         batch_context=[b for b in batch_context if b["url"] != a.get("url")],
+                        example_selector=example_selector,
+                        models_v2=models_v2,
                     ),
                 )
                 insert_classification(job_id, article, result)

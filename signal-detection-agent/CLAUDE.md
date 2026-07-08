@@ -67,7 +67,8 @@ signal-detection-agent/
 |----------|---------|
 | `OPENAI_API_KEY` | LLM API key (OpenAI or OpenRouter) |
 | `OPENAI_BASE_URL` | LLM base URL (default: `https://api.openai.com/v1`) |
-| `SIGNAL_DETECTION_MODEL` / `OPENAI_MODEL` | Model to use (default: `gpt-4.1`) |
+| `SIGNAL_DETECTION_MODEL` / `OPENAI_MODEL` | Base pass model (default: `gpt-4.1`) |
+| `SIGNAL_DETECTION_MODEL_V2` | Second pass model — falls back to `SIGNAL_DETECTION_MODEL` if unset |
 | `NEWS_RETRIEVAL_URL` | news-retrieval base URL (default: `http://news-retrieval:8000`) |
 | `POSTGRES_HOST/PORT/DB/USER/PASSWORD` | Signal-detection Postgres DB connection |
 | `PIPELINE_POLL_TIMEOUT_SECS` | Max seconds to wait for a news-retrieval run (default: 600) |
