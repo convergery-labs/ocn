@@ -91,6 +91,10 @@ resource "aws_ecs_service" "auth_service" {
   service_registries {
     registry_arn = aws_service_discovery_service.auth_service.arn
   }
+
+  lifecycle {
+    ignore_changes = [task_definition]
+  }
 }
 
 resource "aws_ecs_task_definition" "news_retrieval" {
@@ -197,6 +201,10 @@ resource "aws_ecs_service" "news_retrieval" {
   service_registries {
     registry_arn = aws_service_discovery_service.news_retrieval.arn
   }
+
+  lifecycle {
+    ignore_changes = [task_definition]
+  }
 }
 
 resource "aws_cloudwatch_event_rule" "news_retrieval_company_news_daily" {
@@ -213,8 +221,9 @@ resource "aws_cloudwatch_event_target" "news_retrieval_company_news_daily" {
     task_definition_arn = aws_ecs_task_definition.news_retrieval.arn
     launch_type         = "FARGATE"
     network_configuration {
-      subnets         = var.private_subnet_ids
-      security_groups = [var.news_sg_id]
+      subnets          = var.public_subnet_ids
+      security_groups  = [var.news_sg_id]
+      assign_public_ip = true
     }
   }
 
@@ -321,6 +330,10 @@ resource "aws_ecs_service" "signal_detection" {
   service_registries {
     registry_arn = aws_service_discovery_service.signal_detection.arn
   }
+
+  lifecycle {
+    ignore_changes = [task_definition]
+  }
 }
 
 data "aws_secretsmanager_secret" "signal_detection_agent" {
@@ -402,6 +415,10 @@ resource "aws_ecs_service" "signal_detection_agent" {
 
   service_registries {
     registry_arn = aws_service_discovery_service.signal_detection_agent.arn
+  }
+
+  lifecycle {
+    ignore_changes = [task_definition]
   }
 }
 
@@ -527,6 +544,10 @@ resource "aws_ecs_service" "api_gateway" {
   service_registries {
     registry_arn = aws_service_discovery_service.api_gateway.arn
   }
+
+  lifecycle {
+    ignore_changes = [task_definition]
+  }
 }
 
 
@@ -622,6 +643,10 @@ resource "aws_ecs_service" "lucky_clarke" {
   service_registries {
     registry_arn = aws_service_discovery_service.lucky_clarke.arn
   }
+
+  lifecycle {
+    ignore_changes = [task_definition]
+  }
 }
 
 
@@ -712,6 +737,10 @@ resource "aws_ecs_service" "signal_herald" {
 
   service_registries {
     registry_arn = aws_service_discovery_service.signal_herald.arn
+  }
+
+  lifecycle {
+    ignore_changes = [task_definition]
   }
 }
 
@@ -839,6 +868,10 @@ resource "aws_ecs_service" "research_universe" {
 
   service_registries {
     registry_arn = aws_service_discovery_service.research_universe.arn
+  }
+
+  lifecycle {
+    ignore_changes = [task_definition]
   }
 }
 
