@@ -11,7 +11,7 @@ from typing import Any
 from urllib.request import Request, urlopen
 
 from pipeline.categories import ALLOWED_CATEGORIES
-from pipeline.example_selector import ExampleSelector, build_prompt_with_selected_examples, parse_examples
+from pipeline.example_selector import ExampleSelector, build_examples_block, build_static_system_prompt, parse_examples
 
 ALLOWED_SIGNAL = {'signal', 'weak_signal', 'noise'}
 ALLOWED_MATERIALITY = {'high', 'medium', 'low', 'none'}
@@ -214,6 +214,7 @@ def classify_with_model(
     validator=None,
     max_tokens: int = 1200,
     cache_system_prompt: bool = False,
+    cached_suffix: str = '',
 ) -> dict[str, Any]:
     if validator is None:
         validator = validate_classification
@@ -222,13 +223,19 @@ def classify_with_model(
         'Content-Type': 'application/json',
     }
     if cache_system_prompt:
-        system_content = [
+        system_content: list[dict[str, Any]] = [
             {
                 'type': 'text',
                 'text': system_prompt,
                 'cache_control': {'type': 'ephemeral'},
             }
         ]
+        if cached_suffix:
+            system_content.append({
+                'type': 'text',
+                'text': cached_suffix,
+                'cache_control': {'type': 'ephemeral'},
+            })
     else:
         system_content = system_prompt
     request_payload = {
@@ -270,6 +277,7 @@ def classify_article(
     category_hints: list[dict[str, Any]] | None = None,
     content_mode: str = 'smart',
     cache_system_prompt: bool = False,
+    cached_suffix: str = '',
 ) -> dict[str, Any]:
     user_prompt = build_user_prompt(article, category_hints=category_hints, content_mode=content_mode)
     errors: list[str] = []
@@ -279,6 +287,7 @@ def classify_article(
                 result = classify_with_model(
                     system_prompt, user_prompt, model, api_key, base_url, timeout,
                     cache_system_prompt=cache_system_prompt,
+                    cached_suffix=cached_suffix,
                 )
                 result['id'] = article.get('id')
                 if article.get('run_id') is not None:
@@ -433,18 +442,20 @@ def classify_article_two_stage(
     cache_system_prompts: bool = True,
     example_selector: ExampleSelector | None = None,
 ) -> dict[str, Any]:
-    # Stage 1: base pass — optionally trim examples to a targeted subset
+    # Stage 1: two cache breakpoints — static prefix (breakpoint 1, always identical)
+    # + dynamic examples block (breakpoint 2, cached per variant ~3-6 unique sets per run).
+    # Both stay in the system prompt so model weight on examples is unchanged.
+    article_text = f"{article.get('title', '')} {article.get('summary', '')} {article.get('body', '')}"
     if example_selector is not None:
-        article_text = f"{article.get('title', '')} {article.get('summary', '')} {article.get('body', '')}"
-        effective_prompt_v1 = build_prompt_with_selected_examples(
-            system_prompt_v1, example_selector, article_text
-        )
+        static_prompt_v1 = build_static_system_prompt(system_prompt_v1)
+        examples_block = build_examples_block(example_selector, article_text)
     else:
-        effective_prompt_v1 = system_prompt_v1
+        static_prompt_v1 = system_prompt_v1
+        examples_block = ''
 
     base = classify_article(
         article,
-        system_prompt=effective_prompt_v1,
+        system_prompt=static_prompt_v1,
         models=models,
         api_key=api_key,
         base_url=base_url,
@@ -453,6 +464,7 @@ def classify_article_two_stage(
         category_hints=category_hints,
         content_mode=content_mode,
         cache_system_prompt=cache_system_prompts,
+        cached_suffix=examples_block,
     )
     base_signal_detection = base['signal_detection']
     base_signal_score = base['signal_score']
