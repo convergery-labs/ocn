@@ -262,6 +262,30 @@ class ExampleSelector:
         )
 
 
+def build_static_system_prompt(base_prompt: str) -> str:
+    """Return the static portion of the v1 prompt (everything up to and including
+    the EXAMPLES header, without any example blocks).
+
+    This is always identical across articles, so it gets a stable cache key
+    when used with cache_control. Dynamic examples are injected into the user
+    message instead via build_examples_block().
+    """
+    examples_header_re = re.compile(r"(={20,}\s*\nEXAMPLES\s*\n={20,})", re.IGNORECASE)
+    m = examples_header_re.search(base_prompt)
+    if not m:
+        return base_prompt
+    return base_prompt[: m.end()]
+
+
+def build_examples_block(selector: ExampleSelector, article_text: str) -> str:
+    """Return a formatted block of selected examples to inject into the user message."""
+    selected = selector.select(article_text)
+    if not selected:
+        return ""
+    examples_text = "\n\n".join(e.raw for e in selected)
+    return f"Reference examples:\n\n{examples_text}"
+
+
 def build_prompt_with_selected_examples(
     base_prompt: str,
     selector: ExampleSelector,
