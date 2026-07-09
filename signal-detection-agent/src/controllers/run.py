@@ -114,7 +114,7 @@ async def run_agent_pipeline(job_id: int, domain: str, news_run_id: int, limit: 
 
     batch_context = [
         {"title": a.get("title", ""), "url": a.get("url", "")}
-        for a in usable
+        for a in usable[:20]
     ]
 
     semaphore = asyncio.Semaphore(config.CLASSIFY_CONCURRENCY)
