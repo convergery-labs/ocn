@@ -470,18 +470,16 @@ def _fetch_universe_tickers(base_url: str, api_key: str | None = None) -> list[s
 
 
 # Alpha Vantage API limits (premium key):
-# - 75 calls/minute, 500 calls/day
+# - 75 calls/minute, no daily limit
 # - 1 ticker per call (multi-ticker requests return far fewer articles)
-# - Capped at 500 tickers per run to stay within daily quota
-_AV_CALLS_PER_MINUTE = 60  # steady rate: 1 call/sec, well under the 75/min premium limit
-_AV_MIN_INTERVAL = 60.0 / _AV_CALLS_PER_MINUTE  # 1.0 second between calls
-_AV_DAILY_LIMIT = 500
+_AV_CALLS_PER_MINUTE = 75
+_AV_MIN_INTERVAL = 60.0 / _AV_CALLS_PER_MINUTE  # ~0.8 seconds between calls
 
 # Hardcoded 500 popular US-listed AI-economy tickers for Alpha Vantage.
 # Dynamic fetch via research-universe API can ADD new tickers on top of this list
 # but will never overwrite it — these are the guaranteed baseline.
 #count = 453
-_AV_BASE_TICKERS: list[str] = [
+_AV_BASE_TICKERS_deprecated: list[str] = [
     "NVDA","MSFT","AAPL","AMZN","GOOGL","META","TSLA","AVGO","ORCL","AMD",
     "CRM","NOW","INTU","ADBE","CSCO","IBM","TXN","QCOM","ARM","INTC",
     "AMAT","LRCX","KLAC","SNPS","CDNS","MRVL","ANSS","FTNT","PANW","CRWD",
@@ -528,12 +526,28 @@ _AV_BASE_TICKERS: list[str] = [
     "NFLY","NKTR","NLOK","NOVA","NUAN","AKAM","ALTR","APPF","APPM","ARIS",
     "AVLR","BCOV","BFLY","BIGC","BLKB","BVS","CARG","CGNT","CHKP","CLOU",
     "CODA","CPRT","DCBO",
+    "SMR","TER","AZN","LLY","RHHBY","GS","ECL","DE",
+    "AEM","CC","AEIS","LNT","ASPI","APD","ATI","ALAB","ARQQ","BZAI",
+    "BMI","BX","CLS","APP","CLRO","AVAV","GHSI","ABBV","ABSI","ADPT",
+    "ALNY","ASTS","FLY","TXG","DV","MGNI","BIOA","BYDDY","BRK.B",
 ]
+
+
+
+# 60-ticker curated list
+_AV_BASE_TICKERS: list[str] = [
+    "AEM", "CC", "AEIS", "LNT", "BRK-B", "ASPI", "ACMR", "APD", "ARM", "AXTI",
+    "AMD", "ATI", "AMKR", "ALAB", "CDNS", "MU", "NVDA", "ARQQ", "BZAI", "AVGO",
+    "ADTN", "APH", "ANET", "AMT", "BMI", "BX", "CLS", "T", "BABA", "GOOG",
+    "AMZN", "META", "MSFT", "ADBE", "APP", "BBAI", "CRWD", "PLTR", "PANW", "AVAV",
+    "TSLA", "ABBV", "ABSI", "ADPT", "ALNY", "BIOA", "BNTX", "BFLY", "MDT", "ASTS",
+    "CACI", "FLY", "AFRM", "XYZ", "COIN", "ECL", "TXG", "DASH", "DV", "MGNI",
+]  # 60 tickers
+
 
 
 def _fetch_alpha_vantage(
     sources: list[dict],
-    days_back: int,
     alpha_vantage_key: str,
     universe_url: str | None = None,
     universe_api_key: str | None = None,
@@ -545,8 +559,7 @@ def _fetch_alpha_vantage(
 
     Args:
         sources: List of alpha_vantage source dicts with ``config.tickers``.
-        days_back: Exclude articles older than this many days.
-        api_key: Alpha Vantage API key.
+        alpha_vantage_key: Alpha Vantage API key.
         universe_url: research-universe base URL; if set, tickers are fetched
             dynamically. Falls back to config tickers if unreachable.
         universe_api_key: Service API key (ru_ prefix) for research-universe auth.
@@ -554,10 +567,11 @@ def _fetch_alpha_vantage(
     Returns:
         List of article dicts with ``_pub_date`` set.
     """
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
-    time_from = (datetime.now(timezone.utc) - timedelta(days=days_back)).strftime(
-        "%Y%m%dT%H%M"
-    )
+    # Always fetch last 24 hours only — AV is a daily source and fetching
+    # wider windows re-fetches articles already stored from previous runs.
+    _av_cutoff_days = 1
+    cutoff = datetime.now(timezone.utc) - timedelta(days=_av_cutoff_days)
+    time_from = cutoff.strftime("%Y%m%dT%H%M")
 
     tickers: list[str] = list(_AV_BASE_TICKERS)
 
@@ -568,9 +582,6 @@ def _fetch_alpha_vantage(
     #     dynamic = _fetch_universe_tickers(universe_url, universe_api_key)
     #     tickers.extend(dynamic)
     # tickers = list(dict.fromkeys(tickers))
-
-    if len(tickers) > _AV_DAILY_LIMIT:
-        tickers = tickers[:_AV_DAILY_LIMIT]
 
     if not tickers:
         logger.warning("[ALPHA_VANTAGE] no tickers configured, skipping")
@@ -713,7 +724,7 @@ def _fetch_articles(
 
     if alpha_vantage_sources:
         if alpha_vantage_key:
-            articles.extend(_fetch_alpha_vantage(alpha_vantage_sources, days_back, alpha_vantage_key, universe_url, universe_api_key))
+            articles.extend(_fetch_alpha_vantage(alpha_vantage_sources, alpha_vantage_key, universe_url, universe_api_key))
         else:
             logger.warning(
                 "ALPHA_VANTAGE_API_KEY not set - skipping %d alpha_vantage source(s)",
