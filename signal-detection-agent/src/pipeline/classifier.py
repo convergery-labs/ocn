@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 import time
@@ -12,6 +13,8 @@ from urllib.request import Request, urlopen
 
 from pipeline.categories import ALLOWED_CATEGORIES
 from pipeline.example_selector import ExampleSelector, build_examples_block, build_static_system_prompt, parse_examples
+
+logger = logging.getLogger(__name__)
 
 ALLOWED_SIGNAL = {'signal', 'weak_signal', 'noise'}
 ALLOWED_MATERIALITY = {'high', 'medium', 'low', 'none'}
@@ -215,6 +218,8 @@ def classify_with_model(
     max_tokens: int = 1200,
     cache_system_prompt: bool = False,
     cached_suffix: str = '',
+    stage: str = '',
+    article_id: Any = None,
 ) -> dict[str, Any]:
     if validator is None:
         validator = validate_classification
@@ -256,6 +261,16 @@ def classify_with_model(
     )
     with urlopen(req, timeout=timeout) as resp:
         data = json.loads(resp.read().decode('utf-8', errors='ignore'))
+    usage = data.get('usage', {}) or {}
+    prompt_tokens_details = usage.get('prompt_tokens_details', {}) or {}
+    logger.info(
+        'llm_usage stage=%s article_id=%s model=%s prompt_tokens=%s cached_tokens=%s '
+        'cache_write_tokens=%s completion_tokens=%s cost=%s',
+        stage or '-', article_id, model,
+        usage.get('prompt_tokens'), prompt_tokens_details.get('cached_tokens'),
+        prompt_tokens_details.get('cache_write_tokens'), usage.get('completion_tokens'),
+        usage.get('cost'),
+    )
     content = data.get('choices', [{}])[0].get('message', {}).get('content', '')
     if isinstance(content, list):
         content = ''.join(part.get('text', '') for part in content if isinstance(part, dict))
@@ -288,6 +303,8 @@ def classify_article(
                     system_prompt, user_prompt, model, api_key, base_url, timeout,
                     cache_system_prompt=cache_system_prompt,
                     cached_suffix=cached_suffix,
+                    stage='base',
+                    article_id=article.get('id'),
                 )
                 result['id'] = article.get('id')
                 if article.get('run_id') is not None:
@@ -514,6 +531,8 @@ def classify_article_two_stage(
                     validator=validate_classification_v2,
                     max_tokens=2000,
                     cache_system_prompt=cache_system_prompts,
+                    stage='refine',
+                    article_id=article.get('id'),
                 )
                 final['id'] = article.get('id')
                 if article.get('run_id') is not None:
