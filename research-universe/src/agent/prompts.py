@@ -97,7 +97,7 @@ Return a JSON array only - no other text:
   {{{{
     "company_name": "...",
     "ticker": "... or Private",
-    "market": "National (US) or International",
+    "market": "National (US) if listed on NYSE, Nasdaq, or NYSE American; International for all other exchanges. If ticker is Private, infer from country: US-headquartered → National (US), all others → International.",
     "country": "...",
     "website": "https://...",
     "subcategory_name": "{{subcategory_name}}",
@@ -142,7 +142,7 @@ Return a JSON array only - no other text:
   {{{{
     "company_name": "...",
     "ticker": "... or Private",
-    "market": "National (US) or International",
+    "market": "National (US) if listed on NYSE, Nasdaq, or NYSE American; International for all other exchanges. If ticker is Private, infer from country: US-headquartered → National (US), all others → International.",
     "country": "...",
     "website": "https://...",
     "subcategory_name": "... (from valid list above, or null if company does not belong here)",

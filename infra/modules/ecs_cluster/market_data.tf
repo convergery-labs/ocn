@@ -203,11 +203,11 @@ resource "aws_iam_role_policy" "news_retrieval_dynamodb_market" {
 # CloudWatch scheduled rules — poller
 # ---------------------------------------------------------------------------
 
-# Quotes mode: every 30 min during US market hours (Mon-Fri, 14:30-21:00 UTC)
+# Quotes mode: every 60 min during US market hours (Mon-Fri, 14:00-21:00 UTC)
 resource "aws_cloudwatch_event_rule" "market_poll_quotes" {
   name                = "${var.env}-market-poll-quotes"
-  description         = "Poll AV GLOBAL_QUOTE + MARKET_STATUS every 30 min during market hours → DynamoDB"
-  schedule_expression = "cron(0,30 14-20 ? * MON-FRI *)"
+  description         = "Poll AV GLOBAL_QUOTE + MARKET_STATUS every 60 min during market hours → DynamoDB"
+  schedule_expression = "cron(0 14-20 ? * MON-FRI *)"
 }
 
 resource "aws_cloudwatch_event_target" "market_poll_quotes" {

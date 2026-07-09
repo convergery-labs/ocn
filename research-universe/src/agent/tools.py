@@ -71,7 +71,7 @@ TOOL_DEFINITIONS: list[dict] = [
                 "properties": {
                     "company_name": {"type": "string"},
                     "ticker": {"type": "string", "description": "Real trading symbol or 'Private'"},
-                    "market": {"type": "string", "enum": ["National (US)", "International"]},
+                    "market": {"type": "string", "enum": ["National (US)", "International"], "description": "National (US) only if listed on NYSE, Nasdaq, or NYSE American. International for all other exchanges. If ticker is Private, infer from country: US-headquartered → National (US), all others → International."},
                     "country": {"type": "string"},
                     "website": {"type": "string"},
                     "category_names": {
