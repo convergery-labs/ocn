@@ -301,7 +301,7 @@ def _poll_quote(ticker: str, av_key: str, last_call: list[float]) -> None:
         "change_percent": _to_decimal(quote.get("10. change percent", "0%")),
         "volume": _to_decimal(quote.get("06. volume", "0")),
         "previous_close": _to_decimal(quote.get("08. previous close", "0")),
-        "ttl": _ttl(2),
+        "ttl": _ttl(4),
     })
     logger.info("[DYNAMODB] quote written ticker=%s", ticker)
 
@@ -319,7 +319,7 @@ def _poll_indices(av_key: str, last_call: list[float]) -> None:
             "recorded_at": _now_iso(),
             "price": _to_decimal(quote.get("05. price", "0")),
             "change_percent": _to_decimal(quote.get("10. change percent", "0%")),
-            "ttl": _ttl(2),
+            "ttl": _ttl(4),
         })
         logger.info("[DYNAMODB] indices written ticker=%s", ticker)
 
@@ -338,7 +338,7 @@ def _poll_market_status(av_key: str, last_call: list[float]) -> None:
         "current_status": us.get("current_status", "unknown"),
         "local_open": us.get("local_open", ""),
         "local_close": us.get("local_close", ""),
-        "ttl": _ttl(2),
+        "ttl": _ttl(4),
     })
     logger.info("[DYNAMODB] market_status written")
 
