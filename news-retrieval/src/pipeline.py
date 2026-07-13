@@ -21,6 +21,7 @@ import trafilatura
 from openai import OpenAI
 from pydantic import BaseModel
 
+from models.articles import get_existing_urls_for_domain
 from models.sources import load_sources
 
 logger = logging.getLogger(__name__)
@@ -924,6 +925,13 @@ def run(
     articles = _fetch_articles(
         sources, days_back, max_articles, serpapi_key, newsapi_key, alpha_vantage_key, universe_url, universe_api_key
     )
+    if not articles:
+        return {"articles": []}
+
+    # Cross-run dedup: drop articles already stored for this domain in any
+    # prior run, before they reach the LLM relevance filter.
+    seen_urls = get_existing_urls_for_domain(domain_slug)
+    articles = [a for a in articles if a["url"] not in seen_urls]
     if not articles:
         return {"articles": []}
 
