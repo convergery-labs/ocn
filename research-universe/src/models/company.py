@@ -6,6 +6,25 @@ from typing import Any
 
 from db import get_db
 
+# Aliases -> canonical country name. Keys are matched case-insensitively
+# after stripping whitespace.
+_COUNTRY_ALIASES = {
+    "usa": "United States",
+    "u.s.a.": "United States",
+    "u.s.": "United States",
+    "us": "United States",
+    "uk": "United Kingdom",
+    "u.k.": "United Kingdom",
+}
+
+
+def normalize_country(country: str | None) -> str | None:
+    """Map known country aliases (USA, UK, ...) to their canonical name."""
+    if not country:
+        return country
+    return _COUNTRY_ALIASES.get(country.strip().lower(), country)
+
+
 # Subquery fragments reused across queries
 _CATEGORY_NAMES = """
     COALESCE((SELECT array_agg(name ORDER BY name)
@@ -179,6 +198,8 @@ def create_company(fields: dict[str, Any]) -> dict[str, Any]:
     """Insert a new company row. Returns the created record."""
     fields.setdefault("subcategory_ids", [])
     fields.setdefault("category_ids", [])
+    if "country" in fields:
+        fields["country"] = normalize_country(fields["country"])
     with get_db() as conn:
         cur = conn.execute(
             """
@@ -206,6 +227,8 @@ def update_company(company_id: str, fields: dict[str, Any]) -> dict[str, Any] | 
         "category_ids", "subcategory_ids", "multi_category_reason",
     }
     updates = {k: v for k, v in fields.items() if k in allowed}
+    if "country" in updates:
+        updates["country"] = normalize_country(updates["country"])
     if updates.get("subcategory_ids") is None:
         updates["subcategory_ids"] = []
     if updates.get("category_ids") is None:

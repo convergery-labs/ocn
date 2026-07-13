@@ -150,6 +150,7 @@ def bulk_import_cmd(json_file: str, dry_run: bool) -> None:
     import json as _json
     import db
     from db import get_db
+    from models.company import normalize_country
 
     db.init_db()
 
@@ -182,7 +183,7 @@ def bulk_import_cmd(json_file: str, dry_run: bool) -> None:
         name     = (c.get("Company") or "").strip()
         ticker   = (c.get("Ticker") or "").strip()
         market   = (c.get("Market") or "").strip()
-        country  = (c.get("Country") or "").strip()
+        country  = normalize_country((c.get("Country") or "").strip())
         website  = (c.get("Website") or "").strip()
         cat_name = (c.get("Category") or "").strip()
         sub_name = (c.get("Subcategory") or "").strip()

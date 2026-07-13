@@ -792,6 +792,7 @@ resource "aws_ecs_task_definition" "research_universe" {
   cpu                      = "512"
   memory                   = "1024"
   execution_role_arn       = aws_iam_role.ecs_task_execution.arn
+  task_role_arn            = aws_iam_role.ecs_task_exec_ssm.arn
 
   container_definitions = jsonencode([
     {
@@ -849,11 +850,12 @@ resource "aws_service_discovery_service" "research_universe" {
 
 
 resource "aws_ecs_service" "research_universe" {
-  name            = "${var.env}-research-universe"
-  cluster         = aws_ecs_cluster.main.id
-  task_definition = aws_ecs_task_definition.research_universe.arn
-  desired_count   = 1
-  launch_type     = "FARGATE"
+  name                   = "${var.env}-research-universe"
+  cluster                = aws_ecs_cluster.main.id
+  task_definition        = aws_ecs_task_definition.research_universe.arn
+  desired_count          = 1
+  launch_type            = "FARGATE"
+  enable_execute_command = true
 
   load_balancer {
     target_group_arn = var.research_universe_tg_arn
