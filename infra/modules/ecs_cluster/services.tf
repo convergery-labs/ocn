@@ -364,7 +364,7 @@ resource "aws_ecs_task_definition" "signal_detection_agent" {
         { name = "NEWS_RETRIEVAL_URL",     value = "http://news-retrieval.${var.env}.ocn.internal:8000" },
         { name = "OPENAI_BASE_URL",        value = "https://openrouter.ai/api/v1" },
         { name = "SIGNAL_DETECTION_MODEL",    value = "anthropic/claude-sonnet-4-6" },
-        { name = "SIGNAL_DETECTION_MODEL_V2", value = "anthropic/claude-haiku-4.5" }
+        { name = "SIGNAL_DETECTION_MODEL_V2", value = "openai/gpt-4o-mini" }
       ]
       secrets = [
         {
