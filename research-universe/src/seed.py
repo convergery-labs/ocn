@@ -28,6 +28,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../shared/src"))
 
 import db  # noqa: E402  (must come after sys.path patch)
 from db import get_db, init_db  # noqa: E402
+from models.company import normalize_country  # noqa: E402
 
 SHEET_NAME = "AI Economy Universe"
 COLUMNS = ("category", "subcategory", "company_name", "ticker", "market", "country", "website")
@@ -223,7 +224,7 @@ def _seed_companies(
                     "company_name": company_name,
                     "ticker": r0["ticker"],
                     "market": r0["market"],
-                    "country": r0["country"],
+                    "country": normalize_country(r0["country"]),
                     "website": r0["website"],
                     "category_ids": resolved_cat_ids,
                     "subcategory_ids": resolved_sub_ids,

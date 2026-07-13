@@ -44,6 +44,49 @@ output "execution_role_arn" {
 }
 
 
+resource "aws_iam_role" "ecs_task_exec_ssm" {
+  name = "${var.env}-ecs-task-exec-ssm-role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect    = "Allow"
+        Principal = {
+          Service = "ecs-tasks.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+}
+
+
+resource "aws_iam_role_policy" "ecs_task_exec_ssm" {
+  name = "${var.env}-ecs-task-exec-ssm"
+  role = aws_iam_role.ecs_task_exec_ssm.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "ssmmessages:CreateControlChannel",
+          "ssmmessages:CreateDataChannel",
+          "ssmmessages:OpenControlChannel",
+          "ssmmessages:OpenDataChannel"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+
+output "task_exec_ssm_role_arn" {
+  value = aws_iam_role.ecs_task_exec_ssm.arn
+}
+
+
 
 resource "aws_iam_openid_connect_provider" "github" {
   url             = "https://token.actions.githubusercontent.com"
