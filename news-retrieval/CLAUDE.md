@@ -85,7 +85,7 @@ AV (Alpha Vantage) data is never fetched on the request path. A background polle
 
 | Mode | Schedule | What it fetches |
 |------|----------|----------------|
-| `quotes` | Every 15 min (CloudWatch) | `GLOBAL_QUOTE` per ticker, SPY/QQQ/SOXX indices, `MARKET_STATUS` |
+| `quotes` | Hourly, 14:00-20:00 UTC, Mon-Fri (CloudWatch) | `GLOBAL_QUOTE` per ticker, SPY/QQQ/SOXX indices, `MARKET_STATUS` |
 | `daily` | 00:30 UTC daily (CloudWatch) | `OVERVIEW`, `EARNINGS`, `TIME_SERIES_DAILY_ADJUSTED` per ticker |
 
 Run manually: `python __main__.py poll-market --mode quotes`
@@ -94,9 +94,9 @@ Run manually: `python __main__.py poll-market --mode quotes`
 
 | Table | Partition key | Sort key | TTL | Mode |
 |-------|--------------|----------|-----|------|
-| `ocn-market-quote` | `ticker` | `recorded_at` | 2 days | quotes |
-| `ocn-market-indices` | `ticker` | `recorded_at` | 2 days | quotes |
-| `ocn-market-status` | `market` | `recorded_at` | 2 days | quotes |
+| `ocn-market-quote` | `ticker` | `recorded_at` | 4 days | quotes |
+| `ocn-market-indices` | `ticker` | `recorded_at` | 4 days | quotes |
+| `ocn-market-status` | `market` | `recorded_at` | 4 days | quotes |
 | `ocn-market-overview` | `ticker` | `recorded_at` | 30 days | daily |
 | `ocn-market-price-history` | `ticker` | `date` | 1 year | daily |
 | `ocn-market-earnings` | `ticker` | `recorded_at` | 30 days | daily |
