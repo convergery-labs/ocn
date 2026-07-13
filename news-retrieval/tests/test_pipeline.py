@@ -3,6 +3,7 @@ import types
 from unittest.mock import MagicMock, patch
 
 import pipeline as pipeline_module
+from db import get_db
 
 
 def test_llm_batch_error_keeps_all_articles() -> None:
@@ -171,6 +172,83 @@ def test_body_trafilatura_fallback() -> None:
     assert len(result["articles"]) == 1
     assert result["articles"][0]["body"] == trafilatura_body
     mock_fetch.assert_called_once_with("http://example.com/test")
+
+
+def _insert_stored_run_with_article(domain: str, url: str) -> None:
+    """Insert a completed run with one article already stored for domain."""
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            INSERT INTO runs
+                (name, domain, days_back, model,
+                 status, completed_at, article_count)
+            VALUES
+                (?, ?, 7, 'test-model', 'completed', NOW(), 1)
+            RETURNING id
+            """,
+            (f"prior-{domain}", domain),
+        ).fetchone()
+        conn.execute(
+            """
+            INSERT INTO articles (run_id, url, title, source)
+            VALUES (?, ?, 'Already Seen', 'Test Feed')
+            """,
+            (row["id"], url),
+        )
+
+
+def test_cross_run_dedup_excludes_previously_stored_url() -> None:
+    """An article whose URL is already stored for the domain is dropped
+    before it reaches the relevance filter, and never re-inserted."""
+    domain = "ai_news"
+    seen_url = "http://example.com/already-seen"
+    _insert_stored_run_with_article(domain, seen_url)
+
+    seen_entry = types.SimpleNamespace(published_parsed=None)
+    seen_entry.get = lambda k, d="": {  # type: ignore[assignment]
+        "title": "Already Seen",
+        "link": seen_url,
+        "published": "2026-01-01",
+        "summary": "Summary.",
+    }.get(k, d)
+    new_entry = types.SimpleNamespace(published_parsed=None)
+    new_entry.get = lambda k, d="": {  # type: ignore[assignment]
+        "title": "Brand New Article",
+        "link": "http://example.com/brand-new",
+        "published": "2026-01-01",
+        "summary": "Summary.",
+    }.get(k, d)
+    fake_feed = types.SimpleNamespace(
+        entries=[seen_entry, new_entry],
+        feed=types.SimpleNamespace(get=lambda k, d="": "Test Feed"),
+    )
+
+    mock_client: MagicMock = MagicMock()
+    mock_client.chat.completions.create.return_value = MagicMock(
+        choices=[MagicMock(message=MagicMock(
+            content=(
+                '{"articles": ['
+                f'{{"url": "{seen_url}", "relevant": true}},'
+                '{"url": "http://example.com/brand-new",'
+                ' "relevant": true}'
+                ']}'
+            )
+        ))]
+    )
+
+    with (
+        patch("feedparser.parse", return_value=fake_feed),
+        patch("pipeline._make_client", return_value=mock_client),
+    ):
+        result = pipeline_module.run(
+            domain_slug=domain,
+            domain_name="AI News",
+            days_back=7,
+            model="test-model",
+        )
+
+    urls = {a["url"] for a in result["articles"]}
+    assert urls == {"http://example.com/brand-new"}
 
 
 def test_body_null_for_no_fetch_source() -> None:

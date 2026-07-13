@@ -17,6 +17,24 @@ def _decode_article_cursor(cursor: str) -> int:
     return decode_cursor(cursor)["id"]
 
 
+def get_existing_urls_for_domain(domain_slug: str) -> set[str]:
+    """Return the set of article URLs already stored for a domain.
+
+    Used to exclude previously-seen articles from a new run before
+    they reach the relevance filter or get re-inserted.
+    """
+    with get_db() as conn:
+        cur = conn.execute(
+            """
+            SELECT DISTINCT a.url FROM articles a
+            JOIN runs r ON r.id = a.run_id
+            WHERE r.domain = :domain_slug AND a.url IS NOT NULL
+            """,
+            {"domain_slug": domain_slug},
+        )
+        return {row["url"] for row in cur.fetchall()}
+
+
 def create_articles(articles: list[dict]) -> None:
     """Batch-insert article records.
 
