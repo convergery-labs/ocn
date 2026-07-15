@@ -2,7 +2,7 @@
 import logging
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import boto3
@@ -58,6 +58,14 @@ def _table(name: str):
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _last_trading_day() -> str:
+    """Most recent US trading date (weekday) as of now, UTC. Ignores market holidays."""
+    day = datetime.now(timezone.utc).date()
+    while day.weekday() >= 5:  # Sat=5, Sun=6
+        day -= timedelta(days=1)
+    return day.isoformat()
 
 
 def _ttl(days: int) -> int:
@@ -293,6 +301,14 @@ def _poll_quote(ticker: str, av_key: str, last_call: list[float]) -> None:
         logger.warning("[AV] GLOBAL_QUOTE empty for %s", ticker)
         return
 
+    trading_day = quote.get("07. latest trading day", "")
+    stale = trading_day < _last_trading_day() if trading_day else False
+    if stale:
+        logger.warning(
+            "[AV] GLOBAL_QUOTE stale for %s trading_day=%s expected=%s",
+            ticker, trading_day, _last_trading_day(),
+        )
+
     _table("quote").put_item(Item={
         "ticker": ticker,
         "recorded_at": _now_iso(),
@@ -301,9 +317,11 @@ def _poll_quote(ticker: str, av_key: str, last_call: list[float]) -> None:
         "change_percent": _to_decimal(quote.get("10. change percent", "0%")),
         "volume": _to_decimal(quote.get("06. volume", "0")),
         "previous_close": _to_decimal(quote.get("08. previous close", "0")),
+        "latest_trading_day": trading_day,
+        "stale": stale,
         "ttl": _ttl(4),
     })
-    logger.info("[DYNAMODB] quote written ticker=%s", ticker)
+    logger.info("[DYNAMODB] quote written ticker=%s stale=%s", ticker, stale)
 
 
 def _poll_indices(av_key: str, last_call: list[float]) -> None:
@@ -314,14 +332,18 @@ def _poll_indices(av_key: str, last_call: list[float]) -> None:
         if not quote:
             logger.warning("[AV] GLOBAL_QUOTE empty for index %s", ticker)
             continue
+        trading_day = quote.get("07. latest trading day", "")
+        stale = trading_day < _last_trading_day() if trading_day else False
         _table("indices").put_item(Item={
             "ticker": ticker,
             "recorded_at": _now_iso(),
             "price": _to_decimal(quote.get("05. price", "0")),
             "change_percent": _to_decimal(quote.get("10. change percent", "0%")),
+            "latest_trading_day": trading_day,
+            "stale": stale,
             "ttl": _ttl(4),
         })
-        logger.info("[DYNAMODB] indices written ticker=%s", ticker)
+        logger.info("[DYNAMODB] indices written ticker=%s stale=%s", ticker, stale)
 
 
 def _poll_market_status(av_key: str, last_call: list[float]) -> None:
