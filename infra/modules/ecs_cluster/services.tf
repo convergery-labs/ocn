@@ -748,7 +748,7 @@ resource "aws_ecs_service" "signal_herald" {
 
 resource "aws_cloudwatch_event_rule" "signal_herald_daily" {
   name                = "${var.env}-signal-herald-daily"
-  schedule_expression = "cron(0 14 ? * MON,THU *)"
+  schedule_expression = "cron(0 14 ? * MON,WED,THU *)"
 }
 
 

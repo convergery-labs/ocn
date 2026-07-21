@@ -31,6 +31,10 @@ EMAIL_RECIPIENTS: list[str] = [
     "kajal@foliumlabs.net",
     "shraychandra@gmail.com",
     "karan@nasiko.com",
+    "deepali@convergery.com",
+    "abhijeetbais7@gmail.com",
+    "vikasjha@gmail.com",
+
 ]
 
 if _test_email := os.environ.get("DIGEST_TEST_EMAIL"):
