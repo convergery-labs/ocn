@@ -11,6 +11,22 @@ logger = logging.getLogger(__name__)
 _SIGNAL_TIER_ORDER = {"signal": 0, "weak_signal": 1, "noise": 2}
 
 
+def dedupe_by_story(articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse near-duplicate articles (same event, different outlet rewrite)
+    to the single highest-scoring one, so one story can't flood a category or
+    the top-conviction strip. Entity/title word overlap can't reliably tell
+    paraphrased duplicates from distinct stories about the same company, so
+    this delegates to an LLM clustering call (see llm_client.group_duplicate_stories)."""
+    ordered = sorted(articles, key=_sort_key)
+    if len(ordered) <= 1:
+        return ordered
+    keep_indices = llm_client.group_duplicate_stories(ordered)
+    dropped = len(ordered) - len(keep_indices)
+    if dropped:
+        logger.info("Deduped %d near-duplicate article(s) across %d kept", dropped, len(keep_indices))
+    return [ordered[i] for i in keep_indices]
+
+
 def _is_today(iso_timestamp: str | None) -> bool:
     if not iso_timestamp:
         return False
@@ -82,11 +98,11 @@ def _build_and_send(job_id: int) -> None:
         )
     }
 
-    # Within each category: only signal + weak_signal articles, signals first by score, max 10
+    # Within each category: only signal + weak_signal articles, dedupe near-identical
+    # outlet rewrites of the same story, signals first by score, max 10
     visible: dict[str, list[dict[str, Any]]] = {
-        cat: sorted(
-            [a for a in articles if a.get("signal_detection") in ("signal", "weak_signal")],
-            key=_sort_key,
+        cat: dedupe_by_story(
+            [a for a in articles if a.get("signal_detection") in ("signal", "weak_signal")]
         )[:10]
         for cat, articles in categorised.items()
     }
