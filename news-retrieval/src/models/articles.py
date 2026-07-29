@@ -1,6 +1,7 @@
 """DB query functions for article records."""
 import json
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime as _parse_rfc2822
 from typing import Optional
 
 from cursor_utils import decode_cursor, encode_cursor
@@ -17,20 +18,83 @@ def _decode_article_cursor(cursor: str) -> int:
     return decode_cursor(cursor)["id"]
 
 
-def get_existing_urls_for_domain(domain_slug: str) -> set[str]:
-    """Return the set of article URLs already stored for a domain.
+def _parse_published_date(published) -> Optional[datetime]:
+    """Try RFC 2822 then ISO 8601; return None if unparseable.
 
-    Used to exclude previously-seen articles from a new run before
-    they reach the relevance filter or get re-inserted.
+    Accepts either a string (as fetched from pipeline sources) or a
+    ``datetime`` (as read back from the ``TIMESTAMPTZ`` articles.published
+    column via psycopg2). Always returns a UTC-aware datetime.
     """
+    if not published:
+        return None
+    if isinstance(published, datetime):
+        return (
+            published if published.tzinfo is not None
+            else published.replace(tzinfo=timezone.utc)
+        )
+    try:
+        return _parse_rfc2822(published)
+    except Exception:
+        pass
+    try:
+        dt = datetime.fromisoformat(published)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception:
+        return None
+
+
+def filter_articles_for_window(
+    articles: list[dict],
+    days_back: int,
+    max_articles: Optional[int],
+    cutoff: Optional[datetime] = None,
+) -> list[dict]:
+    """Return articles within days_back of now, capped by max_articles.
+
+    Articles with unparseable or missing published dates are included
+    (fail-open).
+
+    Args:
+        cutoff: Explicit cutoff to filter against, e.g. a subset run's
+            frozen ``window_cutoff``. Defaults to ``now() - days_back`` when
+            omitted — callers that need a stable result across repeated
+            reads (not recomputed against wall-clock time on every call)
+            must pass an explicit, previously-frozen cutoff.
+    """
+    if cutoff is None:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
+    filtered = [
+        a for a in articles
+        if (pub := _parse_published_date(a.get("published", "")))
+        is None or pub >= cutoff
+    ]
+    if max_articles:
+        filtered = filtered[:max_articles]
+    return filtered
+
+
+def get_already_stored_urls(urls: list[str]) -> set[str]:
+    """Return the subset of ``urls`` already stored, across all domains.
+
+    Global (not domain-scoped) — a URL stored under any domain's run is
+    considered seen everywhere, matching the DB's global uniqueness
+    constraint on ``articles.url``. Bounded to the given candidate URLs
+    rather than pulling a domain's entire article history, so cost scales
+    with the size of one run's fetch, not with cumulative history.
+
+    Used to exclude previously-seen articles from a new run before they
+    reach the relevance filter, a body-fetch step, or re-insertion — the
+    DB's unique index on ``url`` is the final backstop if this check is
+    ever skipped or races with a concurrent run.
+    """
+    if not urls:
+        return set()
     with get_db() as conn:
         cur = conn.execute(
-            """
-            SELECT DISTINCT a.url FROM articles a
-            JOIN runs r ON r.id = a.run_id
-            WHERE r.domain = :domain_slug AND a.url IS NOT NULL
-            """,
-            {"domain_slug": domain_slug},
+            "SELECT url FROM articles WHERE url = ANY(:urls)",
+            {"urls": urls},
         )
         return {row["url"] for row in cur.fetchall()}
 
@@ -99,6 +163,61 @@ def list_articles_for_run(
         )
         rows = [dict(row) for row in cur.fetchall()]
 
+    if not include_body:
+        for row in rows:
+            row.pop("body", None)
+
+    next_cursor: Optional[str] = None
+    if len(rows) > limit:
+        rows = rows[:limit]
+        next_cursor = _encode_article_cursor(rows[-1]["id"])
+
+    return rows, next_cursor
+
+
+def list_articles_for_run_resolved(
+    run: dict,
+    limit: int = 20,
+    cursor: Optional[str] = None,
+    include_body: bool = True,
+) -> tuple[list[dict], Optional[str]]:
+    """Return paginated articles for a run, resolving through source_run_id.
+
+    A subset run (CON-121) stores no article rows of its own — its
+    ``source_run_id`` points at the covering run whose rows it draws from.
+    This filters the covering run's articles to the subset's own
+    ``days_back``/``max_articles`` window before paginating, so callers see
+    the same result they would have if the rows had actually been copied.
+    Runs without a ``source_run_id`` fall through to the normal per-run read.
+
+    Filters against the subset run's frozen ``window_cutoff`` (set once at
+    creation), not wall-clock time at read time — otherwise the resolved
+    article set would keep shrinking on every later read as articles near
+    the window boundary age out, drifting from the ``article_count`` that
+    was recorded once at creation.
+
+    Args:
+        run: Full run row (as returned by ``get_run``), not just an id —
+            needs ``id``, ``source_run_id``, ``days_back``, ``max_articles``,
+            ``window_cutoff``.
+    """
+    if not run.get("source_run_id"):
+        return list_articles_for_run(
+            run["id"], limit=limit, cursor=cursor, include_body=include_body
+        )
+
+    source = fetch_all_articles_for_run(run["source_run_id"])
+    filtered = filter_articles_for_window(
+        source, run["days_back"], run.get("max_articles"),
+        cutoff=run.get("window_cutoff"),
+    )
+    filtered.sort(key=lambda a: a["id"])
+
+    if cursor is not None:
+        after_id = _decode_article_cursor(cursor)
+        filtered = [a for a in filtered if a["id"] > after_id]
+
+    rows = filtered[:limit + 1]
     if not include_body:
         for row in rows:
             row.pop("body", None)

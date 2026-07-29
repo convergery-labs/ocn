@@ -2,7 +2,6 @@
 import logging
 import os
 from datetime import datetime, timedelta, timezone
-from email.utils import parsedate_to_datetime as _parse_rfc2822
 from typing import Optional, TypedDict
 
 import httpx
@@ -12,7 +11,11 @@ import pipeline as pl
 from typing import Any
 
 from models.api_key_domains import has_domain_access
-from models.articles import create_articles, fetch_all_articles_for_run
+from models.articles import (
+    create_articles,
+    fetch_all_articles_for_run,
+    filter_articles_for_window,
+)
 from models.atomic import atomic
 from models.domains import (
     DomainConfig,
@@ -31,26 +34,6 @@ from models.runs import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _parse_published_date(published: str) -> Optional[datetime]:
-    """Try RFC 2822 then ISO 8601; return None if unparseable.
-
-    Always returns a UTC-aware datetime.
-    """
-    if not published:
-        return None
-    try:
-        return _parse_rfc2822(published)
-    except Exception:
-        pass
-    try:
-        dt = datetime.fromisoformat(published)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt
-    except Exception:
-        return None
 
 
 class RunCreateResult(TypedDict):
@@ -132,41 +115,31 @@ class RunRequest(BaseModel):
         return self
 
 
-def _filter_articles_for_window(
-    articles: list[dict],
-    days_back: int,
-    max_articles: Optional[int],
-) -> list[dict]:
-    """Return articles within days_back of now, capped by max_articles.
-
-    Articles with unparseable or missing published dates are included
-    (fail-open).
-    """
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
-    filtered = [
-        a for a in articles
-        if (pub := _parse_published_date(a.get("published", "")))
-        is None or pub >= cutoff
-    ]
-    if max_articles:
-        filtered = filtered[:max_articles]
-    return filtered
-
-
 def _create_subset_run(
     request: RunRequest,
     resolved_model: str,
     covering: RunRow,
     domain_config: DomainConfig,
 ) -> RunCreateResult:
-    """Create a completed run populated from a covering run's articles.
+    """Create a completed run whose articles resolve through a covering run.
 
-    Fetches articles from covering, filters to the requested window,
-    inserts them under a new run record, and returns a cache-hit result.
+    Stores no article rows of its own — the global uniqueness constraint on
+    ``articles.url`` (see db.py) means a URL already stored under the
+    covering run's id cannot be copied into a new row. Instead this run's
+    ``source_run_id`` points at the covering run; reads resolve through it,
+    filtered to this run's narrower window (see CON-121, CON-147).
+
+    The window's cutoff is computed once, here, and frozen as
+    ``window_cutoff`` rather than recomputed against wall-clock time on
+    every later read — otherwise articles near the window boundary could
+    silently drop out of the resolved set (and article_count would drift
+    out of sync with it) the longer this run sits between creation and
+    being read.
     """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=request.days_back)
     source = fetch_all_articles_for_run(covering["id"])
-    filtered = _filter_articles_for_window(
-        source, request.days_back, request.max_articles
+    filtered = filter_articles_for_window(
+        source, request.days_back, request.max_articles, cutoff=cutoff
     )
     ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
     subset_id = create_run(
@@ -177,9 +150,9 @@ def _create_subset_run(
         focus=request.focus,
         model=resolved_model,
         callback_url=request.callback_url,
+        source_run_id=covering["id"],
+        window_cutoff=cutoff,
     )
-    if filtered:
-        create_articles([{**a, "run_id": subset_id} for a in filtered])
     complete_run(subset_id, len(filtered))
     return RunCreateResult(
         run_id=subset_id,

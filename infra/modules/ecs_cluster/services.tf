@@ -237,6 +237,39 @@ resource "aws_cloudwatch_event_target" "news_retrieval_company_news_daily" {
   })
 }
 
+resource "aws_cloudwatch_event_rule" "news_retrieval_geopolitical_news_daily" {
+  name = "${var.env}-news-retrieval-geopolitical-news-daily"
+  # Offset an hour after company_news (01:00 UTC) - geopolitical_news's GDELT
+  # source runs 27 sequential theme queries with round-robin retries on rate
+  # limiting, so it can take much longer than company_news's ticker fetch.
+  schedule_expression = "cron(0 2 * * ? *)"
+}
+
+resource "aws_cloudwatch_event_target" "news_retrieval_geopolitical_news_daily" {
+  rule     = aws_cloudwatch_event_rule.news_retrieval_geopolitical_news_daily.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+
+  ecs_target {
+    task_definition_arn = aws_ecs_task_definition.news_retrieval.arn
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets          = var.public_subnet_ids
+      security_groups  = [var.news_sg_id]
+      assign_public_ip = true
+    }
+  }
+
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "news-retrieval"
+        command = ["python", "__main__.py", "trigger", "--domain", "geopolitical_news", "--days-back", "1"]
+      }
+    ]
+  })
+}
+
 resource "aws_ecs_task_definition" "signal_detection" {
   family                   = "${var.env}-signal-detection"
   network_mode             = "awsvpc"
