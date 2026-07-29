@@ -72,6 +72,15 @@ DOMAINS: list[dict[str, Any]] = [
             " fetched via Alpha Vantage News & Sentiments API by ticker symbol."
         ),
     },
+    {
+        "name": "Geopolitical News",
+        "slug": "geopolitical_news",
+        "description": (
+            "Covers geopolitical developments via U.S. federal actions:"
+            " sanctions, export controls, tariffs, executive orders, and"
+            " presidential documents affecting foreign policy and trade."
+        ),
+    },
 ]
 
 
@@ -1135,6 +1144,104 @@ COMPANY_NEWS_SOURCES: list[dict[str, Any]] = [
     },
 ]
 
+# Federal Register documents (sanctions, export controls, tariffs, executive
+# orders) — free public REST API, no key required.
+# Fetcher (source_type: "federal_register") implemented in pipeline.py.
+FEDERAL_REGISTER_SOURCES: list[dict[str, Any]] = [
+    {
+        "domain_slug": "geopolitical_news",
+        "url": "federal_register:geopolitical",
+        "name": "Federal Register",
+        "source_type": "federal_register",
+        "frequency_name": "daily",
+        "description": (
+            "U.S. Federal Register documents: sanctions actions,"
+            " export controls, tariffs, executive orders, and"
+            " presidential documents."
+        ),
+        "config": {
+            "agencies": [
+                "treasury-department",
+                "foreign-assets-control-office",
+                "industry-and-security-bureau",
+                "trade-representative-office-of-united-states",
+                "executive-office-of-the-president",
+            ],
+            "type": ["PRESDOCU", "RULE", "PRORULE", "NOTICE"],
+        },
+    },
+]
+
+# GDELT DOC 2.0 API, queried once per individual theme code (not OR-joined -
+# only single bare "theme:X" queries are confirmed working against the live
+# API; multi-theme "(theme:X OR theme:Y)" queries could not be verified and
+# are avoided until confirmed). English-only. No API key required.
+# Fetcher (source_type: "gdelt") implemented in pipeline.py.
+GDELT_SOURCE: dict[str, Any] = {
+    "domain_slug": "geopolitical_news",
+    "url": "gdelt:geopolitical",
+    "name": "GDELT DOC API",
+    "source_type": "gdelt",
+    "frequency_name": "daily",
+    "description": (
+        "Global conflict, terrorism, sanctions, and unrest coverage via"
+        " the GDELT Project's DOC 2.0 API, English-language sources only,"
+        " queried per individual theme code."
+    ),
+    "config": {
+        "queries": [
+            "theme:ARMEDCONFLICT sourcelang:english",
+            "theme:MILITARY sourcelang:english",
+            "theme:CEASEFIRE sourcelang:english",
+            "theme:TERROR sourcelang:english",
+            "theme:WB_2467_TERRORISM sourcelang:english",
+            "theme:REBELLION sourcelang:english",
+            "theme:REBELS sourcelang:english",
+            "theme:INSURGENCY sourcelang:english",
+            "theme:SEPARATISTS sourcelang:english",
+            "theme:SANCTIONS sourcelang:english",
+            "theme:BLOCKADE sourcelang:english",
+            "theme:PROTEST sourcelang:english",
+            "theme:VIOLENT_UNREST sourcelang:english",
+            "theme:KILL sourcelang:english",
+            "theme:ASSASSINATION sourcelang:english",
+            "theme:HUMAN_RIGHTS_ABUSES sourcelang:english",
+            "theme:WB_2509_GENOCIDE sourcelang:english",
+            "theme:WB_2510_WAR_CRIMES sourcelang:english",
+            "theme:DISPLACED sourcelang:english",
+            "theme:REFUGEES sourcelang:english",
+            "theme:PEACEKEEPING sourcelang:english",
+            "theme:RELEASE_HOSTAGE sourcelang:english",
+            "theme:WB_2503_WEAPONS_PROLIFERATION_AND_ARMS_CONTROL sourcelang:english",
+            "theme:WB_2505_WEAPONS_OF_MASS_DESTRUCTION sourcelang:english",
+            "theme:CYBER_ATTACK sourcelang:english",
+            "theme:BORDER sourcelang:english",
+            "theme:MILITARY_COOPERATION sourcelang:english",
+        ],
+    },
+}
+
+# Google News search for geopolitical_news via SerpAPI.
+GEOPOLITICAL_GOOGLE_NEWS_SOURCE: dict[str, Any] = {
+    "domain_slug": "geopolitical_news",
+    "url": "google_news:geopolitical",
+    "name": "Google News",
+    "source_type": "google_news",
+    "frequency_name": "daily",
+    "description": "Google News search across geopolitics topics via SerpAPI.",
+    "config": {
+        "queries": [
+            "geopolitics",
+            "sanctions",
+            "export controls",
+            "trade war tariffs",
+            "military conflict",
+            "diplomatic relations",
+            "territorial dispute",
+        ],
+    },
+}
+
 # VC commentary / investor blogs.
 VC_COMMENTARY_SOURCES: list[dict[str, Any]] = [
     {
@@ -1566,6 +1673,12 @@ SOURCES: list[dict[str, Any]] = [
     # Company-specific news (Alpha Vantage)
     # ------------------------------------------------------------------
     *COMPANY_NEWS_SOURCES,
+    # ------------------------------------------------------------------
+    # Geopolitical news (Federal Register + Google News)
+    # ------------------------------------------------------------------
+    *FEDERAL_REGISTER_SOURCES,
+    GEOPOLITICAL_GOOGLE_NEWS_SOURCE,
+    GDELT_SOURCE,
 ]
 
 # VC commentary / investor blogs.

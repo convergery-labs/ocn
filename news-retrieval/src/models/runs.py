@@ -22,6 +22,8 @@ class RunRow(TypedDict):
     summary: Optional[str]
     callback_url: Optional[str]
     model: str
+    source_run_id: Optional[int]
+    window_cutoff: Optional[datetime]
 
 
 def _encode_run_cursor(started_at: datetime, run_id: int) -> str:
@@ -43,17 +45,31 @@ def create_run(
     focus: Optional[str],
     model: str,
     callback_url: Optional[str] = None,
+    source_run_id: Optional[int] = None,
+    window_cutoff: Optional[datetime] = None,
 ) -> int:
-    """Insert a new run record and return its id."""
+    """Insert a new run record and return its id.
+
+    Args:
+        source_run_id: When set, this run is a subset of an existing
+            covering run - its articles are resolved by reading through
+            to source_run_id (filtered to this run's window) rather than
+            being stored as separate rows. See CON-121.
+        window_cutoff: Frozen at creation time for subset runs, so the
+            resolved article set never drifts on later reads - filtering
+            against "now() - days_back" at read time would let articles
+            near the window boundary silently drop out over time.
+    """
     with get_db() as conn:
         cur = conn.execute(
             """
             INSERT INTO runs
                 (name, domain, days_back, max_articles, focus,
-                 status, callback_url, model)
+                 status, callback_url, model, source_run_id, window_cutoff)
             VALUES
                 (:name, :domain, :days_back, :max_articles,
-                 :focus, 'running', :callback_url, :model)
+                 :focus, 'running', :callback_url, :model, :source_run_id,
+                 :window_cutoff)
             RETURNING id
             """,
             {
@@ -64,6 +80,8 @@ def create_run(
                 "focus": focus,
                 "callback_url": callback_url,
                 "model": model,
+                "source_run_id": source_run_id,
+                "window_cutoff": window_cutoff,
             },
         )
         return cur.fetchone()["id"]

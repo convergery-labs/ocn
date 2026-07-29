@@ -205,9 +205,49 @@ def init_db() -> None:
             ON articles (run_id, LOWER(title))
             WHERE title IS NOT NULL
         """)
+        # Deduplicate existing url across ALL runs/domains - keep the
+        # earliest-stored row (first-come-first-served); a URL previously
+        # stored under multiple domains now belongs only to whichever
+        # domain's run stored it first.
+        conn.execute("""
+            DELETE FROM articles
+            WHERE id NOT IN (
+                SELECT MIN(id) FROM articles
+                WHERE url IS NOT NULL
+                GROUP BY url
+            )
+            AND url IS NOT NULL
+        """)
+        # Global uniqueness: a URL is stored once, ever, across all domains
+        # and runs - enforced at the DB layer regardless of what any
+        # in-app dedup check does or misses.
+        conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_articles_url
+            ON articles (url)
+            WHERE url IS NOT NULL
+        """)
         conn.execute(
             "ALTER TABLE articles"
             " ADD COLUMN IF NOT EXISTS metadata JSONB"
+        )
+        # Subset runs (CON-121) no longer copy article rows from their
+        # covering run - the global url uniqueness constraint above would
+        # reject those copies as duplicates. Instead a subset run stores no
+        # article rows of its own; source_run_id points at the covering run,
+        # and reads resolve through it filtered to the subset's window.
+        conn.execute(
+            "ALTER TABLE runs"
+            " ADD COLUMN IF NOT EXISTS source_run_id"
+            " INTEGER REFERENCES runs(id)"
+        )
+        # Frozen at subset-run creation time so its resolved article set
+        # (and article_count) never drifts on later reads - without this,
+        # filtering by "now() - days_back" on every read would let articles
+        # right at the window boundary silently drop out between creation
+        # and any later GET /runs/{id}/articles call.
+        conn.execute(
+            "ALTER TABLE runs"
+            " ADD COLUMN IF NOT EXISTS window_cutoff TIMESTAMPTZ"
         )
         # Migrate published from TEXT to TIMESTAMPTZ.
         # Existing rows may have unparseable source-format strings (e.g. SerpAPI

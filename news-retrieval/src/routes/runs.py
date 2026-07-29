@@ -4,7 +4,7 @@ from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
-from models.articles import list_articles_for_run
+from models.articles import list_articles_for_run_resolved
 from models.runs import get_run, list_runs
 
 router = APIRouter()
@@ -51,11 +51,12 @@ def get_articles_for_run(
     include_body: bool = False,
 ) -> dict:
     """Return paginated articles for a run."""
-    if get_run(run_id) is None:
+    run = get_run(run_id)
+    if run is None:
         raise HTTPException(status_code=404, detail="Run not found.")
     try:
-        articles, next_cursor = list_articles_for_run(
-            run_id, limit=limit, cursor=cursor, include_body=include_body
+        articles, next_cursor = list_articles_for_run_resolved(
+            run, limit=limit, cursor=cursor, include_body=include_body
         )
     except ValueError:
         raise HTTPException(status_code=422, detail="Invalid cursor.")

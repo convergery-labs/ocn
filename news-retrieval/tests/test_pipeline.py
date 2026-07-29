@@ -1,9 +1,28 @@
 """Tests for pipeline.py behaviour, specifically fail-open on LLM error."""
 import types
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pipeline as pipeline_module
 from db import get_db
+
+_GDELT_FIXTURE_SEENDATE = (
+    datetime.now(timezone.utc) - timedelta(hours=1)
+).strftime("%Y%m%dT%H%M%SZ")
+
+GDELT_RESPONSE_FIXTURE = {
+    "articles": [
+        {
+            "url": "https://example.com/conflict-story",
+            "title": "Conflict escalates in region",
+            "seendate": _GDELT_FIXTURE_SEENDATE,
+            "socialimage": "",
+            "domain": "example.com",
+            "language": "English",
+            "sourcecountry": "Ukraine",
+        },
+    ],
+}
 
 
 def test_llm_batch_error_keeps_all_articles() -> None:
@@ -249,6 +268,215 @@ def test_cross_run_dedup_excludes_previously_stored_url() -> None:
 
     urls = {a["url"] for a in result["articles"]}
     assert urls == {"http://example.com/brand-new"}
+
+
+def test_cross_domain_dedup_excludes_url_stored_under_different_domain() -> None:
+    """A URL already stored under a DIFFERENT domain's run is dropped too -
+    dedup is global, not scoped to the requesting domain."""
+    seen_url = "http://example.com/stored-under-other-domain"
+    _insert_stored_run_with_article("smart_money", seen_url)
+
+    seen_entry = types.SimpleNamespace(published_parsed=None)
+    seen_entry.get = lambda k, d="": {  # type: ignore[assignment]
+        "title": "Already Seen Elsewhere",
+        "link": seen_url,
+        "published": "2026-01-01",
+        "summary": "Summary.",
+    }.get(k, d)
+    fake_feed = types.SimpleNamespace(
+        entries=[seen_entry],
+        feed=types.SimpleNamespace(get=lambda k, d="": "Test Feed"),
+    )
+
+    mock_client: MagicMock = MagicMock()
+
+    with (
+        patch("feedparser.parse", return_value=fake_feed),
+        patch("pipeline._make_client", return_value=mock_client),
+    ):
+        result = pipeline_module.run(
+            domain_slug="ai_news",
+            domain_name="AI News",
+            days_back=7,
+            model="test-model",
+        )
+
+    assert result["articles"] == []
+    mock_client.chat.completions.create.assert_not_called()
+
+
+def test_fetch_gdelt_parses_doc_response() -> None:
+    """_fetch_one_gdelt maps GDELT DOC API fields onto article dicts."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = GDELT_RESPONSE_FIXTURE
+    mock_resp.raise_for_status.return_value = None
+
+    with patch("httpx.get", return_value=mock_resp) as mock_get:
+        results = pipeline_module._fetch_one_gdelt(
+            "theme:ARMEDCONFLICT sourcelang:english", days_back=1
+        )
+
+    assert mock_get.call_args.kwargs["params"]["timespan"] == "1d"
+    assert len(results) == 1
+    article = results[0]
+    assert article["url"] == "https://example.com/conflict-story"
+    assert article["title"] == "Conflict escalates in region"
+    assert article["source"] == "example.com"
+    assert article["summary"] is None
+    assert article["body"] is None
+    assert article["metadata"]["sourcecountry"] == "Ukraine"
+    assert article["_pub_date"] is not None
+
+
+def test_fetch_one_gdelt_returns_sentinel_on_429_without_retrying() -> None:
+    """_fetch_one_gdelt makes exactly one attempt and signals rate-limiting
+    via the sentinel - retry/round-robin orchestration lives in
+    _fetch_gdelt, not here."""
+    rate_limited_resp = MagicMock()
+    rate_limited_resp.status_code = 429
+
+    with patch("httpx.get", return_value=rate_limited_resp) as mock_get:
+        result = pipeline_module._fetch_one_gdelt(
+            "theme:ARMEDCONFLICT sourcelang:english", days_back=1
+        )
+
+    assert result is pipeline_module._GDELT_RATE_LIMITED
+    assert mock_get.call_count == 1
+
+
+def test_fetch_gdelt_round_robins_before_retrying_a_rate_limited_query() -> None:
+    """A rate-limited query is not retried immediately - _fetch_gdelt moves
+    on to the next query first, and only retries it in a later pass."""
+    ok_resp = MagicMock()
+    ok_resp.status_code = 200
+    ok_resp.json.return_value = GDELT_RESPONSE_FIXTURE
+    ok_resp.raise_for_status.return_value = None
+    rate_limited_resp = MagicMock()
+    rate_limited_resp.status_code = 429
+
+    source = {
+        "source_type": "gdelt",
+        "config": {"queries": ["theme:ARMEDCONFLICT", "theme:TERROR"]},
+    }
+
+    # theme:ARMEDCONFLICT: 429 then ok on retry. theme:TERROR: ok first try.
+    # Call order proves TERROR (query 2) runs BEFORE ARMEDCONFLICT's retry.
+    with (
+        patch(
+            "httpx.get",
+            side_effect=[rate_limited_resp, ok_resp, ok_resp],
+        ) as mock_get,
+        patch("pipeline.time.sleep"),
+    ):
+        results = pipeline_module._fetch_gdelt([source], days_back=1)
+
+    assert mock_get.call_count == 3
+    first_call_query = mock_get.call_args_list[0].kwargs["params"]["query"]
+    second_call_query = mock_get.call_args_list[1].kwargs["params"]["query"]
+    assert first_call_query == "theme:ARMEDCONFLICT"
+    assert second_call_query == "theme:TERROR"  # moved on, didn't retry immediately
+    assert len(results) == 1  # same URL from both queries, deduped
+
+
+def test_fetch_gdelt_gives_up_after_max_rounds_still_rate_limited() -> None:
+    """A query still 429ing after _GDELT_MAX_ROUNDS passes is skipped, not
+    retried forever."""
+    rate_limited_resp = MagicMock()
+    rate_limited_resp.status_code = 429
+
+    source = {
+        "source_type": "gdelt",
+        "config": {"queries": ["theme:ARMEDCONFLICT"]},
+    }
+
+    with (
+        patch("httpx.get", return_value=rate_limited_resp) as mock_get,
+        patch("pipeline.time.sleep"),
+    ):
+        results = pipeline_module._fetch_gdelt([source], days_back=1)
+
+    assert results == []
+    assert mock_get.call_count == pipeline_module._GDELT_MAX_ROUNDS
+
+
+def test_fetch_gdelt_dedupes_across_queries_and_paces_requests() -> None:
+    """_fetch_gdelt dedupes by URL across theme queries and sleeps between calls."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = GDELT_RESPONSE_FIXTURE
+    mock_resp.raise_for_status.return_value = None
+
+    source = {
+        "source_type": "gdelt",
+        "config": {"queries": ["theme:ARMEDCONFLICT", "theme:TERROR"]},
+    }
+
+    with (
+        patch("httpx.get", return_value=mock_resp) as mock_get,
+        patch("pipeline.time.sleep") as mock_sleep,
+        patch("trafilatura.fetch_url", return_value="<html>page</html>"),
+        patch("trafilatura.extract", return_value="Extracted body text."),
+    ):
+        results = pipeline_module._fetch_gdelt([source], days_back=1)
+
+    assert len(results) == 1  # same URL returned by both queries, deduped
+    assert mock_get.call_count == 2
+    mock_sleep.assert_called_once()  # spacing enforced between the two queries
+    assert results[0]["body"] == "Extracted body text."
+
+
+def test_fetch_gdelt_body_none_when_extraction_fails() -> None:
+    """_fetch_gdelt leaves body as None when Trafilatura can't fetch the page."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = GDELT_RESPONSE_FIXTURE
+    mock_resp.raise_for_status.return_value = None
+
+    source = {
+        "source_type": "gdelt",
+        "config": {"queries": ["theme:ARMEDCONFLICT"]},
+    }
+
+    with (
+        patch("httpx.get", return_value=mock_resp),
+        patch("pipeline.time.sleep"),
+        patch("trafilatura.fetch_url", return_value=None),
+    ):
+        results = pipeline_module._fetch_gdelt([source], days_back=1)
+
+    assert len(results) == 1
+    assert results[0]["body"] is None
+
+
+def test_fetch_gdelt_skips_body_fetch_for_already_stored_urls() -> None:
+    """_fetch_gdelt drops globally-already-stored URLs before body-fetch."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = GDELT_RESPONSE_FIXTURE
+    mock_resp.raise_for_status.return_value = None
+
+    source = {
+        "source_type": "gdelt",
+        "config": {"queries": ["theme:ARMEDCONFLICT"]},
+    }
+
+    with (
+        patch("httpx.get", return_value=mock_resp),
+        patch("pipeline.time.sleep"),
+        patch(
+            "pipeline.get_already_stored_urls",
+            return_value={"https://example.com/conflict-story"},
+        ) as mock_lookup,
+        patch("trafilatura.fetch_url") as mock_fetch_url,
+    ):
+        results = pipeline_module._fetch_gdelt([source], days_back=1)
+
+    assert results == []
+    mock_fetch_url.assert_not_called()  # no body fetch wasted on a stored URL
+    mock_lookup.assert_called_once_with(
+        ["https://example.com/conflict-story"]
+    )
 
 
 def test_body_null_for_no_fetch_source() -> None:

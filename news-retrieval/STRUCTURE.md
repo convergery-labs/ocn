@@ -146,7 +146,8 @@ pytest news-retrieval/tests/
 | `POSTGRES_DB` | `news-retrieval` | Database name |
 | `POSTGRES_USER` | `news-retrieval` | Database user |
 | `POSTGRES_PASSWORD` | - | Database password |
-| `SERPAPI_KEY` | - | Optional. SerpAPI API key for `google_news` sources. If unset, sources with `source_type = 'google_news'` are skipped with a warning log. |
+| `SERPAPI_KEY` | - | Optional. SerpAPI API key for `google_news` sources, used for all domains except `geopolitical_news`. If unset, those sources are skipped with a warning log. |
+| `SERPAPI_KEY_GEOPOLITICAL` | - | Optional. SerpAPI API key for `google_news` sources under the `geopolitical_news` domain specifically (separate key/quota from `SERPAPI_KEY`). If unset, those sources are skipped with a warning log. |
 | `NEWSAPI_KEY` | - | Optional. NewsAPI API key for `newsapi` sources. If unset, sources with `source_type = 'newsapi'` are skipped with a warning log. |
 
 ### External services

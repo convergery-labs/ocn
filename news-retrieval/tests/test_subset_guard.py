@@ -1,5 +1,8 @@
 """Tests for the time-window subset guard (CON-121)."""
+from datetime import datetime, timedelta, timezone
+
 from db import get_db
+from models.articles import filter_articles_for_window
 
 
 def _insert_covering_run(
@@ -164,6 +167,106 @@ async def test_yesterday_wider_run_does_not_cover(
     )
 
     assert resp.status_code == 202
+
+
+async def test_subset_run_articles_resolve_through_covering_run(
+    client, admin_key
+) -> None:
+    """GET /runs/{subset_id}/articles returns the covering run's articles,
+    filtered to the subset's window, with real URLs (not copied rows) -
+    CON-121 read-through after the global url uniqueness constraint made
+    copying article rows into the subset run impossible."""
+    covering_id = _insert_covering_run(
+        "ai_news", days_back=14, articles=_ARTICLES_14D
+    )
+
+    resp = await client.post(
+        "/run",
+        json={"domain": "ai_news", "days_back": 7},
+        headers={"x-ocn-caller": admin_key},
+    )
+    assert resp.status_code == 200
+    subset_id = resp.json()["id"]
+    assert subset_id != covering_id
+
+    articles_resp = await client.get(f"/runs/{subset_id}/articles")
+    assert articles_resp.status_code == 200
+    body = articles_resp.json()
+
+    urls = {a["url"] for a in body["articles"]}
+    assert urls == {"http://example.com/recent"}  # "old" (2024) is outside 7d
+    for article in body["articles"]:
+        assert article["url"] is not None
+
+
+async def test_subset_run_window_cutoff_is_frozen_not_recomputed(
+    client, admin_key
+) -> None:
+    """A subset run's window_cutoff is stored at creation time and does not
+    move on later reads - proves the fix for the article_count/resolved-set
+    drift that "now() - days_back" recomputed on every read would cause."""
+    before_create = datetime.now(timezone.utc)
+    covering_id = _insert_covering_run("ai_news", days_back=14)
+
+    resp = await client.post(
+        "/run",
+        json={"domain": "ai_news", "days_back": 7},
+        headers={"x-ocn-caller": admin_key},
+    )
+    assert resp.status_code == 200
+    subset_id = resp.json()["id"]
+    assert subset_id != covering_id
+    after_create = datetime.now(timezone.utc)
+
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT window_cutoff FROM runs WHERE id = ?", (subset_id,)
+        ).fetchone()
+    stored_cutoff = row["window_cutoff"]
+    assert stored_cutoff is not None
+
+    # window_cutoff should equal ~(creation time - 7 days), computed once
+    # at creation - not something that moves forward on later reads.
+    expected_lower = before_create - timedelta(days=7, seconds=5)
+    expected_upper = after_create - timedelta(days=7) + timedelta(seconds=5)
+    assert expected_lower <= stored_cutoff <= expected_upper
+
+    # Reading twice, with real (if small) wall-clock time elapsed between
+    # calls, must not change the stored cutoff or the resolved article set.
+    first_resp = await client.get(f"/runs/{subset_id}/articles")
+    second_resp = await client.get(f"/runs/{subset_id}/articles")
+    assert first_resp.json() == second_resp.json()
+
+    with get_db() as conn:
+        row_after_reads = conn.execute(
+            "SELECT window_cutoff FROM runs WHERE id = ?", (subset_id,)
+        ).fetchone()
+    assert row_after_reads["window_cutoff"] == stored_cutoff
+
+
+def test_filter_articles_for_window_explicit_cutoff_overrides_now() -> None:
+    """An explicit cutoff keeps a near-boundary article in, even though the
+    default now()-recomputed cutoff would have just excluded it - this is
+    what makes a subset run's resolved set immune to read-time drift."""
+    near_boundary_published = (
+        datetime.now(timezone.utc) - timedelta(days=6, hours=23)
+    ).isoformat()
+    articles = [{
+        "url": "http://example.com/near-boundary",
+        "published": near_boundary_published,
+    }]
+
+    frozen_cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+    result_with_frozen_cutoff = filter_articles_for_window(
+        articles, days_back=7, max_articles=None, cutoff=frozen_cutoff
+    )
+    assert len(result_with_frozen_cutoff) == 1
+
+    far_future_cutoff = datetime.now(timezone.utc) + timedelta(days=3)
+    result_with_advanced_cutoff = filter_articles_for_window(
+        articles, days_back=7, max_articles=None, cutoff=far_future_cutoff
+    )
+    assert result_with_advanced_cutoff == []
 
 
 async def test_subset_with_naive_iso_published_dates(

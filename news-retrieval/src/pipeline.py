@@ -21,7 +21,7 @@ import trafilatura
 from openai import OpenAI
 from pydantic import BaseModel
 
-from models.articles import get_existing_urls_for_domain
+from models.articles import get_already_stored_urls
 from models.sources import load_sources
 
 logger = logging.getLogger(__name__)
@@ -669,6 +669,304 @@ def _fetch_alpha_vantage(
     return articles
 
 
+_FEDERAL_REGISTER_URL = "https://www.federalregister.gov/api/v1/documents.json"
+_FEDERAL_REGISTER_PAGE_SIZE = 100
+
+
+def _fetch_one_federal_register(source: dict, days_back: int) -> list[dict]:
+    """Fetch Federal Register documents for a single source's agency/type filter.
+
+    No API key required. Paginates via ``next_page_url`` until exhausted.
+
+    Args:
+        source: Source dict; ``config.agencies`` and ``config.type`` scope
+            the query to specific agencies and document types.
+        days_back: Exclude documents published before this many days ago.
+
+    Returns:
+        List of article dicts with ``_pub_date`` set.
+    """
+    config = dict(source.get("config") or {})
+    agencies: list[str] = config.get("agencies", [])
+    doc_types: list[str] = config.get("type", [])
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
+
+    params: dict = {
+        "per_page": _FEDERAL_REGISTER_PAGE_SIZE,
+        "order": "newest",
+        "conditions[publication_date][gte]": cutoff.strftime("%Y-%m-%d"),
+    }
+    if agencies:
+        params["conditions[agencies][]"] = agencies
+    if doc_types:
+        params["conditions[type][]"] = doc_types
+
+    t0 = time.perf_counter()
+    results: list[dict] = []
+    url: str | None = _FEDERAL_REGISTER_URL
+    request_params: dict | None = params
+
+    while url:
+        try:
+            resp = httpx.get(url, params=request_params, timeout=30.0)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:
+            logger.warning("[FEDERAL_REGISTER] source=%r failed: %s", source["url"], exc)
+            break
+
+        for doc in data.get("results", []):
+            pub_date = None
+            try:
+                pub_date = datetime.strptime(
+                    doc.get("publication_date", ""), "%Y-%m-%d"
+                ).replace(tzinfo=timezone.utc)
+            except ValueError:
+                pass
+            if pub_date and pub_date < cutoff:
+                continue
+            agency_names = [a.get("name", "") for a in doc.get("agencies", [])]
+            results.append({
+                "title": doc.get("title", ""),
+                "url": doc.get("html_url", ""),
+                "published": doc.get("publication_date", ""),
+                "source": ", ".join(filter(None, agency_names)) or "Federal Register",
+                "summary": _clean_summary(doc.get("abstract") or ""),
+                "body": None,
+                "_pub_date": pub_date,
+                "metadata": {
+                    "type": doc.get("type"),
+                    "document_number": doc.get("document_number"),
+                    "agencies": agency_names,
+                    "executive_order_number": doc.get("executive_order_number"),
+                },
+            })
+
+        # next_page_url already carries the query string - drop params on
+        # subsequent requests to avoid duplicating conditions.
+        url = data.get("next_page_url")
+        request_params = None
+
+    logger.info(
+        "[TIMER] federal_register source=%r articles=%d elapsed=%.2fs",
+        source["url"], len(results), time.perf_counter() - t0,
+    )
+    return results
+
+
+def _fetch_federal_register(sources: list[dict], days_back: int) -> list[dict]:
+    """Fetch Federal Register documents for multiple sources in parallel.
+
+    Args:
+        sources: List of federal_register source dicts with ``config``
+            carrying ``agencies`` and ``type`` filters.
+        days_back: Exclude documents published before this many days ago.
+
+    Returns:
+        List of article dicts with ``_pub_date`` set.
+    """
+    articles: list[dict] = []
+    t0 = time.perf_counter()
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        for source_articles in executor.map(
+            partial(_fetch_one_federal_register, days_back=days_back),
+            sources,
+        ):
+            articles.extend(source_articles)
+    logger.info(
+        "[TIMER] federal_register total: sources=%d articles=%d elapsed=%.2fs",
+        len(sources), len(articles), time.perf_counter() - t0,
+    )
+    return articles
+
+
+_GDELT_DOC_URL = "https://api.gdeltproject.org/api/v2/doc/doc"
+_GDELT_MIN_INTERVAL = 10.0  # GDELT's documented floor is 5s; observed to tighten under load
+_GDELT_MAXRECORDS = 250
+_GDELT_MAX_ROUNDS = 3  # round-robin passes over rate-limited queries before giving up
+_GDELT_USER_AGENT = (
+    "Mozilla/5.0 (compatible; ocn-news-retrieval/1.0;"
+    " +https://opengrowthventures.com)"
+)
+
+
+_GDELT_RATE_LIMITED = object()  # sentinel: distinguishes 429 from "no results"
+
+
+def _fetch_one_gdelt(query: str, days_back: int):
+    """Fetch GDELT DOC 2.0 API results for a single theme query, one attempt.
+
+    English-only. DOC API returns headline + URL metadata only, no body
+    text — the Context 2.0 API returns snippet text but rejects bare
+    ``theme:`` filters ("keywords too common"), so DOC is used here for
+    theme-filter support; ``body`` is left None for a later fetch step.
+
+    Makes exactly one HTTP request — no internal retry. GDELT's rate limit
+    has been observed to persist well beyond its documented 5-second floor,
+    so retrying a single query immediately just stalls every other query
+    behind it; the caller (_fetch_gdelt) instead moves on to the next query
+    and retries rate-limited ones in a later round-robin pass, once more
+    real time has actually elapsed.
+
+    Args:
+        query: GDELT query string, e.g. "theme:ARMEDCONFLICT sourcelang:english".
+        days_back: Exclude articles older than this many days (clamped to
+            90 - DOC API only covers a rolling 3-month window).
+
+    Returns:
+        List of article dicts with ``_pub_date`` set, or the
+        ``_GDELT_RATE_LIMITED`` sentinel if GDELT returned 429.
+    """
+    timespan_days = min(days_back, 90)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
+    params = {
+        "query": query,
+        "mode": "artlist",
+        "maxrecords": _GDELT_MAXRECORDS,
+        "timespan": f"{timespan_days}d",
+        "sort": "datedesc",
+        "format": "json",
+    }
+
+    try:
+        resp = httpx.get(
+            _GDELT_DOC_URL,
+            params=params,
+            headers={"User-Agent": _GDELT_USER_AGENT},
+            timeout=30.0,
+        )
+        if resp.status_code == 429:
+            logger.warning("[GDELT] query=%r rate-limited", query)
+            return _GDELT_RATE_LIMITED
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        logger.warning("[GDELT] query=%r failed: %s", query, exc)
+        return []
+
+    results = []
+    for item in data.get("articles", []):
+        try:
+            pub_date = datetime.strptime(
+                item.get("seendate", ""), "%Y%m%dT%H%M%SZ"
+            ).replace(tzinfo=timezone.utc)
+        except ValueError:
+            pub_date = None
+        if pub_date and pub_date < cutoff:
+            continue
+        results.append({
+            "title": item.get("title", ""),
+            "url": item.get("url", ""),
+            "published": item.get("seendate", ""),
+            "source": item.get("domain", ""),
+            "summary": None,
+            "body": None,
+            "_pub_date": pub_date,
+            "metadata": {
+                "sourcecountry": item.get("sourcecountry"),
+                "language": item.get("language"),
+            },
+        })
+    logger.info(
+        "[GDELT] query=%r articles=%d", query, len(results),
+    )
+    return results
+
+
+def _fetch_gdelt(sources: list[dict], days_back: int) -> list[dict]:
+    """Fetch articles from GDELT for multiple theme queries, round-robin.
+
+    Runs every query once, in order, spaced by ``_GDELT_MIN_INTERVAL`` to
+    respect GDELT's rate limit. Queries that come back 429'd are not
+    retried immediately (that would stall every later query behind them) —
+    they're collected and retried in a second pass, up to
+    ``_GDELT_MAX_ROUNDS`` total passes, by which point real time has
+    actually elapsed and the rate limit is more likely to have cleared.
+    Queries still failing after the last pass are skipped for this run
+    (fail-open per query, not per run).
+
+    Once all queries are fetched and deduplicated, articles already stored
+    globally (any domain, any prior run) are dropped *before* the
+    body-fetch step — GDELT's theme queries return heavily overlapping
+    results day-to-day, so fetching bodies for already-seen URLs would be
+    wasted work. Remaining articles get their body fetched in parallel via
+    Trafilatura, since DOC API returns no body/summary text itself.
+
+    Args:
+        sources: List of gdelt source dicts; ``config.queries`` is a list
+            of GDELT query strings (one per theme/category).
+        days_back: Exclude articles older than this many days.
+
+    Returns:
+        List of article dicts with ``_pub_date`` set, deduplicated by URL.
+    """
+    pending: list[str] = []
+    for source in sources:
+        config = source.get("config") or {}
+        pending.extend(config.get("queries", []))
+    total_queries = len(pending)
+
+    t0 = time.perf_counter()
+    seen_urls: set[str] = set()
+    articles: list[dict] = []
+    last_call_time = 0.0
+
+    for round_num in range(1, _GDELT_MAX_ROUNDS + 1):
+        retry_queue: list[str] = []
+        for query in pending:
+            elapsed = time.monotonic() - last_call_time
+            if last_call_time and elapsed < _GDELT_MIN_INTERVAL:
+                time.sleep(_GDELT_MIN_INTERVAL - elapsed)
+            last_call_time = time.monotonic()
+
+            result = _fetch_one_gdelt(query, days_back)
+            if result is _GDELT_RATE_LIMITED:
+                retry_queue.append(query)
+                continue
+            for article in result:
+                if article["url"] and article["url"] not in seen_urls:
+                    seen_urls.add(article["url"])
+                    articles.append(article)
+
+        if not retry_queue:
+            break
+        logger.info(
+            "[GDELT] round %d/%d: %d quer(y/ies) rate-limited, retrying"
+            " in next round",
+            round_num, _GDELT_MAX_ROUNDS, len(retry_queue),
+        )
+        pending = retry_queue
+    else:
+        logger.warning(
+            "[GDELT] %d/%d quer(y/ies) still rate-limited after %d"
+            " round(s), skipping for this run",
+            len(pending), total_queries, _GDELT_MAX_ROUNDS,
+        )
+
+    already_stored = get_already_stored_urls([a["url"] for a in articles])
+    before = len(articles)
+    articles = [a for a in articles if a["url"] not in already_stored]
+    logger.info(
+        "[GDELT] dropped %d already-stored article(s) before body fetch",
+        before - len(articles),
+    )
+
+    def _fetch_body(url: str) -> str | None:
+        downloaded = trafilatura.fetch_url(url)
+        return trafilatura.extract(downloaded) if downloaded else None
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        bodies = list(executor.map(_fetch_body, [a["url"] for a in articles]))
+    for article, body in zip(articles, bodies):
+        article["body"] = body
+
+    logger.info(
+        "[TIMER] gdelt total: queries=%d articles=%d elapsed=%.2fs",
+        total_queries, len(articles), time.perf_counter() - t0,
+    )
+    return articles
+
+
 def _fetch_articles(
     sources: list[dict],
     days_back: int,
@@ -682,7 +980,8 @@ def _fetch_articles(
     """Fetch articles from all sources, routing by source_type.
 
     Args:
-        sources: List of source dicts (RSS, SerpAPI, NewsAPI, and/or Alpha Vantage).
+        sources: List of source dicts (RSS, SerpAPI, NewsAPI, Alpha Vantage,
+            Federal Register, and/or GDELT).
         days_back: Exclude articles older than this many days.
         max_articles: Cap on total articles; 0 means no limit.
         serpapi_key: SerpAPI API key; SerpAPI sources are skipped if None.
@@ -698,6 +997,8 @@ def _fetch_articles(
     serpapi_sources = [s for s in sources if s.get("source_type") == "google_news"]
     newsapi_sources = [s for s in sources if s.get("source_type") == "newsapi"]
     alpha_vantage_sources = [s for s in sources if s.get("source_type") == "alpha_vantage"]
+    federal_register_sources = [s for s in sources if s.get("source_type") == "federal_register"]
+    gdelt_sources = [s for s in sources if s.get("source_type") == "gdelt"]
 
     articles: list[dict] = []
     t0 = time.perf_counter()
@@ -731,6 +1032,12 @@ def _fetch_articles(
                 "ALPHA_VANTAGE_API_KEY not set - skipping %d alpha_vantage source(s)",
                 len(alpha_vantage_sources),
             )
+
+    if federal_register_sources:
+        articles.extend(_fetch_federal_register(federal_register_sources, days_back))
+
+    if gdelt_sources:
+        articles.extend(_fetch_gdelt(gdelt_sources, days_back))
 
     articles.sort(
         key=lambda a: (
@@ -912,7 +1219,11 @@ def run(
     """
     t0 = time.perf_counter()
     client = _make_client(openrouter_api_key)
-    serpapi_key = os.environ.get("SERPAPI_KEY")
+    serpapi_key = (
+        os.environ.get("SERPAPI_KEY_GEOPOLITICAL")
+        if domain_slug == "geopolitical_news"
+        else os.environ.get("SERPAPI_KEY")
+    )
     newsapi_key = os.environ.get("NEWSAPI_KEY")
     alpha_vantage_key = os.environ.get("ALPHA_VANTAGE_API_KEY")
     universe_url = os.environ.get("RESEARCH_UNIVERSE_URL")
@@ -923,22 +1234,25 @@ def run(
         return {"articles": []}
 
     articles = _fetch_articles(
-        sources, days_back, max_articles, serpapi_key, newsapi_key, alpha_vantage_key, universe_url, universe_api_key
+        sources, days_back, max_articles, serpapi_key, newsapi_key, alpha_vantage_key,
+        universe_url, universe_api_key,
     )
     if not articles:
         return {"articles": []}
 
-    # Cross-run dedup: drop articles already stored for this domain in any
-    # prior run, before they reach the LLM relevance filter.
-    seen_urls = get_existing_urls_for_domain(domain_slug)
+    # Global cross-domain, cross-run dedup: drop articles already stored
+    # under ANY domain's prior run, before they reach the LLM relevance
+    # filter. Bounded to this run's candidate URLs, not a full history pull.
+    seen_urls = get_already_stored_urls([a["url"] for a in articles])
     articles = [a for a in articles if a["url"] not in seen_urls]
     if not articles:
         return {"articles": []}
 
-    # Alpha Vantage articles are pre-filtered by ticker — already scoped to universe
-    # companies by definition, so LLM relevance filter adds no value and would drop
-    # legitimate company-specific news (earnings, filings, etc.).
-    if domain_slug == "company_news":
+    # Alpha Vantage articles are pre-filtered by ticker, and Federal Register
+    # articles are pre-filtered by agency + document type — both already scoped
+    # to their domain by definition, so LLM relevance filter adds no value and
+    # would drop legitimate results (earnings/filings, sanctions/EOs, etc.).
+    if domain_slug in ("company_news", "geopolitical_news"):
         relevant = articles
     else:
         relevant = _filter_articles(
