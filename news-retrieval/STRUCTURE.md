@@ -17,7 +17,8 @@
 | `src/db.py` | Thin adapter: `_new_connection()` (reads `POSTGRES_*` env vars), `init_db()`, and `db_utils.configure()`; re-exports `get_db`, `transaction`, and `DuplicateError` from `shared/src/db_utils.py` so all other imports are unaffected |
 | `src/auth.py` | FastAPI dependency functions: `require_auth` (validate Bearer token), `require_admin` (role gate) |
 | `src/seed.py` | Idempotent batch seed for `run_statuses`, `frequencies`, `domains`, `sources`, and admin API key |
-| `src/poller.py` | Background market data poller: fetches from Alpha Vantage (GLOBAL_QUOTE, OVERVIEW, EARNINGS, TIME_SERIES_DAILY_ADJUSTED, MARKET_STATUS) and writes to DynamoDB; two modes — `quotes` (every 15 min) and `daily` (once a day); distributed lock via `ocn-market-lock` prevents overlapping runs |
+| `src/poller.py` | Background market data poller: fetches from Alpha Vantage (GLOBAL_QUOTE, OVERVIEW, EARNINGS, TIME_SERIES_DAILY_ADJUSTED, MARKET_STATUS) and SEC EDGAR (8-K/10-Q/10-K metadata) and writes to DynamoDB; three modes — `quotes` (every 15 min), `daily` (once a day), `sec_filings` (once a day); distributed lock via `ocn-market-lock` prevents overlapping runs |
+| `src/sec_edgar.py` | SEC EDGAR fetch helpers: ticker→CIK mapping (`company_tickers.json`, cached) + per-CIK recent filings lookup (`submissions/CIK{cik}.json`), filtered to 8-K/10-Q/10-K; returns metadata + primary document link only |
 | `src/models/` | Pydantic request models + SQL query functions per entity |
 | `src/routes/` | FastAPI `APIRouter` definitions, one file per resource |
 | `src/routes/market.py` | Market data read endpoints: 6 `GET` routes reading from DynamoDB, served at `/market/*` |
@@ -173,6 +174,7 @@ All tables use TTL on the `ttl` attribute for automatic expiry. Created manually
 | `ocn-market-price-history` | `ticker` | `date` | 1 year | daily | Last 10 trading days adjusted close (for actual-vs-simulation chart) |
 | `ocn-market-earnings` | `ticker` | `recorded_at` | 30 days | daily | Next earnings date, estimated EPS, last quarter surprise % |
 | `ocn-market-lock` | `lock_key` | — | 20 min | both | Distributed lock — prevents overlapping poller runs; auto-expires if poller crashes |
+| `ocn-sec-filings` | `ticker` | `accession_number` | 180 days | sec_filings | 8-K/10-Q/10-K filing metadata + primary document link, deduped by accession_number |
 
 ### Market data env vars
 
@@ -187,6 +189,7 @@ All tables use TTL on the `ttl` attribute for automatic expiry. Created manually
 | `DYNAMODB_TABLE_OVERVIEW` | `ocn-market-overview` | DynamoDB table for fundamentals |
 | `DYNAMODB_TABLE_PRICE_HISTORY` | `ocn-market-price-history` | DynamoDB table for price history |
 | `DYNAMODB_TABLE_EARNINGS` | `ocn-market-earnings` | DynamoDB table for earnings |
+| `DYNAMODB_TABLE_SEC_FILINGS` | `ocn-sec-filings` | DynamoDB table for SEC EDGAR filing metadata |
 
 ### Market data HTTP endpoints (served via api-gateway at `/news/market/*`)
 
@@ -198,6 +201,7 @@ All tables use TTL on the `ttl` attribute for automatic expiry. Created manually
 | `GET /market/earnings/{ticker}` | `ocn-market-earnings` | next_report_date, estimated_eps, last_surprise_pct |
 | `GET /market/indices` | `ocn-market-indices` | SPY/QQQ/SOXX price and change_percent |
 | `GET /market/status` | `ocn-market-status` | current_status, local_open, local_close |
+| `GET /market/sec-filings/{ticker}` | `ocn-sec-filings` | form_type, filed_at, accession_number, primary_doc_url (all recent filings, newest first) |
 
 ### Database schema
 
