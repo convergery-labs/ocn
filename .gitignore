@@ -34,6 +34,8 @@ reports/
 signal-detection-agent/TECHNICAL.md
 signal-detection-agent/DECK.md
 news-retrieval/SUBSTACK_SOURCES.md
+SENTIMENT_PROVIDERS.md
+SENTIMENT_PROVIDERS_SUMMARY.md
 
 # Qdrant storage (if running locally outside Docker)
 qdrant_storage/
