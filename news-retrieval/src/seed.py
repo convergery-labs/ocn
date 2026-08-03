@@ -1248,14 +1248,14 @@ VC_COMMENTARY_SOURCES: list[dict[str, Any]] = [
         "domain_slug": "vc_commentary",
         "url": "https://medium.com/feed/mayfield-perspectives",
         "name": "Mayfield Viewpoints",
-        "frequency_name": "weekly",
+        "frequency_name": "daily",
         "description": "Navin Chaddha / Mayfield on AI-economy theses and founder leadership.",
     },
     {
         "domain_slug": "vc_commentary",
         "url": "https://techcrunch.com/author/navin-chaddha/feed/",
         "name": "Navin Chaddha (TechCrunch)",
-        "frequency_name": "weekly",
+        "frequency_name": "daily",
         "description": "Op-eds on AI, startups, and markets from Mayfield Managing Partner.",
     },
     {
