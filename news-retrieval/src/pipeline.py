@@ -1252,7 +1252,12 @@ def run(
     # articles are pre-filtered by agency + document type — both already scoped
     # to their domain by definition, so LLM relevance filter adds no value and
     # would drop legitimate results (earnings/filings, sanctions/EOs, etc.).
-    if domain_slug in ("company_news", "geopolitical_news"):
+    # vc_commentary and adverse_media sources are curated RSS feeds from VC
+    # blogs / investigative newsletters — every source is already scoped to
+    # the domain by editorial choice, so the LLM filter is skipped here too.
+    if domain_slug in (
+        "company_news", "geopolitical_news", "vc_commentary", "adverse_media",
+    ):
         relevant = articles
     else:
         relevant = _filter_articles(

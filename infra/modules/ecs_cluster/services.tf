@@ -271,6 +271,66 @@ resource "aws_cloudwatch_event_target" "news_retrieval_geopolitical_news_daily" 
   })
 }
 
+resource "aws_cloudwatch_event_rule" "news_retrieval_vc_commentary_daily" {
+  name                = "${var.env}-news-retrieval-vc-commentary-daily"
+  schedule_expression = "cron(0 3 * * ? *)"
+}
+
+resource "aws_cloudwatch_event_target" "news_retrieval_vc_commentary_daily" {
+  rule     = aws_cloudwatch_event_rule.news_retrieval_vc_commentary_daily.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+
+  ecs_target {
+    task_definition_arn = aws_ecs_task_definition.news_retrieval.arn
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets          = var.public_subnet_ids
+      security_groups  = [var.news_sg_id]
+      assign_public_ip = true
+    }
+  }
+
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "news-retrieval"
+        command = ["python", "__main__.py", "trigger", "--domain", "vc_commentary", "--days-back", "1"]
+      }
+    ]
+  })
+}
+
+resource "aws_cloudwatch_event_rule" "news_retrieval_adverse_media_daily" {
+  name                = "${var.env}-news-retrieval-adverse-media-daily"
+  schedule_expression = "cron(0 3 * * ? *)"
+}
+
+resource "aws_cloudwatch_event_target" "news_retrieval_adverse_media_daily" {
+  rule     = aws_cloudwatch_event_rule.news_retrieval_adverse_media_daily.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+
+  ecs_target {
+    task_definition_arn = aws_ecs_task_definition.news_retrieval.arn
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets          = var.public_subnet_ids
+      security_groups  = [var.news_sg_id]
+      assign_public_ip = true
+    }
+  }
+
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "news-retrieval"
+        command = ["python", "__main__.py", "trigger", "--domain", "adverse_media", "--days-back", "1"]
+      }
+    ]
+  })
+}
+
 resource "aws_ecs_task_definition" "signal_detection" {
   family                   = "${var.env}-signal-detection"
   network_mode             = "awsvpc"
