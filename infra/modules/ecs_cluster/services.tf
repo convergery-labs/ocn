@@ -130,7 +130,8 @@ resource "aws_ecs_task_definition" "news_retrieval" {
         { name = "DYNAMODB_TABLE_EARNINGS",       value = "ocn-market-earnings" },
         { name = "DYNAMODB_TABLE_INDICES",        value = "ocn-market-indices" },
         { name = "DYNAMODB_TABLE_MARKET_STATUS",  value = "ocn-market-status" },
-        { name = "DYNAMODB_TABLE_LOCK",           value = "ocn-market-lock" }
+        { name = "DYNAMODB_TABLE_LOCK",           value = "ocn-market-lock" },
+        { name = "DYNAMODB_TABLE_SEC_FILINGS",    value = "ocn-sec-filings" }
       ]
       secrets = [
         {

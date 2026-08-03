@@ -19,6 +19,7 @@ _TABLES = {
     "earnings": os.environ.get("DYNAMODB_TABLE_EARNINGS", "ocn-market-earnings"),
     "indices": os.environ.get("DYNAMODB_TABLE_INDICES", "ocn-market-indices"),
     "market_status": os.environ.get("DYNAMODB_TABLE_MARKET_STATUS", "ocn-market-status"),
+    "sec_filings": os.environ.get("DYNAMODB_TABLE_SEC_FILINGS", "ocn-sec-filings"),
 }
 
 
@@ -114,3 +115,16 @@ def get_market_status() -> dict:
     if not item:
         raise HTTPException(status_code=503, detail="No market status data available yet.")
     return item
+
+
+@router.get("/market/sec-filings/{ticker}")
+def get_sec_filings(ticker: str) -> dict:
+    """Recent 8-K/10-Q/10-K filings for a ticker, newest first (metadata + link only)."""
+    result = _table("sec_filings").query(
+        KeyConditionExpression=Key("ticker").eq(ticker.upper()),
+        ScanIndexForward=False,
+    )
+    items = result.get("Items", [])
+    if not items:
+        raise _not_found(ticker)
+    return {"ticker": ticker.upper(), "filings": [_deserialize(i) for i in items]}

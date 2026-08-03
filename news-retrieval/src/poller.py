@@ -7,6 +7,9 @@ from decimal import Decimal
 
 import boto3
 import httpx
+from boto3.dynamodb.conditions import Key
+
+from sec_edgar import fetch_recent_filings
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +44,7 @@ _TABLES = {
     "earnings": os.environ.get("DYNAMODB_TABLE_EARNINGS", "ocn-market-earnings"),
     "indices": os.environ.get("DYNAMODB_TABLE_INDICES", "ocn-market-indices"),
     "market_status": os.environ.get("DYNAMODB_TABLE_MARKET_STATUS", "ocn-market-status"),
+    "sec_filings": os.environ.get("DYNAMODB_TABLE_SEC_FILINGS", "ocn-sec-filings"),
 }
 
 
@@ -401,3 +405,63 @@ def run_quotes(tickers: list[str], av_key: str) -> None:
             )
     finally:
         _release_lock("quotes")
+
+
+# ---------------------------------------------------------------------------
+# SEC filings mode: 8-K/10-Q/10-K per ticker, link + metadata only
+# ---------------------------------------------------------------------------
+
+_SEC_FILING_TTL_DAYS = 180
+
+
+def _existing_accessions(ticker: str) -> set[str]:
+    """Return the set of accession_numbers already stored for this ticker."""
+    try:
+        result = _table("sec_filings").query(
+            KeyConditionExpression=Key("ticker").eq(ticker),
+            ProjectionExpression="accession_number",
+        )
+        return {item["accession_number"] for item in result.get("Items", [])}
+    except Exception as exc:
+        logger.warning("[SEC_EDGAR] failed to read existing accessions ticker=%s: %s", ticker, exc)
+        return set()
+
+
+def run_sec_filings(tickers: list[str]) -> None:
+    """Fetch new 8-K/10-Q/10-K filings per ticker and write metadata to DynamoDB."""
+    if not _acquire_lock("sec_filings"):
+        logger.info("[POLLER] sec_filings already running — skipping this trigger")
+        return
+
+    try:
+        logger.info("[POLLER] sec_filings mode tickers=%d", len(tickers))
+        last_call: list[float] = [0.0]
+        table = _table("sec_filings")
+        written = 0
+
+        for ticker in tickers:
+            try:
+                seen = _existing_accessions(ticker)
+                filings = fetch_recent_filings(ticker, last_call)
+                new_filings = [f for f in filings if f["accession_number"] not in seen]
+                for filing in new_filings:
+                    table.put_item(Item={
+                        "ticker": filing["ticker"],
+                        "accession_number": filing["accession_number"],
+                        "form_type": filing["form_type"],
+                        "filed_at": filing["filed_at"],
+                        "primary_doc_url": filing["primary_doc_url"],
+                        "recorded_at": _now_iso(),
+                        "ttl": _ttl(_SEC_FILING_TTL_DAYS),
+                    })
+                    written += 1
+                if new_filings:
+                    logger.info(
+                        "[DYNAMODB] sec_filings written ticker=%s new=%d", ticker, len(new_filings),
+                    )
+            except Exception as exc:
+                logger.error("[POLLER] sec_filings ticker=%s failed, skipping: %s", ticker, exc)
+
+        logger.info("[POLLER] sec_filings complete written=%d", written)
+    finally:
+        _release_lock("sec_filings")

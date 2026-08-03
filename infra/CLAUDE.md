@@ -78,6 +78,7 @@ infra/
 | `DYNAMODB_TABLE_INDICES` | hardcoded | `ocn-market-indices` |
 | `DYNAMODB_TABLE_MARKET_STATUS` | hardcoded | `ocn-market-status` |
 | `DYNAMODB_TABLE_LOCK` | hardcoded | `ocn-market-lock` — distributed poller lock |
+| `DYNAMODB_TABLE_SEC_FILINGS` | hardcoded | `ocn-sec-filings` — SEC EDGAR 8-K/10-Q/10-K filing metadata |
 
 ### signal-detection
 | Variable | Source | Notes |

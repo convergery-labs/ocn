@@ -145,6 +145,29 @@ resource "aws_dynamodb_table" "market_earnings" {
 }
 
 
+resource "aws_dynamodb_table" "sec_filings" {
+  name         = "ocn-sec-filings"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "ticker"
+  range_key    = "accession_number"
+
+  attribute {
+    name = "ticker"
+    type = "S"
+  }
+  attribute {
+    name = "accession_number"
+    type = "S"
+  }
+
+  ttl {
+    attribute_name = "ttl"
+    enabled        = true
+  }
+
+  tags = { env = var.env }
+}
+
 resource "aws_dynamodb_table" "market_lock" {
   name         = "ocn-market-lock"
   billing_mode = "PAY_PER_REQUEST"
@@ -192,6 +215,7 @@ resource "aws_iam_role_policy" "news_retrieval_dynamodb_market" {
           aws_dynamodb_table.market_price_history.arn,
           aws_dynamodb_table.market_earnings.arn,
           aws_dynamodb_table.market_lock.arn,
+          aws_dynamodb_table.sec_filings.arn,
         ]
       }
     ]
@@ -263,6 +287,39 @@ resource "aws_cloudwatch_event_target" "market_poll_daily" {
       {
         name    = "news-retrieval"
         command = ["python", "__main__.py", "poll-market", "--mode", "daily"]
+      }
+    ]
+  })
+}
+
+
+# SEC filings mode: once at 01:00 UTC (8-K/10-Q/10-K metadata + link)
+resource "aws_cloudwatch_event_rule" "market_poll_sec_filings" {
+  name                = "${var.env}-market-poll-sec-filings"
+  description         = "Poll SEC EDGAR for new 8-K/10-Q/10-K filings once daily → DynamoDB"
+  schedule_expression = "cron(0 1 * * ? *)"
+}
+
+resource "aws_cloudwatch_event_target" "market_poll_sec_filings" {
+  rule     = aws_cloudwatch_event_rule.market_poll_sec_filings.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+
+  ecs_target {
+    task_definition_arn = replace(aws_ecs_task_definition.news_retrieval.arn, "/:\\d+$/", "")
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets          = var.public_subnet_ids
+      security_groups  = [var.news_sg_id]
+      assign_public_ip = true
+    }
+  }
+
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "news-retrieval"
+        command = ["python", "__main__.py", "poll-market", "--mode", "sec_filings"]
       }
     ]
   })

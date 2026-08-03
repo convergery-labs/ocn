@@ -87,6 +87,7 @@ AV (Alpha Vantage) data is never fetched on the request path. A background polle
 |------|----------|----------------|
 | `quotes` | Hourly, 14:00-20:00 UTC, Mon-Fri (CloudWatch) | `GLOBAL_QUOTE` per ticker, SPY/QQQ/SOXX indices, `MARKET_STATUS` |
 | `daily` | 00:30 UTC daily (CloudWatch) | `OVERVIEW`, `EARNINGS`, `TIME_SERIES_DAILY_ADJUSTED` per ticker |
+| `sec_filings` | 01:00 UTC daily (CloudWatch) | SEC EDGAR 8-K/10-Q/10-K metadata + filing link per ticker (see SEC Filings below) |
 
 Run manually: `python __main__.py poll-market --mode quotes`
 
@@ -101,6 +102,7 @@ Run manually: `python __main__.py poll-market --mode quotes`
 | `ocn-market-price-history` | `ticker` | `date` | 1 year | daily |
 | `ocn-market-earnings` | `ticker` | `recorded_at` | 30 days | daily |
 | `ocn-market-lock` | `lock_key` | — | 20 min | both |
+| `ocn-sec-filings` | `ticker` | `accession_number` | 180 days | sec_filings |
 
 ### Market data HTTP endpoints (proxied via api-gateway at `/news/market/*`)
 
@@ -112,6 +114,11 @@ Run manually: `python __main__.py poll-market --mode quotes`
 | `GET /market/earnings/{ticker}` | next_report_date, estimated_eps, last_surprise_pct | no data |
 | `GET /market/indices` | SPY, QQQ, SOXX price + change_percent | no data |
 | `GET /market/status` | current_status, local_open, local_close | no data |
+| `GET /market/sec-filings/{ticker}` | recent 8-K/10-Q/10-K filings: form_type, filed_at, accession_number, primary_doc_url | no data |
+
+### SEC Filings
+
+Fetched from SEC EDGAR (`data.sec.gov`), not Alpha Vantage. Ticker→CIK mapping via `https://www.sec.gov/files/company_tickers.json` (cached process-lifetime), filings list via `https://data.sec.gov/submissions/CIK{cik}.json`. Only 8-K, 10-Q, and 10-K form types are kept. Deduplicated per ticker by `accession_number` — each filing is a permanent, unique key from EDGAR, so re-running the poller never creates duplicates and skips filings already stored. Stores metadata + a link to the primary document only, not the filing body — there is no downstream consumer that classifies filing text (see `src/sec_edgar.py`).
 
 ### Ticker universe
 
