@@ -110,12 +110,13 @@ GOOGLE_NEWS_SOURCE: dict[str, Any] = {
     "config": {
         "queries": [
             "artificial intelligence",
-            "generative AI LLM",
-            "machine learning deep learning",
             "AI chips GPU semiconductors",
             "AI regulation policy",
-            "foundation models AI startups",
             "AI data training datasets",
+            "AI stocks rally",
+            "semiconductor stocks tariffs",
+            "AI stocks market correction",
+            "AI stocks regulation policy",
         ],
     },
 }
@@ -1121,6 +1122,41 @@ SUBSTACK_SOURCES: list[dict[str, Any]] = [
         "name": "Prompt Engineering Daily",
         "frequency_name": "weekly",
         "description": "Prompt engineering techniques and research.",
+    },
+    {
+        "domain_slug": "ai_news",
+        "url": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664",
+        "name": "CNBC Finance",
+        "frequency_name": "daily",
+        "description": "CNBC finance and markets coverage, including AI-stock moves and market corrections.",
+    },
+    {
+        "domain_slug": "ai_news",
+        "url": "https://www.ft.com/markets?format=rss",
+        "name": "FT Markets",
+        "frequency_name": "daily",
+        "description": "Financial Times markets coverage, including AI-stock moves and market corrections.",
+    },
+    {
+        "domain_slug": "ai_news",
+        "url": "https://feeds.npr.org/1006/rss.xml",
+        "name": "NPR Business",
+        "frequency_name": "daily",
+        "description": "NPR business coverage, including AI-stock moves and market corrections.",
+    },
+    {
+        "domain_slug": "ai_news",
+        "url": "https://www.economist.com/finance-and-economics/rss.xml",
+        "name": "The Economist Finance",
+        "frequency_name": "daily",
+        "description": "The Economist finance and economics coverage, including AI-market analysis.",
+    },
+    {
+        "domain_slug": "ai_news",
+        "url": "https://feeds.bloomberg.com/markets/news.rss",
+        "name": "Bloomberg Markets",
+        "frequency_name": "daily",
+        "description": "Bloomberg markets coverage, including AI-stock moves and market corrections.",
     },
 ]
 
