@@ -58,6 +58,10 @@ resource "aws_ecs_task_definition" "auth_service" {
       }
     }
   ])
+
+  lifecycle {
+    ignore_changes = [container_definitions]
+  }
 }
 
 
@@ -169,6 +173,10 @@ resource "aws_ecs_task_definition" "news_retrieval" {
       }
     }
   ])
+
+  lifecycle {
+    ignore_changes = [container_definitions]
+  }
 }
 
 
@@ -391,6 +399,10 @@ resource "aws_ecs_task_definition" "signal_detection" {
       }
     }
   ])
+
+  lifecycle {
+    ignore_changes = [container_definitions]
+  }
 }
 
 
@@ -480,6 +492,10 @@ resource "aws_ecs_task_definition" "signal_detection_agent" {
       }
     }
   ])
+
+  lifecycle {
+    ignore_changes = [container_definitions]
+  }
 }
 
 
@@ -599,6 +615,10 @@ resource "aws_ecs_task_definition" "api_gateway" {
       }
     }
   ])
+
+  lifecycle {
+    ignore_changes = [container_definitions]
+  }
 }
 
 
@@ -928,6 +948,10 @@ resource "aws_ecs_task_definition" "research_universe" {
       }
     }
   ])
+
+  lifecycle {
+    ignore_changes = [container_definitions]
+  }
 }
 
 
