@@ -58,16 +58,29 @@ async def _fetch_all_filings(tickers: list[str]) -> list[dict[str, Any]]:
 
 
 def _fetch_filing_text_and_extract(filing: dict[str, Any], last_call: list[float]) -> tuple[str, bool]:
-    """Fetch one filing's text and, for 10-K, extract the results section.
-    8-K/10-Q are small enough to pass in full (confirmed this session:
-    ~4K chars for 8-K, ~100K chars for 10-Q) - only 10-K (~500K chars) needs
-    extraction before it can be sent to the classifier.
+    """Fetch one filing's text and, for 10-K/10-Q, extract the relevant sections.
+    8-K is small enough to pass in full (confirmed this session: ~4K chars).
+
+    10-K/10-Q use extract_filing_sections (results-of-operations + qualitative
+    notes on income taxes/contingencies/debt), not the full ~100K-500K char
+    document. History here: first tried extract_results_section alone (just
+    the numbers window) for 10-Q - real ~85% cost cut, $0.13 -> $0.02/call -
+    but reverted after confirming on a real AAPL 10-Q that window dropped a
+    genuinely material EU State Aid legal matter living in a different note,
+    and the model's own signal_reason flipped from "not a routine in-line
+    quarter" to "routine periodic filing" on the identical filing once that
+    context was cut. extract_filing_sections adds the qualitative notes back
+    (found via "Note N - Title" headers, which generalize across filers even
+    though note numbering doesn't) - confirmed to restore the State Aid
+    content while still cutting the same AAPL 10-Q by 82.5% (170K -> 30K
+    chars), since the numeric tables that pad out the rest of the document
+    are no longer needed in prose - see xbrl_facts below for why.
     """
     text = sec_edgar.fetch_filing_text(filing["primary_doc_url"], last_call)
     if not text:
         return "", False
-    if filing["form_type"] == "10-K":
-        return sec_edgar.extract_results_section(text)
+    if filing["form_type"] in ("10-K", "10-Q"):
+        return sec_edgar.extract_filing_sections(text)
     return text, True
 
 
@@ -103,18 +116,50 @@ async def run_filing_classification_job(job_id: int, tickers: list[str] | None =
     system_prompt = load_sec_filing_prompt()
     models = [config.OPENAI_MODEL]
     semaphore = asyncio.Semaphore(config.FILING_CLASSIFY_CONCURRENCY)
-    fetch_last_call = [0.0]
+    # One shared clock for ALL sec.gov/data.sec.gov calls (filing text AND
+    # XBRL) - two separate clocks would each individually respect
+    # _MIN_INTERVAL but let the combined rate across concurrent filings
+    # exceed SEC's ~10 req/sec guidance, since nothing would coordinate
+    # between them. Same fix as _fetch_all_filings's shared last_call this
+    # session, just applied here too.
+    edgar_last_call = [0.0]
+    company_facts_cache: dict[str, dict] = {}
+    company_facts_locks: dict[str, asyncio.Lock] = {}
+
+    async def _get_company_facts(cik: str) -> dict:
+        """Fetch+cache one ticker's XBRL companyfacts document per job run -
+        same "fetch once per ticker, reuse across its filings" pattern as
+        company_overview, since one CIK's companyfacts covers every filing.
+        Locked per-CIK so two filings for the same ticker classified
+        concurrently can't both miss the cache and fire duplicate ~4-5MB
+        fetches - confirmed this is a real race, not hypothetical, given
+        FILING_CLASSIFY_CONCURRENCY allows several filings in flight at once.
+        """
+        lock = company_facts_locks.setdefault(cik, asyncio.Lock())
+        async with lock:
+            if cik not in company_facts_cache:
+                company_facts_cache[cik] = await loop.run_in_executor(
+                    _executor, sec_edgar.fetch_company_facts, cik, edgar_last_call,
+                )
+            return company_facts_cache[cik]
 
     async def classify_one(filing: dict[str, Any]) -> bool:
         """Classify a single filing; returns True if skipped (failed)."""
         async with semaphore:
             try:
                 filing_text, extraction_found = await loop.run_in_executor(
-                    _executor, _fetch_filing_text_and_extract, filing, fetch_last_call,
+                    _executor, _fetch_filing_text_and_extract, filing, edgar_last_call,
                 )
+                xbrl_facts = None
+                if filing["form_type"] in ("10-K", "10-Q") and filing.get("cik"):
+                    company_facts = await _get_company_facts(filing["cik"])
+                    xbrl_facts = sec_edgar.extract_xbrl_facts_for_filing(
+                        company_facts, filing["accession_number"],
+                        filing.get("period_of_report", ""), filing["form_type"],
+                    )
                 result = await loop.run_in_executor(
                     _executor,
-                    lambda f=filing, t=filing_text, found=extraction_found: classify_filing(
+                    lambda f=filing, t=filing_text, found=extraction_found, xf=xbrl_facts: classify_filing(
                         f, t,
                         system_prompt=system_prompt,
                         models=models,
@@ -124,6 +169,7 @@ async def run_filing_classification_job(job_id: int, tickers: list[str] | None =
                         max_attempts=config.OPENAI_MAX_ATTEMPTS,
                         extraction_found=found,
                         cache_system_prompt=True,
+                        xbrl_facts=xf,
                     ),
                 )
                 insert_filing_classification(job_id, filing, result)

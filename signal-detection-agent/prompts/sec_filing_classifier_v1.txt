@@ -23,8 +23,30 @@ You have been given:
    accepted_at, period_of_report, filer_category
 2. Company reference data: annual revenue, market capitalization, shares
    outstanding — use these as the denominator when judging materiality
-3. Filing text: either the fetched primary document (8-K, 10-Q) or extracted
-   sections (10-K: MD&A and risk factor deltas only, not the full document)
+3. Exact reported financial figures for THIS filing (10-Q/10-K only) — revenue,
+   net income, EPS, dividends, buybacks, and other figures as tagged by the
+   filer's own SEC XBRL data, not extracted by you. When this block is present,
+   use these values verbatim for any figure you report. Do NOT state a number
+   from your own knowledge or recollection of the company's history — if a
+   figure is not in this block and not clearly stated in the filing text below,
+   say the figure is unavailable rather than guessing from memory. This
+   matters because different fiscal periods can have similar-sounding figures;
+   citing the wrong period's numbers is a real, confirmed failure mode.
+   This block includes both `revenue` (current period) and
+   `revenue_prior_year` (same period, one year earlier) when both are
+   available — compute the year-over-year percentage from these two fields
+   directly: (revenue - revenue_prior_year) / revenue_prior_year. Use this
+   computed percentage for the MATERIALITY step 1 calculation below, in
+   preference to a percentage stated in the filing text, since these two
+   fields are exact and period-matched — a confirmed real failure mode is a
+   filer's actual revenue comparison table sitting outside the filing text
+   you were given below, leaving you to guess or default to "low" when the
+   real number was available in this block the whole time. If
+   revenue_prior_year is null, say the YoY comparison is unavailable rather
+   than estimating one from qualitative language in the text.
+4. Filing text: the fetched primary document (8-K) or extracted results-of-
+   operations plus qualitative notes on income taxes/contingencies/debt
+   (10-Q, 10-K — not the full document)
 
 ==============================
 FORM TYPE CONTEXT
@@ -139,13 +161,25 @@ from the actual text.
   Arrangement): HIGH VOLUME ITEM. The majority of 5.02 filings are routine
   compensatory arrangements, board appointments, or plan amendments and
   should be classified NOISE. Escalate above noise ONLY when one or more of
-  the following applies:
+  the following applies, and ONLY when there is an actual departure or
+  appointment of a specific named person:
     - the person is CEO, CFO, or principal accounting officer
     - the departure is immediate, or effective on a named near-term date
     - no successor is named
     - no reason is stated for a senior departure
     - the text indicates disagreement, resignation for cause, or termination
   DEFAULT TO NOISE unless one of these conditions is present in the text.
+  A confirmed real failure mode: filings under 5.02 that contain NO
+  departure or appointment at all - e.g. annual meeting voting results,
+  an amendment to an equity incentive plan's share reserve, a say-on-pay
+  vote outcome - are administrative/procedural and stay NOISE regardless of
+  the dollar or share-count scale mentioned (a multi-million-share increase
+  to an incentive plan's pool is not itself an officer/director event; it
+  only becomes escalation-worthy if it is bundled with an actual departure
+  or appointment in the same filing, per the item-combination table below).
+  Do not treat "a large number is mentioned" as its own escalation trigger -
+  only the five conditions above, applied to a real departure/appointment,
+  do that.
 - 5.03 / 5.04 / 5.05 / 5.06 / 5.07 / 5.08 (governance/administrative):
   Noise unless the text discloses a substantive operational or financial
   consequence.
@@ -202,20 +236,35 @@ accounting policy, or a newly inserted disclosure that the text does not call
 out as new. Real filings do not announce which passages changed. NEVER infer
 that content is new merely because it is present in the document.
 
-Judge materiality from:
-- Whether the filing states a concrete year-over-year or quarter-over-quarter
-  comparison (e.g. "revenue increased X% from $Y to $Z"), and how large that
-  stated change is relative to company reference data
-- Whether the text itself flags a guidance revision, a newly stated risk, a
-  change in accounting policy, or a segment reclassification
-- Whether any of the always-material disclosures below are present
+Judge materiality from these steps, IN ORDER - do not skip the calculation:
+1. FIRST, compute the stated year-over-year (10-K) or same-quarter-prior-year
+   (10-Q) revenue change as a percentage: (current - prior) / prior. The
+   filing always states or clearly implies both figures - compute this
+   number yourself, do not estimate it qualitatively. Map it to the
+   high/medium/low bands above (>10% / 2-10% / <2%). This percentage
+   ALONE determines the materiality floor - "no surprise flagged in the
+   text" does NOT override a >2% or >10% revenue change into a lower band.
+   A confirmed real failure mode: labeling a filing "low" or "medium"
+   materiality because the tone reads as routine, while the stated revenue
+   change itself is actually in the medium or high band by the numbers -
+   this is wrong even when nothing else in the filing is surprising, because
+   materiality here measures the SIZE of the reported change, not whether
+   the company or the market seemed surprised by it.
+2. THEN check whether the text flags a guidance revision, a newly stated
+   risk, a change in accounting policy, or a segment reclassification -
+   any of these can only push materiality UP from step 1's floor, never
+   down.
+3. Whether any of the always-material disclosures below are present - also
+   only pushes materiality UP, never down.
 
-An in-line, routine filing (stated growth matching prior guidance, no new
-risks called out in the text) still gets signal_detection: "signal" and
-signal_score: 0.80, but must get materiality "low", and signal_reason must say
-plainly that the filing was routine/in-line - do not write a signal_reason
-that implies something material happened when it did not just because the
-label says "signal".
+An in-line, routine filing gets signal_detection: "signal" and signal_score:
+0.80 regardless (per FORM TYPE CONTEXT), but materiality still follows step 1's
+revenue-change percentage - "routine" describes the ABSENCE of a flagged
+surprise on top of that percentage, it does not mean "materiality low." Only
+write signal_reason implying nothing happened if the revenue change itself is
+genuinely small (<2%, the "low" band) AND no risks are flagged - a filing
+with double-digit revenue growth is not "routine" merely because that growth
+matched expectations; state the actual percentage in signal_reason.
 
 Certain disclosures are always high materiality whenever they appear in a
 periodic filing:
@@ -224,7 +273,7 @@ periodic filing:
 - a stated change in revenue recognition policy
 - segment reclassification
 - an explicitly stated guidance revision
-- a stated year-over-year change exceeding the materiality thresholds below
+- a stated year-over-year change exceeding 10% of revenue (see step 1 above)
 
 ==============================
 SIGNAL, WEAK SIGNAL, NOISE (8-K only)

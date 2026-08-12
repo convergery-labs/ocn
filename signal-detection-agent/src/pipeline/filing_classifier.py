@@ -150,6 +150,7 @@ def build_filing_user_prompt(
     filing_text: str,
     *,
     company_overview: dict[str, Any] | None = None,
+    xbrl_facts: dict[str, Any] | None = None,
 ) -> str:
     metadata = {
         'ticker': filing.get('ticker', ''),
@@ -173,6 +174,14 @@ def build_filing_user_prompt(
     prompt = 'Classify this SEC filing.\n\nFiling metadata:\n' + json.dumps(metadata, ensure_ascii=False, indent=2)
     prompt += '\n\nCompany reference data (use as denominator for materiality; null means unavailable - judge qualitatively and say so):\n'
     prompt += json.dumps(company_reference_data, ensure_ascii=False, indent=2)
+    if xbrl_facts:
+        prompt += (
+            '\n\nExact reported financial figures for THIS filing (from SEC\'s own '
+            'structured XBRL data, not extracted from the text below - use these '
+            'values verbatim for any number you report; null means this filing did '
+            'not tag that concept, not zero):\n'
+        )
+        prompt += json.dumps(xbrl_facts, ensure_ascii=False, indent=2)
     prompt += '\n\nFiling text:\n' + (filing_text or '(no text available)')
     prompt += '\n\nReturn strict JSON only.'
     return prompt
@@ -191,6 +200,7 @@ def classify_filing(
     extraction_found: bool = True,
     cache_system_prompt: bool = True,
     company_overview: dict[str, Any] | None = None,
+    xbrl_facts: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """extraction_found=False (10-K/10-Q only, set by the caller from
     extract_results_section()'s second return value) skips the LLM call
@@ -208,6 +218,15 @@ def classify_filing(
     batch - these figures don't change filing-to-filing, no need to re-fetch
     per filing. None is a valid value (overview unavailable); the prompt is
     designed to judge qualitatively and say so, not fail, when this is absent.
+
+    xbrl_facts (10-K/10-Q only) is adapters.sec_edgar.extract_xbrl_facts_for_filing()'s
+    output - exact reported figures (revenue, EPS, dividends, ...) for this
+    specific filing, from SEC's own structured data. Confirmed empirically
+    this session: without this, the model can hallucinate plausible-looking
+    but wrong figures from its training data (e.g. quoting a later fiscal
+    year's dividend/buyback numbers for an earlier filing) rather than
+    grounding strictly in the provided text. Passing exact figures explicitly
+    removes the need for the model to recall or re-derive them from memory.
 
     cache_system_prompt=True (default) marks the system prompt with an
     ephemeral cache breakpoint - unlike the news classifier, this prompt has
@@ -232,6 +251,7 @@ def classify_filing(
     user_prompt = build_filing_user_prompt(
         filing, filing_text,
         company_overview=company_overview,
+        xbrl_facts=xbrl_facts,
     )
     errors: list[str] = []
     for model in models:
