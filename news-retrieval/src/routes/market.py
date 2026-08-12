@@ -119,7 +119,11 @@ def get_market_status() -> dict:
 
 @router.get("/market/sec-filings/{ticker}")
 def get_sec_filings(ticker: str) -> dict:
-    """Recent 8-K/10-Q/10-K filings for a ticker, newest first (metadata + link only)."""
+    """Recent 8-K/10-Q/10-K filings for a ticker, newest first: form_type, filed_at,
+    accession_number, primary_doc_url, cik, accepted_at, period_of_report,
+    item_codes, filer_category. Metadata + link only - filing body text is
+    fetched live by consumers (e.g. signal-detection-agent), never stored here.
+    """
     result = _table("sec_filings").query(
         KeyConditionExpression=Key("ticker").eq(ticker.upper()),
         ScanIndexForward=False,
@@ -128,3 +132,15 @@ def get_sec_filings(ticker: str) -> dict:
     if not items:
         raise _not_found(ticker)
     return {"ticker": ticker.upper(), "filings": [_deserialize(i) for i in items]}
+
+
+@router.get("/market/tracked-tickers")
+def get_tracked_tickers() -> dict:
+    """The tracked ticker universe (_AV_BASE_TICKERS) - single source of truth
+    for which companies this system polls market/filing data for. Other
+    services (e.g. signal-detection-agent's SEC filing classification job)
+    read this instead of duplicating the list, so it never drifts out of sync.
+    """
+    from pipeline import _AV_BASE_TICKERS
+
+    return {"tickers": list(_AV_BASE_TICKERS)}

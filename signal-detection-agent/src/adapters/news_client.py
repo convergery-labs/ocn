@@ -94,6 +94,69 @@ async def poll_run_until_done(run_id: int) -> None:
             elapsed += _POLL_INTERVAL_SECS
 
 
+async def get_company_overview(ticker: str) -> dict[str, Any] | None:
+    """GET /market/overview/{ticker} from news-retrieval - fundamentals strip
+    (market_cap, revenue_ttm, shares_outstanding, sector, etc). No auth header
+    required, /market/* routes are unauthenticated.
+
+    Returns None on 503 (poller hasn't run for this ticker yet) or any other
+    failure - callers should treat missing overview data as "unavailable",
+    not as an error to abort classification over.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"{config.NEWS_RETRIEVAL_URL}/market/overview/{ticker}")
+        if resp.status_code == 503:
+            return None
+        resp.raise_for_status()
+        return resp.json()
+    except httpx.HTTPError as exc:
+        logger.warning("Failed to fetch overview for %s: %s", ticker, exc)
+        return None
+
+
+async def get_sec_filings(ticker: str) -> list[dict[str, Any]]:
+    """GET /market/sec-filings/{ticker} from news-retrieval - filing metadata
+    (form_type, filed_at, accession_number, primary_doc_url) fetched from EDGAR
+    and stored by news-retrieval's own daily poller. signal-detection-agent
+    does not call EDGAR's submissions API itself; this is the only source of
+    filing metadata for the classification job.
+
+    Returns [] on 503 (no filings stored yet for this ticker) or any failure -
+    callers should treat a missing/failed ticker as "nothing new", not abort
+    the whole run over one ticker.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"{config.NEWS_RETRIEVAL_URL}/market/sec-filings/{ticker}")
+        if resp.status_code == 503:
+            return []
+        resp.raise_for_status()
+        return resp.json().get("filings", [])
+    except httpx.HTTPError as exc:
+        logger.warning("Failed to fetch SEC filings for %s: %s", ticker, exc)
+        return []
+
+
+async def get_tracked_tickers() -> list[str]:
+    """GET /market/tracked-tickers from news-retrieval - the single source of
+    truth ticker universe (_AV_BASE_TICKERS). Read live rather than
+    duplicating the list here, so it never drifts out of sync when
+    news-retrieval's list is updated.
+
+    Raises NewsRetrievalError on failure - unlike get_company_overview, there
+    is no sensible per-ticker fallback if this fails entirely; the caller has
+    nothing to classify without it.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"{config.NEWS_RETRIEVAL_URL}/market/tracked-tickers")
+        resp.raise_for_status()
+        return resp.json().get("tickers", [])
+    except httpx.HTTPError as exc:
+        raise NewsRetrievalError(f"Failed to fetch tracked tickers: {exc}") from exc
+
+
 async def get_run_articles(run_id: int) -> list[dict[str, Any]]:
     """Paginate GET /runs/{run_id}/articles; return all articles with body."""
     articles: list[dict[str, Any]] = []

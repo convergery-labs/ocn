@@ -199,6 +199,8 @@ def _poll_overview(ticker: str, av_key: str, last_call: list[float]) -> None:
         "analyst_target": _to_decimal(data.get("AnalystTargetPrice", "0")),
         "beta": _to_decimal(data.get("Beta", "0")),
         "sector": data.get("Sector", ""),
+        "revenue_ttm": _to_decimal(data.get("RevenueTTM", "0")),
+        "shares_outstanding": _to_decimal(data.get("SharesOutstanding", "0")),
         "ttl": _ttl(30),
     })
     logger.info("[DYNAMODB] overview written ticker=%s", ticker)
@@ -451,6 +453,11 @@ def run_sec_filings(tickers: list[str]) -> None:
                         "form_type": filing["form_type"],
                         "filed_at": filing["filed_at"],
                         "primary_doc_url": filing["primary_doc_url"],
+                        "cik": filing.get("cik", ""),
+                        "accepted_at": filing.get("accepted_at", ""),
+                        "period_of_report": filing.get("period_of_report", ""),
+                        "item_codes": filing.get("item_codes", []),
+                        "filer_category": filing.get("filer_category", ""),
                         "recorded_at": _now_iso(),
                         "ttl": _ttl(_SEC_FILING_TTL_DAYS),
                     })

@@ -511,6 +511,45 @@ resource "aws_service_discovery_service" "signal_detection_agent" {
 }
 
 
+# Daily SEC filing classification job. signal-detection-agent reads filing
+# metadata (form_type, accession_number, primary_doc_url, item_codes, ...)
+# and the tracked ticker list from news-retrieval's /market/* endpoints -
+# it never calls SEC EDGAR's submissions API itself, only fetches each
+# filing's body text directly (adapters/sec_edgar.py, text-fetch only).
+# Scheduled for 13:00 UTC, one hour after news-retrieval's own sec_filings
+# poller (12:00 UTC, see news-retrieval's CloudWatch rule) so this job always
+# reads that day's freshly-fetched filings, not yesterday's - and both finish
+# well before signal-herald's unrelated 14:00 UTC digest run.
+resource "aws_cloudwatch_event_rule" "signal_detection_agent_filings_daily" {
+  name                = "${var.env}-signal-detection-agent-filings-daily"
+  description         = "Classify new SEC 8-K/10-Q/10-K filings (fetched by news-retrieval's poller) for the tracked ticker universe once daily"
+  schedule_expression = "cron(0 13 * * ? *)"
+}
+
+
+resource "aws_cloudwatch_event_target" "signal_detection_agent_filings_daily" {
+  rule     = aws_cloudwatch_event_rule.signal_detection_agent_filings_daily.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+  ecs_target {
+    task_definition_arn = aws_ecs_task_definition.signal_detection_agent.arn
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets         = var.private_subnet_ids
+      security_groups = [var.signal_detection_agent_sg_id]
+    }
+  }
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "signal-detection-agent"
+        command = ["python", "__main__.py", "classify-filings"]
+      }
+    ]
+  })
+}
+
+
 resource "aws_ecs_service" "signal_detection_agent" {
   name            = "${var.env}-signal-detection-agent"
   cluster         = aws_ecs_cluster.main.id
@@ -566,6 +605,7 @@ resource "aws_iam_role_policy" "ecs_events_run_task" {
           "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/staging-signal-herald:*",
           "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/staging-research-universe:*",
           "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/staging-news-retrieval:*",
+          "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/staging-signal-detection-agent:*",
         ]
       },
       {

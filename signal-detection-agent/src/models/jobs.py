@@ -108,6 +108,63 @@ def insert_classification(job_id: int, article: dict[str, Any], result: dict[str
         )
 
 
+def insert_filing_classification(job_id: int, filing: dict[str, Any], result: dict[str, Any]) -> None:
+    """Upsert one agent_classifications row for an SEC filing (source_type='sec_filing').
+
+    category is left NULL - not computed at this stage for filings.
+    materiality matches the base-pass news schema (high/medium/low/none).
+    """
+    entity_names_normalized = [
+        e["name"].lower() for e in (result.get("entities") or []) if e.get("name")
+    ]
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO agent_classifications (
+                job_id, source_type, source_id, url, title,
+                signal_detection, signal_score, signal_reason, materiality,
+                entities_json, entity_names_normalized,
+                form_type, item_codes, filing_filed_at
+            ) VALUES (%s, 'sec_filing', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT DO NOTHING
+            """,
+            (
+                job_id,
+                filing.get("accession_number"),
+                result.get("primary_doc_url", ""),
+                f"{filing.get('ticker', '')} {filing.get('form_type', '')} filing",
+                result["signal_detection"],
+                float(result["signal_score"]),
+                result.get("signal_reason"),
+                result.get("materiality"),
+                json.dumps(result.get("entities") or [], ensure_ascii=False),
+                entity_names_normalized,
+                result.get("form_type"),
+                result.get("item_codes") or [],
+                result.get("filed_at") or None,
+            ),
+        )
+
+
+def get_existing_filing_source_ids(source_ids: list[str]) -> set[str]:
+    """Return the subset of source_ids (accession_numbers) already classified
+    as source_type='sec_filing'. One batched query, not one per filing - used
+    to diff a day's fetched filings against what's already in the table before
+    calling the classifier, so unchanged filings are never reclassified.
+    """
+    if not source_ids:
+        return set()
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT source_id FROM agent_classifications
+            WHERE source_type = 'sec_filing' AND source_id = ANY(%s)
+            """,
+            (source_ids,),
+        ).fetchall()
+    return {r["source_id"] for r in rows}
+
+
 def get_recent_entity_classifications(
     entity_names: list[str],
     *,
@@ -176,13 +233,28 @@ def get_job(job_id: int) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
-def list_jobs(limit: int = 20, cursor: str | None = None, status: str | None = "completed") -> dict[str, Any]:
-    """Return cursor-paginated agent_jobs, newest-first. Defaults to completed only."""
+def list_jobs(
+    limit: int = 20,
+    cursor: str | None = None,
+    status: str | None = "completed",
+    domain: str | None = None,
+) -> dict[str, Any]:
+    """Return cursor-paginated agent_jobs, newest-first. Defaults to completed only.
+
+    domain filters to agent_jobs.domain - callers that poll for "the latest
+    job" across multiple domains (news, sec_filing, ...) must pass this,
+    otherwise "most recent completed job" can return a job from a different
+    domain than the one they actually wanted (e.g. a same-day SEC filing job
+    completing after the news job would otherwise silently win).
+    """
     params: list[Any] = []
     conditions: list[str] = []
     if status:
         conditions.append("status = %s")
         params.append(status)
+    if domain:
+        conditions.append("domain = %s")
+        params.append(domain)
     if cursor:
         after_id = decode_cursor(cursor)
         conditions.append("id < %s")
@@ -203,7 +275,10 @@ def list_jobs(limit: int = 20, cursor: str | None = None, status: str | None = "
 
 
 def list_all_results(
-    limit: int = 100, cursor: str | None = None, signal_detection: str | None = None
+    limit: int = 100,
+    cursor: str | None = None,
+    signal_detection: str | None = None,
+    source_type: str | None = None,
 ) -> dict[str, Any]:
     """Return cursor-paginated agent_classifications across all jobs, newest first."""
     params: list[Any] = []
@@ -211,6 +286,9 @@ def list_all_results(
     if signal_detection:
         conditions.append("signal_detection = %s")
         params.append(signal_detection)
+    if source_type:
+        conditions.append("source_type = %s")
+        params.append(source_type)
     if cursor:
         after_id = decode_cursor(cursor)
         conditions.append("id < %s")
@@ -239,7 +317,11 @@ def list_all_results(
 
 
 def list_results(
-    job_id: int, limit: int = 100, cursor: str | None = None, signal_detection: str | None = None
+    job_id: int,
+    limit: int = 100,
+    cursor: str | None = None,
+    signal_detection: str | None = None,
+    source_type: str | None = None,
 ) -> dict[str, Any]:
     """Return cursor-paginated agent_classifications for a job."""
     params: list[Any] = [job_id]
@@ -247,6 +329,9 @@ def list_results(
     if signal_detection:
         extra_conditions += " AND signal_detection = %s"
         params.append(signal_detection)
+    if source_type:
+        extra_conditions += " AND source_type = %s"
+        params.append(source_type)
     if cursor:
         after_id = decode_cursor(cursor)
         extra_conditions += " AND id > %s"

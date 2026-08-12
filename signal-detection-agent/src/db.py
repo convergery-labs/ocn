@@ -100,3 +100,30 @@ def init_db() -> None:
             )
             WHERE entity_names_normalized IS NULL OR entity_names_normalized = '{}'
         """)
+        conn.execute("""
+            ALTER TABLE agent_classifications
+                ALTER COLUMN category DROP NOT NULL,
+                ALTER COLUMN materiality DROP NOT NULL
+        """)
+        conn.execute("""
+            ALTER TABLE agent_classifications
+                ADD COLUMN IF NOT EXISTS source_type TEXT NOT NULL DEFAULT 'news',
+                ADD COLUMN IF NOT EXISTS source_id TEXT,
+                ADD COLUMN IF NOT EXISTS form_type TEXT,
+                ADD COLUMN IF NOT EXISTS item_codes TEXT[],
+                ADD COLUMN IF NOT EXISTS filing_filed_at TIMESTAMPTZ,
+                ADD COLUMN IF NOT EXISTS company_rank INTEGER,
+                ADD COLUMN IF NOT EXISTS company_percentile FLOAT
+        """)
+        # source_type's allowed set grows as new domains are added (news, sec_filing,
+        # geopolitical, company_specific, ...) - drop/recreate rather than ALTER,
+        # since Postgres has no ALTER CHECK. Add new values here, not a new migration.
+        conn.execute("""
+            ALTER TABLE agent_classifications
+                DROP CONSTRAINT IF EXISTS agent_classifications_source_type_check
+        """)
+        conn.execute("""
+            ALTER TABLE agent_classifications
+                ADD CONSTRAINT agent_classifications_source_type_check
+                    CHECK (source_type IN ('news', 'sec_filing', 'geopolitical', 'company_specific'))
+        """)
