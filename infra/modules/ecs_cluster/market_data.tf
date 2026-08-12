@@ -293,11 +293,11 @@ resource "aws_cloudwatch_event_target" "market_poll_daily" {
 }
 
 
-# SEC filings mode: once at 01:00 UTC (8-K/10-Q/10-K metadata + link)
+# SEC filings mode: once at 12:00 UTC (8-K/10-Q/10-K metadata + link)
 resource "aws_cloudwatch_event_rule" "market_poll_sec_filings" {
   name                = "${var.env}-market-poll-sec-filings"
   description         = "Poll SEC EDGAR for new 8-K/10-Q/10-K filings once daily → DynamoDB"
-  schedule_expression = "cron(0 1 * * ? *)"
+  schedule_expression = "cron(0 12 * * ? *)"
 }
 
 resource "aws_cloudwatch_event_target" "market_poll_sec_filings" {

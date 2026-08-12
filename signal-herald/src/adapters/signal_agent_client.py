@@ -21,12 +21,19 @@ def _headers() -> dict[str, str]:
     return {"x-ocn-caller": encoded}
 
 
-def get_latest_job() -> dict[str, Any] | None:
-    """Return the most recent completed job, or None."""
+def get_latest_job(domain: str = "ai_news") -> dict[str, Any] | None:
+    """Return the most recent completed job for domain, or None.
+
+    domain must be passed - signal-detection-agent now serves multiple
+    domains (news, sec_filing, ...) from the same /jobs endpoint. Without
+    this filter, "most recent completed job" could return a job from a
+    different domain (e.g. a same-day SEC filing job that completed after
+    today's ai_news job), silently pulling the wrong data into the digest.
+    """
     with httpx.Client(base_url=config.SIGNAL_AGENT_URL) as client:
         resp = client.get(
             "/jobs",
-            params={"limit": 1, "status": "completed"},
+            params={"limit": 1, "status": "completed", "domain": domain},
             headers=_headers(),
             timeout=15,
         )

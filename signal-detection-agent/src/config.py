@@ -20,6 +20,9 @@ PIPELINE_POLL_TIMEOUT_SECS: int = int(os.environ.get("PIPELINE_POLL_TIMEOUT_SECS
 WEB_SEARCH_PROVIDER: str = os.environ.get("WEB_SEARCH_PROVIDER", "duckduckgo")
 WEB_SEARCH_API_KEY: str | None = os.environ.get("WEB_SEARCH_API_KEY") or None
 
+FILING_CLASSIFY_CONCURRENCY: int = int(os.environ.get("FILING_CLASSIFY_CONCURRENCY", "5"))
+SEC_FILING_DOMAIN: str = os.environ.get("SEC_FILING_DOMAIN", "sec_filing")
+
 PROMPTS_DIR: Path = Path(__file__).parent.parent / "prompts"
 DEFAULT_PROMPT: Path = PROMPTS_DIR / "ai_universe_signal_classifier_v1.txt"
 DEFAULT_PROMPT_V2: Path = PROMPTS_DIR / "ai_universe_signal_classifier_v2_refine.txt"
