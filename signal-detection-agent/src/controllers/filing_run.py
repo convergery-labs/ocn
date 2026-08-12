@@ -71,15 +71,21 @@ def _fetch_filing_text_and_extract(filing: dict[str, Any], last_call: list[float
     return text, True
 
 
-async def run_filing_classification_job(job_id: int) -> None:
-    """Background task: fetch tracked tickers' filings -> dedup -> classify -> persist."""
+async def run_filing_classification_job(job_id: int, tickers: list[str] | None = None) -> None:
+    """Background task: fetch tracked tickers' filings -> dedup -> classify -> persist.
+
+    tickers overrides the fetched universe when provided - for scoped manual
+    test runs (e.g. one ticker) without touching the scheduled job's normal
+    all-tracked-tickers behavior, which always passes None.
+    """
     update_job_status(job_id, "running")
-    try:
-        tickers = await get_tracked_tickers()
-    except Exception:
-        logger.exception("Failed to fetch tracked ticker list for job %d", job_id)
-        update_job_status(job_id, "failed", set_completed_at=True)
-        return
+    if tickers is None:
+        try:
+            tickers = await get_tracked_tickers()
+        except Exception:
+            logger.exception("Failed to fetch tracked ticker list for job %d", job_id)
+            update_job_status(job_id, "failed", set_completed_at=True)
+            return
 
     loop = asyncio.get_event_loop()
     all_filings = await _fetch_all_filings(tickers)

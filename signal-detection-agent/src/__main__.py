@@ -32,7 +32,14 @@ def serve(host: str, port: int) -> None:
 
 
 @cli.command("classify-filings")
-def classify_filings() -> None:
+@click.option(
+    "--tickers",
+    default=None,
+    help="Comma-separated ticker subset for a scoped manual test run "
+    "(e.g. AAPL,MSFT). Omit for the normal full tracked-universe run "
+    "used by the daily CloudWatch schedule.",
+)
+def classify_filings(tickers: str | None) -> None:
     """One-shot: fetch tracked tickers' SEC filings, classify what's new, persist.
 
     Entry point for the daily CloudWatch-triggered scheduled task - runs to
@@ -47,9 +54,10 @@ def classify_filings() -> None:
     init_db()
     seed()
 
+    ticker_list = [t.strip().upper() for t in tickers.split(",") if t.strip()] if tickers else None
     job_id = submit_filing_run()
-    logger.info("Created SEC filing job_id=%s", job_id)
-    asyncio.run(run_filing_classification_job(job_id))
+    logger.info("Created SEC filing job_id=%s tickers=%s", job_id, ticker_list or "all-tracked")
+    asyncio.run(run_filing_classification_job(job_id, tickers=ticker_list))
     logger.info("SEC filing job_id=%s finished", job_id)
 
 
