@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from typing import Any
 
 import httpx
 
@@ -22,6 +23,48 @@ logger = logging.getLogger(__name__)
 _USER_AGENT = "OCN SignalDetection kajal.nain@opengrowth.com"
 _MIN_INTERVAL = 0.15  # ~6-7 req/sec, under SEC's 10 req/sec guidance
 _COMPANYFACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
+_FILING_INDEX_URL = "https://www.sec.gov/Archives/edgar/data/{cik_int}/{accession_nodash}/{accession}-index.htm"
+
+# The exhibit "type" (e.g. "EX-99.1") is NOT present in the machine-readable
+# index.json for a filing - that file's directory.item[].type is only a
+# MIME-icon hint ("text.gif", "compressed.gif", ...), confirmed empirically
+# against a real NVDA 8-K. The exhibit type only appears in the human-readable
+# {accession}-index.htm document table, one <tr> per document with 5 <td>
+# cells (Seq, Description, Document-link, Type, Size). The 2nd <td> is NOT
+# reliably the type - confirmed on real NVDA 2020/2021 filings where it holds
+# a free-text description ("Q2FY21 PRESS RELEASE") instead, with the actual
+# "EX-99.1" code only in the 4th <td> (a bug this session: the first version
+# of this regex only checked the 2nd <td> and silently returned "no exhibit
+# found" - i.e. wrongly downgraded to exhibit_fetch_status="partial" - on
+# every one of those filings). Matching each <tr>'s href + ALL its <td> text
+# (not a fixed cell index) and checking whether ANY of them contains "EX-99"
+# is robust to which column carries the code on a given filer/era.
+_INDEX_ROW_PATTERN = re.compile(
+    r'<tr[^>]*>((?:\s*<td[^>]*>.*?</td>\s*)+)</tr>',
+    re.I | re.S,
+)
+_INDEX_CELL_PATTERN = re.compile(r'<td[^>]*>(.*?)</td>', re.I | re.S)
+_INDEX_HREF_PATTERN = re.compile(r'<a href="([^"]+)"', re.I)
+
+# 8-K item codes whose substance (the actual figures/announcement) typically
+# lives in an attached EX-99* exhibit, not the cover-page primary document -
+# confirmed empirically this session: every 2.02 (earnings results) in real
+# NVDA/FLY output was scored noise with a reason of the form "figures are in
+# Exhibit 99.1 which is not included", because only the primary doc was ever
+# fetched. 7.01 (Reg FD disclosure) and 8.01 (other events) commonly attach
+# the same kind of press-release exhibit, so they're included too.
+_EXHIBIT_FETCH_ITEM_CODES = {"2.02", "7.01", "8.01"}
+# Tested empirically this session against 46 real 2.02/7.01/8.01 filings,
+# comparing signal_detection agreement vs the original 20K cap: 13K cap ->
+# 42/46 (91%) agree, avg |score delta| 0.011 among agreements - a tighter
+# match than an 8K cap tried first (41/46, avg delta 0.019), while still
+# cutting average filing text sent to the model by ~24% (18,899 -> 14,334
+# chars), directly reducing the uncached per-call cost. The disagreements at
+# both cap sizes turned out to be model run-to-run variance on data-scarce
+# filings (confirmed on one case: a 13K-cap run scored lower than 20K despite
+# its own text_len being LARGER than the 20K run's, i.e. not a truncation
+# effect at all), not attributable to the cap itself.
+_MAX_EXHIBIT_CHARS = 13_000  # combined cap across all EX-99* exhibits for one filing
 
 
 def _rate_sleep(last_call: list[float]) -> None:
@@ -55,6 +98,88 @@ def fetch_filing_text(primary_doc_url: str, last_call: list[float], *, max_chars
     text = html_module.unescape(text)
     text = re.sub(r"\s+", " ", text).strip()
     return text[:max_chars]
+
+
+def _strip_html(html: str) -> str:
+    import html as html_module
+
+    text = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", html, flags=re.S | re.I)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = html_module.unescape(text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def fetch_filing_exhibits_text(
+    cik: str, accession_number: str, item_codes: list[str], last_call: list[float],
+    *, max_chars: int = _MAX_EXHIBIT_CHARS,
+) -> tuple[str, str]:
+    """For 8-Ks whose item codes indicate the substance sits in an attached
+    exhibit (see _EXHIBIT_FETCH_ITEM_CODES), fetch every EX-99* exhibit's text
+    and concatenate it. Returns (exhibit_text, quality) where quality is
+    "full" (index fetched, every EX-99* document fetched successfully),
+    "partial" (index fetched, at least one EX-99* document found but one or
+    more failed to fetch), or "none" (index fetch failed, or no EX-99*
+    document was listed at all - e.g. this filing has no exhibit).
+
+    Matches on the EX-99 prefix rather than an exact "EX-99.1"/"EX-99.2"
+    string, since some filers list the type as just "EX-99" with no suffix.
+
+    Returns ("", "none") immediately if item_codes has no overlap with
+    _EXHIBIT_FETCH_ITEM_CODES - callers should still check this themselves
+    before calling, to avoid the index.json fetch entirely for filings that
+    can never need it (most 8-K item codes, e.g. 5.02/5.07, are procedural
+    and rarely carry a substantive exhibit).
+    """
+    if not cik or not accession_number:
+        return "", "none"
+
+    accession_nodash = accession_number.replace("-", "")
+    cik_int = str(int(cik))
+    _rate_sleep(last_call)
+    try:
+        resp = httpx.get(
+            _FILING_INDEX_URL.format(cik_int=cik_int, accession_nodash=accession_nodash, accession=accession_number),
+            headers={"User-Agent": _USER_AGENT},
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        index_html = resp.text
+    except Exception as exc:
+        logger.warning(
+            "[SEC_EDGAR] filing index fetch failed cik=%s accession=%s error=%s",
+            cik, accession_number, exc,
+        )
+        return "", "none"
+
+    exhibit_docs: list[str] = []
+    for row_html in _INDEX_ROW_PATTERN.findall(index_html):
+        cells = _INDEX_CELL_PATTERN.findall(row_html)
+        is_exhibit = any(cell.strip().upper().startswith("EX-99") for cell in cells)
+        if not is_exhibit:
+            continue
+        href_match = _INDEX_HREF_PATTERN.search(row_html)
+        if href_match:
+            exhibit_docs.append(href_match.group(1))
+    if not exhibit_docs:
+        return "", "none"
+
+    texts: list[str] = []
+    any_failed = False
+    for href in exhibit_docs:
+        _rate_sleep(last_call)
+        doc_url = href if href.startswith("http") else f"https://www.sec.gov{href}"
+        try:
+            resp = httpx.get(doc_url, headers={"User-Agent": _USER_AGENT}, timeout=30.0)
+            resp.raise_for_status()
+            texts.append(_strip_html(resp.text))
+        except Exception as exc:
+            any_failed = True
+            logger.warning("[SEC_EDGAR] exhibit fetch failed url=%s error=%s", doc_url, exc)
+
+    if not texts:
+        return "", "none"
+    combined = "\n\n".join(texts)[:max_chars]
+    return combined, ("partial" if any_failed else "full")
 
 
 _RESULTS_MARKERS_PRECISE = [
@@ -93,6 +218,32 @@ _RESULTS_MARKERS_GENERIC = [
     re.compile(r"were \$[\d,.]+ (?:million|billion) in \d{4}, compared to", re.I),
 ]
 
+# Structural fallback, checked only when NEITHER of the above tiers matches -
+# rather than continuing to enumerate exact filer phrasings one at a time
+# (confirmed brittle this session: AAPL, CACI, and NVIDIA each needed their
+# own hand-added phrase/pattern before this existed), these two patterns
+# describe the SHAPE a revenue comparison takes regardless of exact wording:
+# a financial term near both a dollar figure and a comparison signal
+# (percent sign or a comparison word), in either order since filers write
+# "$X billion, up N%" and "increased N% or $X billion" equally often.
+_RESULTS_STRUCTURAL_PROSE = re.compile(
+    r"(?:net )?(?:revenue|revenues|net sales|net income|net loss|gross margin|operating income)"
+    r"(?:"
+    r"[^.]{0,120}?\$[\d,.]+\s*(?:million|billion)[^.]{0,80}?(?:%|percent|increased?|decreased?|compared|grew|rose|declined|up |down )"
+    r"|"
+    r"[^.]{0,80}?(?:increased|decreased|grew|rose|declined|up |down )[^.]{0,80}?\$[\d,.]+\s*(?:million|billion)"
+    r")",
+    re.I,
+)
+# Tabular MD&A comparison layout ("Revenues $ X $ Y Z%") - three dollar-ish
+# figures followed by a percent, with no prose comparison word nearby at all
+# (confirmed on a real CACI 10-Q: the actual +10.1% YoY table sat outside the
+# window every prose-based marker found elsewhere in the same document).
+_RESULTS_STRUCTURAL_TABLE = re.compile(
+    r"(?:net )?(?:revenue|revenues|net sales)s?\s*\$?\s*[\d,.]+\s*\$?\s*[\d,.]+\s*\$?\s*[\d,.]+\s*\d{1,3}(?:\.\d)?\s*%",
+    re.I,
+)
+
 _RESULTS_WINDOW_BEFORE = 500
 _RESULTS_WINDOW_AFTER = 15_000
 
@@ -114,6 +265,20 @@ def _find_results_window(text: str) -> tuple[int, int, bool]:
     generic_positions = [m.start() for pattern in _RESULTS_MARKERS_GENERIC if (m := pattern.search(text))]
     if generic_positions:
         idx = min(generic_positions)
+        start = max(0, idx - _RESULTS_WINDOW_BEFORE)
+        return start, idx + _RESULTS_WINDOW_AFTER, True
+
+    # Structural fallback - only reached when no exact phrase/pattern above
+    # matched at all. Checks EVERY match of both structural patterns and
+    # takes the earliest position, same "earliest wins" principle as the two
+    # tiers above (not first-pattern-in-list-order), for the same reason:
+    # a later-checked pattern can legitimately match earlier in the document.
+    structural_positions = (
+        [m.start() for m in _RESULTS_STRUCTURAL_PROSE.finditer(text)]
+        + [m.start() for m in _RESULTS_STRUCTURAL_TABLE.finditer(text)]
+    )
+    if structural_positions:
+        idx = min(structural_positions)
         start = max(0, idx - _RESULTS_WINDOW_BEFORE)
         return start, idx + _RESULTS_WINDOW_AFTER, True
 
@@ -233,7 +398,17 @@ def fetch_company_facts(cik: str, last_call: list[float]) -> dict:
     not re-fetch per filing if classifying several filings for the same
     ticker in one batch (see classify_filings_for_ticker's per-ticker caching
     pattern for company_overview - the same principle applies here).
+
+    cik is zero-padded to 10 digits internally regardless of the caller's
+    input format - confirmed empirically this session that EDGAR's
+    companyfacts endpoint 404s on an unpadded CIK (e.g. CIK1860160.json for
+    Firefly Aerospace) and only succeeds zero-padded (CIK0001860160.json).
+    Some callers already store cik pre-padded (news-retrieval's
+    _load_cik_map), some don't (raw DynamoDB-stored values observed this
+    session) - padding here makes the function correct either way rather
+    than relying on every caller to have done it already.
     """
+    cik = str(cik).zfill(10)
     _rate_sleep(last_call)
     try:
         resp = httpx.get(
@@ -387,3 +562,94 @@ def extract_xbrl_facts_for_filing(
     )
 
     return result
+
+
+_TRAILING_QUARTERS_COUNT = 8
+
+
+def get_trailing_quarterly_revenue(
+    company_facts: dict, period_of_report: str, form_type: str,
+) -> list[dict[str, Any]]:
+    """Return up to the 8 most recent QUARTERLY revenue figures strictly
+    before period_of_report, from the same companyfacts document already
+    fetched for extract_xbrl_facts_for_filing() - no second API call, since
+    companyfacts already carries every revenue concept's full multi-year
+    history (confirmed empirically: the same us-gaap/RevenueFromContract...
+    data this function reads is identical to what
+    data.sec.gov/api/xbrl/companyconcept/.../Revenues.json would return for
+    the same CIK).
+
+    Built to let the model judge THIS quarter's growth against the company's
+    OWN recent trend, not a fixed absolute-growth threshold - a fixed >10%
+    band means a company that grows 60%+ every quarter (e.g. a high-growth
+    filer) is permanently flagged "high" for being normal, while a company
+    whose growth suddenly drops from 60% to 12% (a real deceleration) reads
+    as unremarkable under the same fixed band despite the second case being
+    the one that actually changed. Deviation from trailing average is what
+    the model needs to tell "normal for this company" from "something broke".
+
+    Only quarterly-length entries (~91 days, via _TARGET_PERIOD_DAYS) are
+    returned, ALWAYS - even for a 10-K - since annual filings need the same
+    quarter-over-quarter trend as 10-Qs to judge Q4 deviation; the 10-K's own
+    full-year figure is not comparable to a list of quarters and is already
+    available separately via extract_xbrl_facts_for_filing()'s 'revenue'
+    field for that form type.
+
+    Strictly BEFORE period_of_report (not <=) so the current filing's own
+    period is never included as one of its own trailing quarters - only
+    entries with a distinct, earlier end date fall in the "trailing" window.
+    Deduplicated by end date (a quarter can be tagged under multiple later
+    accessions as a comparative figure; only the value closest to a 91-day
+    period is kept per end date, and if several accessions report an
+    identical quarter, any one is representative since restatements are rare
+    and out of scope here).
+
+    Returns a list of {end, value} dicts, oldest first, capped at the 8 most
+    recent - callers pass this straight into the prompt for the model to
+    average and compare; the "8" figure is deliberately quarters, not a form
+    of trailing-year lookback, so it covers roughly 2 fiscal years regardless
+    of form type.
+    """
+    usgaap = (company_facts.get("facts") or {}).get("us-gaap") or {}
+    if not period_of_report:
+        return []
+    try:
+        from datetime import date
+        cutoff = date.fromisoformat(period_of_report)
+    except ValueError:
+        return []
+
+    by_end: dict[str, dict] = {}
+    for concept in _XBRL_FIELD_CONCEPTS["revenue"]:
+        concept_data = usgaap.get(concept)
+        if not concept_data:
+            continue
+        for entries in (concept_data.get("units") or {}).values():
+            for e in entries:
+                end = e.get("end")
+                if not end or not e.get("start"):
+                    continue
+                try:
+                    if date.fromisoformat(end) >= cutoff:
+                        continue
+                except ValueError:
+                    continue
+                days = _period_days(e)
+                if abs(days - 91) > 20:  # quarterly only, not YTD/annual entries sharing this concept
+                    continue
+                existing = by_end.get(end)
+                if existing is None or abs(days - 91) < abs(existing["_days"] - 91):
+                    by_end[end] = {"end": end, "value": e["val"], "_days": days}
+        # Unlike extract_xbrl_facts_for_filing's single-period lookup, do NOT
+        # break after the first concept with any match - confirmed on real
+        # NVDA data this session: it tagged revenue as
+        # RevenueFromContractWithCustomerExcludingAssessedTax only through
+        # FY2022, then switched to Revenues for every quarter since. These
+        # are sequential eras for the SAME filer, not interchangeable
+        # fallbacks - stopping at the first match silently returns only the
+        # oldest, pre-2022 quarters when the cutoff is recent. Merging all
+        # concepts (by_end already dedupes by end date) covers a filer's
+        # full history regardless of which era's tag name it used when.
+
+    ordered = sorted(by_end.values(), key=lambda e: e["end"])[-_TRAILING_QUARTERS_COUNT:]
+    return [{"end": e["end"], "value": e["value"]} for e in ordered]

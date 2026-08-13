@@ -111,9 +111,16 @@ def init_db() -> None:
                 ADD COLUMN IF NOT EXISTS source_id TEXT,
                 ADD COLUMN IF NOT EXISTS form_type TEXT,
                 ADD COLUMN IF NOT EXISTS item_codes TEXT[],
-                ADD COLUMN IF NOT EXISTS filing_filed_at TIMESTAMPTZ,
-                ADD COLUMN IF NOT EXISTS company_rank INTEGER,
-                ADD COLUMN IF NOT EXISTS company_percentile FLOAT
+                ADD COLUMN IF NOT EXISTS filing_filed_at TIMESTAMPTZ
+        """)
+        # company_rank/company_percentile: added for a company-relative ranking
+        # feature that was deprioritized before any code ever read or wrote
+        # them - confirmed unreferenced anywhere outside this migration, so
+        # dropping rather than leaving them as permanently-empty dead columns.
+        conn.execute("""
+            ALTER TABLE agent_classifications
+                DROP COLUMN IF EXISTS company_rank,
+                DROP COLUMN IF EXISTS company_percentile
         """)
         # source_type's allowed set grows as new domains are added (news, sec_filing,
         # geopolitical, company_specific, ...) - drop/recreate rather than ALTER,

@@ -57,9 +57,20 @@ async def _fetch_all_filings(tickers: list[str]) -> list[dict[str, Any]]:
     return [filing for filings in results for filing in filings]
 
 
-def _fetch_filing_text_and_extract(filing: dict[str, Any], last_call: list[float]) -> tuple[str, bool]:
+def _fetch_filing_text_and_extract(filing: dict[str, Any], last_call: list[float]) -> tuple[str, bool, str]:
     """Fetch one filing's text and, for 10-K/10-Q, extract the relevant sections.
-    8-K is small enough to pass in full (confirmed this session: ~4K chars).
+
+    Returns (text, extraction_found, exhibit_fetch_status). exhibit_fetch_status
+    is only meaningful for 8-Ks carrying an exhibit-fetch-eligible item code
+    (see sec_edgar._EXHIBIT_FETCH_ITEM_CODES): "full" (every referenced EX-99*
+    exhibit fetched), "partial" (index fetch or an exhibit fetch failed, or no
+    EX-99* exhibit was listed at all despite an eligible item code). Every
+    other filing (10-K/10-Q, or an 8-K with no eligible item code) gets
+    "not_applicable" - passed straight through to the prompt so the model
+    knows whether "not_applicable" means "no fetch was warranted" versus
+    "full"/"partial" meaning a fetch was attempted (10-K/10-Q's own
+    extraction_found already covers whether ITS OWN text was usable, tracked
+    separately as the returned bool).
 
     10-K/10-Q use extract_filing_sections (results-of-operations + qualitative
     notes on income taxes/contingencies/debt), not the full ~100K-500K char
@@ -75,13 +86,56 @@ def _fetch_filing_text_and_extract(filing: dict[str, Any], last_call: list[float
     content while still cutting the same AAPL 10-Q by 82.5% (170K -> 30K
     chars), since the numeric tables that pad out the rest of the document
     are no longer needed in prose - see xbrl_facts below for why.
+
+    8-K: the cover-page primary document rarely carries the actual figures
+    for 2.02 (earnings)/7.01 (Reg FD)/8.01 (other events) - those live in an
+    attached EX-99* exhibit instead. Confirmed empirically this session:
+    every real 2.02 filing classified so far was scored noise with a reason
+    like "figures are in Exhibit 99.1 which is not included", because only
+    the primary doc was ever fetched. For those item codes, fetch the
+    exhibit(s) too and append to the primary doc's text; other item codes
+    (e.g. 5.02, 5.07) are typically self-contained on the cover page and
+    don't warrant the extra EDGAR round-trip.
     """
     text = sec_edgar.fetch_filing_text(filing["primary_doc_url"], last_call)
     if not text:
-        return "", False
+        return "", False, "not_applicable"
     if filing["form_type"] in ("10-K", "10-Q"):
-        return sec_edgar.extract_filing_sections(text)
-    return text, True
+        section_text, found = sec_edgar.extract_filing_sections(text)
+        return section_text, found, "not_applicable"
+
+    item_codes = filing.get("item_codes") or []
+    if any(code in sec_edgar._EXHIBIT_FETCH_ITEM_CODES for code in item_codes):
+        # Skip the EDGAR index-page round-trip when the primary doc itself
+        # gives no sign an exhibit exists - confirmed empirically this
+        # session against 46 real exhibit-eligible 8-Ks: every 2.02 filing
+        # references "Exhibit 99" in its cover page (2.02's substance is
+        # ALWAYS in the exhibit, never skip for it), but ~22% of 7.01/8.01-
+        # only filings describe the event directly in the primary doc with
+        # no exhibit at all - fetching the index page for those always came
+        # back with no EX-99* row. This is a pure EDGAR-request-count
+        # reduction, not a token/cost saving: when no exhibit exists,
+        # exhibit_text is already "" today and contributes nothing to the
+        # prompt either way - skipping the fetch just avoids the wasted
+        # round-trip, it does not change what the model sees.
+        skip_fetch = "2.02" not in item_codes and "exhibit 99" not in text.lower()
+        if skip_fetch:
+            return text, True, "not_applicable"
+
+        exhibit_text, quality = sec_edgar.fetch_filing_exhibits_text(
+            filing.get("cik", ""), filing.get("accession_number", ""), item_codes, last_call,
+        )
+        if exhibit_text:
+            text = text + "\n\n--- Attached exhibit(s) ---\n\n" + exhibit_text
+        # fetch_filing_exhibits_text's "none" (index/exhibit fetch failed, or
+        # no EX-99* exhibit was listed) maps to "partial" here, not
+        # "not_applicable" - an eligible item code means a fetch WAS
+        # warranted and attempted, so the model must be told the exhibit is
+        # genuinely absent from what it's been given, not that no fetch was
+        # ever due. "full" (all fetched) passes through unchanged.
+        return text, True, ("full" if quality == "full" else "partial")
+
+    return text, True, "not_applicable"
 
 
 async def run_filing_classification_job(job_id: int, tickers: list[str] | None = None) -> None:
@@ -147,19 +201,23 @@ async def run_filing_classification_job(job_id: int, tickers: list[str] | None =
         """Classify a single filing; returns True if skipped (failed)."""
         async with semaphore:
             try:
-                filing_text, extraction_found = await loop.run_in_executor(
+                filing_text, extraction_found, exhibit_fetch_status = await loop.run_in_executor(
                     _executor, _fetch_filing_text_and_extract, filing, edgar_last_call,
                 )
                 xbrl_facts = None
+                trailing_quarterly_revenue = None
                 if filing["form_type"] in ("10-K", "10-Q") and filing.get("cik"):
                     company_facts = await _get_company_facts(filing["cik"])
                     xbrl_facts = sec_edgar.extract_xbrl_facts_for_filing(
                         company_facts, filing["accession_number"],
                         filing.get("period_of_report", ""), filing["form_type"],
                     )
+                    trailing_quarterly_revenue = sec_edgar.get_trailing_quarterly_revenue(
+                        company_facts, filing.get("period_of_report", ""), filing["form_type"],
+                    )
                 result = await loop.run_in_executor(
                     _executor,
-                    lambda f=filing, t=filing_text, found=extraction_found, xf=xbrl_facts: classify_filing(
+                    lambda f=filing, t=filing_text, found=extraction_found, xf=xbrl_facts, efs=exhibit_fetch_status, tqr=trailing_quarterly_revenue: classify_filing(
                         f, t,
                         system_prompt=system_prompt,
                         models=models,
@@ -170,6 +228,8 @@ async def run_filing_classification_job(job_id: int, tickers: list[str] | None =
                         extraction_found=found,
                         cache_system_prompt=True,
                         xbrl_facts=xf,
+                        exhibit_fetch_status=efs,
+                        trailing_quarterly_revenue=tqr,
                     ),
                 )
                 insert_filing_classification(job_id, filing, result)

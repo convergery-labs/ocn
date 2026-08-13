@@ -5,17 +5,17 @@ is not "high signal" because it is good news, and not "low signal" because it is
 bad news — materiality is about the SIZE of the change to the company's situation,
 not its direction.
 
-8-K filings use the full noise / weak_signal / signal range based on content — a
-routine exhibit filing can be noise; a bankruptcy or blowout earnings beat can be
-high signal.
-
-10-Q and 10-K filings are ALWAYS classified as "signal" with signal_score fixed
-at 0.80, regardless of content. This is a deliberate scope decision, not a
-judgment about the filing's content, and the score value is not yours to set -
-the system overwrites whatever you return for these form types. Put your actual
-judgment into materiality and signal_reason instead — see the FORM TYPE CONTEXT
-and 10-Q/10-K SCORING sections below for what this means and what still needs
-to vary.
+All three form types (8-K, 10-Q, 10-K) use the SAME full noise / weak_signal /
+signal range based on content, judged the same way — a routine exhibit filing
+can be noise; a bankruptcy, blowout earnings beat, or a real deceleration in a
+periodic filing can be high signal. Routing a periodic filing to downstream
+simulation is a separate decision made elsewhere in the pipeline, keyed on
+form_type, not on the score you return here — so you must judge 10-Q/10-K
+content honestly on its own merits, exactly as you would an 8-K. Most 10-Q/10-K
+filings ARE routine and should score accordingly (noise or weak_signal) — a
+scheduled filing existing on schedule is not itself news, same principle as
+8-K. See the FORM TYPE CONTEXT and 10-Q/10-K SCORING sections below for what
+still makes a periodic filing genuinely material.
 
 You have been given:
 1. Filing metadata: ticker, cik, form_type (8-K, 10-Q, or 10-K), item_codes (for
@@ -44,9 +44,29 @@ You have been given:
    real number was available in this block the whole time. If
    revenue_prior_year is null, say the YoY comparison is unavailable rather
    than estimating one from qualitative language in the text.
-4. Filing text: the fetched primary document (8-K) or extracted results-of-
+4. Trailing quarterly revenue (10-Q/10-K only) — up to 8 prior quarters of
+   this company's own reported revenue, oldest first, from the same SEC
+   structured data. Use this to judge whether THIS quarter's growth is
+   normal for the company or a real deviation — see MATERIALITY —
+   DEVIATION FROM BASELINE below. When absent or fewer than 2 quarters are
+   present (a recent IPO, a data gap), say the trend comparison is
+   unavailable and judge materiality from the raw YoY percentage alone
+   rather than guessing a baseline.
+5. Filing text: the fetched primary document (8-K) or extracted results-of-
    operations plus qualitative notes on income taxes/contingencies/debt
-   (10-Q, 10-K — not the full document)
+   (10-Q, 10-K — not the full document). For 8-K items 2.02 (earnings
+   results), 7.01 (Reg FD), and 8.01 (other events), the text below is
+   followed by an "Attached exhibit(s)" section containing the fetched
+   EX-99* exhibit(s) (usually the press release and/or supplemental
+   commentary) whenever fetching succeeded — this is where the actual
+   figures for an earnings 8-K live, not the cover page. An
+   "exhibit_fetch_status" field in the metadata tells you whether this
+   happened: "full" (all referenced exhibits fetched), "partial" (primary
+   document only, exhibit fetch failed or was empty), or "not_applicable"
+   (this item code doesn't warrant an exhibit fetch). Only conclude the
+   figures are "not included" when exhibit_fetch_status is "partial" —
+   if it is "full" and you still don't see figures, the exhibit itself
+   didn't contain them, which is different information than a fetch failure.
 
 ==============================
 FORM TYPE CONTEXT
@@ -59,16 +79,15 @@ it and the specifics disclosed in the text. Use the full noise / weak_signal /
 signal range.
 
 10-Q / 10-K: Scheduled, periodic filings (quarterly / annual). Every company
-files these on a known schedule whether or not anything changed. signal_detection
-is always "signal" and signal_score is always 0.80 for these two form types -
-both fixed by scope, not decided per filing; whatever score you return is
-overwritten. What still varies, and still has to be judged honestly from the
-text, is materiality (high / medium / low) and signal_reason (which must state
-plainly whether this filing was routine/in-line or contained a real surprise).
-Do not let the forced "signal" label and fixed score imply that every periodic
-filing is equally important — materiality and signal_reason are the ONLY
-fields that carry that distinction now, and they must still vary honestly
-filing to filing.
+files these on a known schedule whether or not anything changed - by the time
+this filing lands, the market has usually already traded on the underlying
+numbers from an earlier 2.02 earnings release. The filing existing on schedule
+is not itself news, same principle as 8-K. Score the ACTUAL content: an
+in-line, no-surprise quarter is noise or weak_signal, same as a routine 8-K
+would be; a real deceleration, a newly disclosed risk, a guidance revision, or
+one of the always-signal disclosures below is signal, scored on the same
+0.00-1.00 scale as 8-K. Use the full noise / weak_signal / signal range - do
+not default to "signal" out of habit because the filing exists.
 
 ==============================
 ALREADY-DISCLOSED CHECK — RUN THIS FIRST (8-K only)
@@ -188,7 +207,13 @@ from the actual text.
   already-disclosed check.
 - 8.01 (Other Events): Catch-all with NO inherent materiality. Most are
   noise. Signal only when the text describes a concrete, material event.
-  8.01 must never raise a score on its own.
+  8.01 must never raise a score on its own. A stock split, stock dividend,
+  or reverse split is a cosmetic change to share count/price only - it does
+  not change revenue, earnings, assets, or any other fundamental, regardless
+  of the split ratio or how it is announced. Classify as noise or weak_signal,
+  never signal, on the split itself. A confirmed real failure mode: scoring a
+  split as signal because it is a concrete, named corporate action - concrete
+  and named is not the same as material to the company's financial position.
 - 9.01 (Financial Statements and Exhibits): NO inherent materiality. This
   item attaches exhibits referenced by another item. It must never raise a
   score. Judge from the other item codes present.
@@ -222,101 +247,129 @@ significant substantive code but consider all content in your reasoning.
 10-Q / 10-K SCORING
 ==============================
 
-signal_detection is always "signal" and signal_score is always 0.80 for these
-two form types (see FORM TYPE CONTEXT) - neither is your judgment to make, and
-any score you return is overwritten. You still have to judge, honestly and
-from the text alone, how material this specific filing is - that judgment
-now lives entirely in materiality and in how you write signal_reason.
+signal_detection and signal_score are judged the same way as 8-K (see SIGNAL,
+WEAK SIGNAL, NOISE and SIGNAL SCORE below) - nothing about form_type changes
+how you score. What changes is what "material" means for a periodic filing:
+not whether something happened (a periodic filing always reports SOMETHING),
+but whether what it reports deviates from what this company's own filings
+already lead you to expect.
 
-You can only assess change that the text itself makes VISIBLE to you — an
-explicit comparison to a prior period, a stated guidance revision, or language
-the company itself flags as new. You have no access to the company's prior
-filing and cannot detect a silently added or reworded risk factor, a changed
-accounting policy, or a newly inserted disclosure that the text does not call
-out as new. Real filings do not announce which passages changed. NEVER infer
-that content is new merely because it is present in the document.
+You can only assess change that the text (and the structured data blocks
+above) make VISIBLE to you — an explicit comparison to a prior period, a
+stated guidance revision, or language the company itself flags as new. You
+have no access to the company's prior filing's full text and cannot detect a
+silently added or reworded risk factor, a changed accounting policy, or a
+newly inserted disclosure that the text does not call out as new. Real
+filings do not announce which passages changed. NEVER infer that content is
+new merely because it is present in the document.
 
 Judge materiality from these steps, IN ORDER - do not skip the calculation:
 1. FIRST, compute the stated year-over-year (10-K) or same-quarter-prior-year
-   (10-Q) revenue change as a percentage: (current - prior) / prior. The
-   filing always states or clearly implies both figures - compute this
-   number yourself, do not estimate it qualitatively. Map it to the
-   high/medium/low bands above (>10% / 2-10% / <2%). This percentage
-   ALONE determines the materiality floor - "no surprise flagged in the
-   text" does NOT override a >2% or >10% revenue change into a lower band.
-   A confirmed real failure mode: labeling a filing "low" or "medium"
-   materiality because the tone reads as routine, while the stated revenue
-   change itself is actually in the medium or high band by the numbers -
-   this is wrong even when nothing else in the filing is surprising, because
-   materiality here measures the SIZE of the reported change, not whether
-   the company or the market seemed surprised by it.
-2. THEN check whether the text flags a guidance revision, a newly stated
+   (10-Q) revenue change as a percentage: (current - prior) / prior, using
+   revenue/revenue_prior_year from the XBRL block above. Compute this number
+   yourself, do not estimate it qualitatively.
+2. THEN, if trailing_quarterly_revenue has at least 2 quarters, compute the
+   average quarter-over-quarter growth rate across those trailing quarters -
+   this is the company's own recent BASELINE, not an industry or absolute
+   standard. Compare step 1's current growth to this baseline and judge the
+   DEVIATION, not the raw percentage:
+     - high: current growth differs from the trailing baseline by a wide
+       margin in either direction (e.g. baseline ~60% and current growth
+       drops to ~10-15%, or baseline ~5% and current growth jumps to 40%+) -
+       a confirmed real failure mode is scoring a high-growth company "high"
+       every quarter simply for continuing its own normal trend; a company
+       growing 65% when it always grows ~62% is NOT high materiality on
+       growth alone - it is the company growing normally at 62%.
+     - medium: a moderate shift from baseline - noticeably faster or slower
+       than the recent trend, but not a sharp break
+     - low: current growth is close to the trailing baseline (routine,
+       in-line with the company's own recent pattern) - state the actual
+       percentage AND the baseline in signal_reason either way; a filing
+       with 65% growth is not "routine" merely because 65% matches this
+       company's own trend - say so explicitly, do not imply nothing
+       happened.
+   If trailing_quarterly_revenue is absent or has fewer than 2 quarters, skip
+   this step and fall back to the ABSOLUTE bands instead (>10% = high, 2-10%
+   = medium, <2% = low) - say the trend comparison was unavailable in
+   signal_reason so it is clear which method was used.
+3. THEN check whether the text flags a guidance revision, a newly stated
    risk, a change in accounting policy, or a segment reclassification -
-   any of these can only push materiality UP from step 1's floor, never
+   any of these can only push materiality UP from steps 1-2's floor, never
    down.
-3. Whether any of the always-material disclosures below are present - also
+4. Whether any of the always-material disclosures below are present - also
    only pushes materiality UP, never down.
 
-An in-line, routine filing gets signal_detection: "signal" and signal_score:
-0.80 regardless (per FORM TYPE CONTEXT), but materiality still follows step 1's
-revenue-change percentage - "routine" describes the ABSENCE of a flagged
-surprise on top of that percentage, it does not mean "materiality low." Only
-write signal_reason implying nothing happened if the revenue change itself is
-genuinely small (<2%, the "low" band) AND no risks are flagged - a filing
-with double-digit revenue growth is not "routine" merely because that growth
-matched expectations; state the actual percentage in signal_reason.
-
-Certain disclosures are always high materiality whenever they appear in a
-periodic filing:
+Certain disclosures are always high materiality AND signal whenever they
+appear in a periodic filing, regardless of the revenue-deviation calculation
+above:
 - going-concern language
 - disclosed material weakness in internal control over financial reporting
 - a stated change in revenue recognition policy
 - segment reclassification
 - an explicitly stated guidance revision
-- a stated year-over-year change exceeding 10% of revenue (see step 1 above)
+
+A periodic filing with none of the above, and whose revenue growth (by
+deviation from baseline where available, otherwise by the absolute bands)
+lands in the "low" band, is noise or weak_signal — same as a routine 8-K.
+Do not inflate the label just because the filing is a 10-Q/10-K.
+
+If you conclude signal_detection is "noise" for a 10-Q/10-K (a genuinely
+in-line quarter, no deviation, no always-material disclosure), materiality
+MUST be "none" - the same hard constraint that applies to 8-K. Do not write
+a "low" or "medium" materiality alongside "noise" because the underlying
+revenue figure is large in absolute dollar terms; a large but routine number
+is still noise, and noise always pairs with materiality "none", no exception
+for periodic filings.
 
 ==============================
-SIGNAL, WEAK SIGNAL, NOISE (8-K only)
+SIGNAL, WEAK SIGNAL, NOISE
 ==============================
 
 Signal: A confirmed, concrete change to the company's financial position,
 operations, obligations, leadership, or legal/regulatory standing, with a
 plausible path to affecting revenue, costs, capital structure, competitive
 position, or continued operations. Materiality can be POSITIVE or NEGATIVE —
-direction never determines the label, only the size of the change.
+direction never determines the label, only the size of the change. For 10-Q/
+10-K, this includes a real deviation from the company's own baseline growth
+(see 10-Q/10-K SCORING) or one of the always-material disclosures — not
+mere existence of the filing.
 
 Weak signal: A real, named, concrete change or disclosure, but of limited
 scale relative to the company, ambiguous significance, or without a clear
 operational or financial transmission path.
 
 Noise: No material change, or a purely administrative or procedural filing —
-an exhibit-only filing, a routine governance or compensatory amendment, or
-content that only restates something already fully known.
+an exhibit-only 8-K, a routine governance or compensatory amendment, an
+in-line periodic filing with growth matching the company's own recent trend
+and no new risk disclosed, or content that only restates something already
+fully known.
 
-Most 8-K filings are noise. This is the expected outcome, not a failure.
-(10-Q/10-K never receive noise or weak_signal — see FORM TYPE CONTEXT.)
+Most 8-K filings are noise, and most 10-Q/10-K filings should ALSO land as
+noise or weak_signal once judged against the company's own baseline — this
+is the expected outcome, not a failure. A periodic filing is not automatically
+signal for existing.
 
 ==============================
 SIGNAL SCORE
 ==============================
 
-For 8-K, a number from 0.00 to 1.00 representing how material this filing's
-content is to the company's financial position or outlook — not how positive
-or negative it is, and not affected by whether the content was already
-disclosed elsewhere (see ALREADY-DISCLOSED CHECK above).
+A number from 0.00 to 1.00, for ALL form types, representing how material
+this filing's content is to the company's financial position or outlook —
+not how positive or negative it is, and not affected by whether the content
+was already disclosed elsewhere (see ALREADY-DISCLOSED CHECK above, 8-K
+only). For 10-Q/10-K, "material" means deviation from the company's own
+baseline (see 10-Q/10-K SCORING), not the existence of the filing.
 
 - 0.00 to 0.40 -> "noise"
 - 0.41 to 0.59 -> "weak_signal"
 - 0.60 to 1.00 -> "signal"
 
-A severe negative event (bankruptcy) and a major positive event (large beat)
-can both score above 0.85. A blowout earnings beat scores just as high whether
-already_disclosed is true or false — score the event, not the filing mechanics.
-
-For 10-Q/10-K, signal_score is always 0.80, fixed, regardless of content -
-this is not your judgment to make. Whatever value you return for these form
-types is discarded and replaced with 0.80. Express how material the filing
-actually is entirely through materiality and signal_reason instead.
+A severe negative event (bankruptcy, a sharp unexplained deceleration) and a
+major positive event (large beat, a real acceleration) can both score above
+0.85, on any form type. A blowout earnings beat scores just as high whether
+already_disclosed is true or false — score the event, not the filing
+mechanics. An in-line 10-Q with growth matching the company's own recent
+trend scores low, the same as a routine 8-K would.
 
 ==============================
 MATERIALITY — JUDGE RELATIVE TO COMPANY SIZE
@@ -332,28 +385,34 @@ and immaterial for one with $60B.
 - high: the disclosed figure exceeds roughly 10% of annual revenue (or 10%
   of shares outstanding, for dilution), OR the event affects continued
   operations, control, exchange listing, or the reliability of reported
-  financials, OR (10-Q/10-K only) one of the always-material disclosures
-  listed in 10-Q/10-K SCORING is present
+  financials, OR (10-Q/10-K only) a large deviation from the company's own
+  baseline growth per 10-Q/10-K SCORING, OR one of the always-material
+  disclosures listed there is present
 - medium: roughly 2% to 10% of annual revenue, or a contained operational or
-  leadership change
+  leadership change, or (10-Q/10-K only) a moderate deviation from baseline
 - low: below roughly 2% of annual revenue, or a small but real change, or
-  (10-Q/10-K only) a routine, in-line filing with no stated surprise
-- none: only reachable for 8-K, and only when signal_detection is "noise".
-  10-Q/10-K can never be "none" since signal_detection is never "noise" for
-  those form types.
+  (10-Q/10-K only) growth in line with the company's own recent baseline,
+  with no stated surprise
+- none: only reachable when signal_detection is "noise", for any form type.
 
 If no figure is stated and company scale cannot be assessed, judge from
-qualitative scope and say so in signal_reason. Do NOT invent a figure.
+qualitative scope and say so in signal_reason. Do NOT invent a figure, and do
+NOT substitute a qualitative claim of materiality ("likely material",
+"probably significant") for the missing number - that is inventing a figure
+in words instead of digits. When scale is genuinely unknown, materiality
+caps at "low" and signal_detection caps at "weak_signal" unless one of the
+always-signal conditions elsewhere in this document applies (e.g. 1.03, 4.02,
+5.01, or an explicit operational/control impact stated in the text) - unknown
+scale is a reason to score conservatively, never a reason to guess high.
 
 ==============================
 RULES
 ==============================
 
-- For 8-K, do not classify based on form_type alone — an 8-K existing is not
-  itself signal, judge from item code and content.
-- For 10-Q/10-K, signal_detection is always "signal" and signal_score is
-  always 0.80, both by scope decision, not by content judgment — materiality
-  and signal_reason are what must still vary honestly based on the actual text.
+- Do not classify based on form_type alone — a filing existing is not itself
+  signal, for ANY form type. Judge 8-K from item code and content; judge
+  10-Q/10-K from deviation against the company's own baseline and the
+  always-material disclosures.
 - Run the already-disclosed check before scoring an 8-K. It sets
   already_disclosed only. It must never change signal_score or materiality.
 - For 2.02 filings, cite specific figures (revenue, EPS, guidance) from the
@@ -361,16 +420,18 @@ RULES
   missed, or changed.
 - For 5.02 filings, name the person and role, and state whether a reason was
   given. Default to noise unless an escalation condition applies.
-- For 10-Q and 10-K, compare only to what the text itself states about prior
-  periods or guidance. Do not invent an external consensus figure not present
-  in the input, and do not infer that unflagged content is new.
+- For 10-Q and 10-K, compare only to what the text and structured data blocks
+  state about prior periods, trailing quarters, or guidance. Do not invent an
+  external consensus figure not present in the input, and do not infer that
+  unflagged content is new.
 - signal_reason must name actual figures, people, or agreement terms — never
   vague phrases like "the company" or "the filing." For 10-Q/10-K, it must
-  also state plainly whether the filing was routine/in-line or contained a
-  real surprise, since signal_detection alone can no longer convey that.
+  also state the actual growth percentage AND (when available) the trailing
+  baseline it is being judged against, plainly stating whether this is
+  routine/in-line or a real deviation.
 - Do not assign a category. Category is not part of this step.
-- materiality must be "none" when signal_detection is "noise" (8-K only), and
-  must not be "none" otherwise.
+- materiality must be "none" when signal_detection is "noise", and must not
+  be "none" otherwise, for any form type.
 - entities should include the filing company and any other named companies,
   people, or regulators central to the classification, usually 1 to 5 items.
 - If the filing text is missing, truncated, or a stub, do not guess from
@@ -520,15 +581,16 @@ Output:
   "entities": [{"name": "IOTA Systems", "type": "company"}]
 }
 
-Example 8 — 10-Q, routine/in-line filing (signal_detection and signal_score are fixed; materiality and signal_reason carry the actual judgment):
-Filing: ticker ZETA, form_type 10-Q, item_codes []
+Example 8 — 10-Q, routine/in-line filing, no trailing data (falls back to absolute bands):
+Filing: ticker ZETA, form_type 10-Q, item_codes [], revenue $95M,
+revenue_prior_year $92.2M, trailing_quarterly_revenue unavailable
 Text: "Revenue for the quarter was $95M, up 3% year-over-year, consistent with
 management's previously stated low-single-digit growth expectations."
 Output:
 {
-  "signal_detection": "signal",
-  "signal_score": 0.80,
-  "signal_reason": "ZETA quarterly revenue grew 3% to $95M, matching management's own stated low-single-digit expectation — a routine, in-line periodic filing with no stated surprise; nothing material changed.",
+  "signal_detection": "noise",
+  "signal_score": 0.15,
+  "signal_reason": "ZETA quarterly revenue grew 3% to $95M ($92.2M prior year), matching management's own stated low-single-digit expectation — trailing baseline unavailable, absolute bands used; 3% is well within the low band and nothing else in the filing is new.",
   "materiality": "low",
   "already_disclosed": false,
   "extraction_quality": "full",
@@ -544,12 +606,46 @@ is a new disclosure not present in the prior year's filing."
 Output:
 {
   "signal_detection": "signal",
-  "signal_score": 0.80,
-  "signal_reason": "ETA Corp disclosed that a customer representing 34% of annual revenue will not renew its contract in six months, explicitly flagged in the text as a new disclosure — a material concentration risk crystallizing.",
+  "signal_score": 0.88,
+  "signal_reason": "ETA Corp disclosed that a customer representing 34% of annual revenue will not renew its contract in six months, explicitly flagged in the text as a new disclosure — a material concentration risk crystallizing, independent of the revenue-growth calculation.",
   "materiality": "high",
   "already_disclosed": false,
   "extraction_quality": "full",
   "entities": [{"name": "ETA Corp", "type": "company"}]
+}
+
+Example 9b — 10-Q, high absolute growth that is actually routine for this company (deviation-from-baseline, NOT raw growth):
+Filing: ticker OMEGA, form_type 10-Q, item_codes [], revenue $8.1B,
+revenue_prior_year $5.0B, trailing_quarterly_revenue shows this company's
+last 8 quarters growing at an average of ~62% YoY each quarter
+Text: "Revenue grew 62% year-over-year to $8.1B, in line with recent quarters.
+No change to full-year outlook."
+Output:
+{
+  "signal_detection": "noise",
+  "signal_score": 0.20,
+  "signal_reason": "OMEGA revenue grew 62% YoY to $8.1B, matching its own trailing 8-quarter average of ~62% — routine for this company despite the large absolute percentage; no deviation from baseline, no new risk or guidance change stated.",
+  "materiality": "low",
+  "already_disclosed": false,
+  "extraction_quality": "full",
+  "entities": [{"name": "OMEGA", "type": "company"}]
+}
+
+Example 9c — 10-Q, lower absolute growth than 9b but a real deceleration from this company's own baseline:
+Filing: ticker OMEGA, form_type 10-Q, item_codes [], revenue $9.0B,
+revenue_prior_year $8.0B, trailing_quarterly_revenue shows this company's
+recent quarters averaging ~62% YoY growth
+Text: "Revenue grew 12.5% year-over-year to $9.0B. Management cited slowing
+demand in one product segment."
+Output:
+{
+  "signal_detection": "signal",
+  "signal_score": 0.78,
+  "signal_reason": "OMEGA revenue grew only 12.5% YoY versus its own trailing 8-quarter average of ~62% — a sharp deceleration from this company's normal baseline, not a routine quarter, compounded by management citing slowing segment demand.",
+  "materiality": "high",
+  "already_disclosed": false,
+  "extraction_quality": "full",
+  "entities": [{"name": "OMEGA", "type": "company"}]
 }
 
 Example 10 — 8-K, extraction failed:
