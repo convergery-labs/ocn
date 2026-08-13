@@ -18,18 +18,6 @@ ALLOWED_EXTRACTION_QUALITY = {'full', 'partial', 'failed'}
 SIGNAL_SCORE_THRESHOLD = 0.60
 WEAK_SIGNAL_SCORE_THRESHOLD = 0.40
 
-# 10-K/10-Q are always forced to signal_detection="signal" with signal_score
-# fixed at FORCED_SIGNAL_SCORE - a deliberate scope decision, not a band
-# boundary derived from content. Only 8-K uses the normal noise/weak_signal/
-# signal band logic with a model-judged score. signal_score is a constant
-# for periodic filings, not asked of the model or validated against its
-# output - same discipline as deriving Novelty score deterministically
-# elsewhere in this pipeline rather than trusting an LLM's freehand float.
-# materiality and signal_reason are the ONLY fields that still vary and
-# carry any distinction between a routine periodic filing and a major one.
-FORCED_SIGNAL_FORM_TYPES = {'10-K', '10-Q'}
-FORCED_SIGNAL_SCORE = 0.80
-
 REQUIRED_FIELDS = (
     'signal_detection', 'signal_score', 'signal_reason', 'materiality',
     'already_disclosed', 'extraction_quality',
@@ -85,24 +73,19 @@ def validate_filing_classification(
     if not math.isfinite(signal_score) or signal_score < 0.0 or signal_score > 1.0:
         raise ValueError(f'signal_score must be between 0 and 1: {signal_score}')
 
-    if form_type in FORCED_SIGNAL_FORM_TYPES:
-        if signal_detection != 'signal':
-            raise ValueError(
-                f'signal_detection must be "signal" for {form_type} filings: {signal_detection}'
-            )
-        # signal_score is a fixed constant for periodic filings, not the
-        # model's own value - overwrite regardless of what was returned.
-        signal_score = FORCED_SIGNAL_SCORE
-    else:
-        expected = expected_signal_detection_for_score(signal_score)
-        if signal_detection != expected:
-            raise ValueError(
-                f'signal_detection must match score bands '
-                f'noise<= {WEAK_SIGNAL_SCORE_THRESHOLD:.2f}, '
-                f'weak_signal< {SIGNAL_SCORE_THRESHOLD:.2f}, '
-                f'signal>= {SIGNAL_SCORE_THRESHOLD:.2f}: '
-                f'{signal_detection} vs {signal_score}'
-            )
+    # 10-K/10-Q use the same noise/weak_signal/signal band logic as 8-K -
+    # routing these form types to simulation regardless of score is the
+    # caller's job (keyed on form_type, not signal_score); this validator
+    # no longer special-cases them.
+    expected = expected_signal_detection_for_score(signal_score)
+    if signal_detection != expected:
+        raise ValueError(
+            f'signal_detection must match score bands '
+            f'noise<= {WEAK_SIGNAL_SCORE_THRESHOLD:.2f}, '
+            f'weak_signal< {SIGNAL_SCORE_THRESHOLD:.2f}, '
+            f'signal>= {SIGNAL_SCORE_THRESHOLD:.2f}: '
+            f'{signal_detection} vs {signal_score}'
+        )
     if not signal_reason:
         raise ValueError('signal_reason must be non-empty')
     if materiality not in ALLOWED_MATERIALITY:
@@ -116,7 +99,7 @@ def validate_filing_classification(
         raise ValueError(f'already_disclosed must be a boolean: {already_disclosed!r}')
     if extraction_quality not in ALLOWED_EXTRACTION_QUALITY:
         raise ValueError(f'Invalid extraction_quality: {extraction_quality}')
-    if extraction_quality == 'failed' and form_type not in FORCED_SIGNAL_FORM_TYPES and signal_detection != 'noise':
+    if extraction_quality == 'failed' and signal_detection != 'noise':
         raise ValueError('signal_detection must be "noise" when extraction_quality is "failed"')
 
     if not isinstance(entities, list):
@@ -151,6 +134,8 @@ def build_filing_user_prompt(
     *,
     company_overview: dict[str, Any] | None = None,
     xbrl_facts: dict[str, Any] | None = None,
+    exhibit_fetch_status: str = 'not_applicable',
+    trailing_quarterly_revenue: list[dict[str, Any]] | None = None,
 ) -> str:
     metadata = {
         'ticker': filing.get('ticker', ''),
@@ -162,6 +147,7 @@ def build_filing_user_prompt(
         'period_of_report': filing.get('period_of_report', ''),
         'filer_category': filing.get('filer_category', ''),
         'accession_number': filing.get('accession_number', ''),
+        'exhibit_fetch_status': exhibit_fetch_status,
     }
     reference = company_overview or {}
     company_reference_data = {
@@ -182,6 +168,20 @@ def build_filing_user_prompt(
             'not tag that concept, not zero):\n'
         )
         prompt += json.dumps(xbrl_facts, ensure_ascii=False, indent=2)
+    if trailing_quarterly_revenue:
+        prompt += (
+            '\n\nTrailing quarterly revenue for this company, oldest first, from SEC\'s '
+            'own structured XBRL data (up to 8 quarters strictly before this filing\'s '
+            'period_of_report). Use this to judge whether THIS quarter\'s growth is normal '
+            'for this company or a real deviation - compute this quarter\'s YoY growth '
+            '(from the revenue/revenue_prior_year block above), compute the average YoY '
+            'growth across these trailing quarters, and band materiality on the DIFFERENCE '
+            'between the two, not on the raw growth percentage alone. A company that '
+            'consistently grows 60%+ every quarter is not "high" materiality for growing '
+            '60% again; a company whose growth suddenly drops from a 60% trailing average '
+            'to 12% is a real deceleration worth flagging even though 12% alone looks modest:\n'
+        )
+        prompt += json.dumps(trailing_quarterly_revenue, ensure_ascii=False, indent=2)
     prompt += '\n\nFiling text:\n' + (filing_text or '(no text available)')
     prompt += '\n\nReturn strict JSON only.'
     return prompt
@@ -201,16 +201,17 @@ def classify_filing(
     cache_system_prompt: bool = True,
     company_overview: dict[str, Any] | None = None,
     xbrl_facts: dict[str, Any] | None = None,
+    exhibit_fetch_status: str = 'not_applicable',
+    trailing_quarterly_revenue: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """extraction_found=False (10-K/10-Q only, set by the caller from
     extract_results_section()'s second return value) skips the LLM call
     entirely and returns a fixed noise/needs-review result - classifying
     against unreliable fallback text (XBRL tag noise, front-matter) produces
     a confident-looking but ungrounded result, which is worse than flagging
-    it honestly for manual review. This is the one case where a 10-K/10-Q
-    result is allowed to be "noise" despite FORCED_SIGNAL_FORM_TYPES - no LLM
-    call happened, so no real classification was made; this fallback means
-    "unclassifiable", not "classified as unimportant".
+    it honestly for manual review. No LLM call happened, so no real
+    classification was made; this fallback means "unclassifiable", not
+    "classified as unimportant".
 
     company_overview is the dict returned by adapters.news_client.get_company_overview()
     (market_cap, revenue_ttm, shares_outstanding, etc). Fetch once per ticker
@@ -228,6 +229,23 @@ def classify_filing(
     grounding strictly in the provided text. Passing exact figures explicitly
     removes the need for the model to recall or re-derive them from memory.
 
+    exhibit_fetch_status ("full"/"partial"/"not_applicable", set by the caller
+    from adapters.sec_edgar.fetch_filing_exhibits_text()'s second return value
+    for 8-Ks with item codes 2.02/7.01/8.01) tells the model definitively
+    whether the EX-99* exhibit appended to filing_text was actually fetched -
+    without this, the model can only guess from context whether "no figures
+    visible" means the exhibit is genuinely empty of them or the fetch failed,
+    which the prompt otherwise has no way to distinguish.
+
+    trailing_quarterly_revenue (10-K/10-Q only) is
+    adapters.sec_edgar.get_trailing_quarterly_revenue()'s output - up to 8
+    prior quarters of this company's own reported revenue. Lets the model
+    judge THIS quarter's growth against the company's own recent trend
+    instead of a fixed absolute-growth threshold - a fixed >10% band flags a
+    consistently high-growth filer as permanently "high" for being normal,
+    while missing the case where growth suddenly decelerates from a high
+    baseline to something that still looks fine in isolation.
+
     cache_system_prompt=True (default) marks the system prompt with an
     ephemeral cache breakpoint - unlike the news classifier, this prompt has
     no per-article dynamic example injection, so the ENTIRE system prompt is
@@ -241,6 +259,7 @@ def classify_filing(
             'item_codes': filing.get('item_codes', []),
             'accession_number': filing.get('accession_number', ''),
             'filed_at': filing.get('filed_at', ''),
+            'primary_doc_url': filing.get('primary_doc_url', ''),
         }
 
     form_type = filing.get('form_type', '')
@@ -252,6 +271,8 @@ def classify_filing(
         filing, filing_text,
         company_overview=company_overview,
         xbrl_facts=xbrl_facts,
+        exhibit_fetch_status=exhibit_fetch_status,
+        trailing_quarterly_revenue=trailing_quarterly_revenue,
     )
     errors: list[str] = []
     for model in models:
@@ -270,6 +291,7 @@ def classify_filing(
                 result['item_codes'] = filing.get('item_codes', [])
                 result['accession_number'] = filing.get('accession_number', '')
                 result['filed_at'] = filing.get('filed_at', '')
+                result['primary_doc_url'] = filing.get('primary_doc_url', '')
                 return result
             except Exception as exc:
                 errors.append(f'{model} attempt {attempt}: {exc}')
