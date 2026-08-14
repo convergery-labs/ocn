@@ -430,7 +430,17 @@ def _existing_accessions(ticker: str) -> set[str]:
 
 
 def run_sec_filings(tickers: list[str]) -> None:
-    """Fetch new 8-K/10-Q/10-K filings per ticker and write metadata to DynamoDB."""
+    """Fetch new 8-K/10-Q/10-K filings per ticker and write metadata to DynamoDB.
+
+    Only filings whose filed_at falls in the current calendar year are
+    written - fetch_recent_filings() returns EDGAR's full recent-filings
+    history per ticker (years back), but we only want a rolling current-year
+    window in DynamoDB, not an ever-growing multi-year backlog. This check
+    reads the year at call time, so it re-anchors automatically each January
+    without any config or code change - a filing fetched in December stays
+    filtered to that year; the same ticker's filings fetched in January are
+    checked against the new year.
+    """
     if not _acquire_lock("sec_filings"):
         logger.info("[POLLER] sec_filings already running — skipping this trigger")
         return
@@ -440,12 +450,21 @@ def run_sec_filings(tickers: list[str]) -> None:
         last_call: list[float] = [0.0]
         table = _table("sec_filings")
         written = 0
+        skipped_prior_year = 0
+        current_year = str(datetime.now(timezone.utc).year)
 
         for ticker in tickers:
             try:
                 seen = _existing_accessions(ticker)
                 filings = fetch_recent_filings(ticker, last_call)
-                new_filings = [f for f in filings if f["accession_number"] not in seen]
+                new_filings = [
+                    f for f in filings
+                    if f["accession_number"] not in seen and f.get("filed_at", "").startswith(current_year)
+                ]
+                skipped_prior_year += sum(
+                    1 for f in filings
+                    if f["accession_number"] not in seen and not f.get("filed_at", "").startswith(current_year)
+                )
                 for filing in new_filings:
                     table.put_item(Item={
                         "ticker": filing["ticker"],
@@ -469,6 +488,8 @@ def run_sec_filings(tickers: list[str]) -> None:
             except Exception as exc:
                 logger.error("[POLLER] sec_filings ticker=%s failed, skipping: %s", ticker, exc)
 
-        logger.info("[POLLER] sec_filings complete written=%d", written)
+        logger.info(
+            "[POLLER] sec_filings complete written=%d skipped_prior_year=%d", written, skipped_prior_year,
+        )
     finally:
         _release_lock("sec_filings")
