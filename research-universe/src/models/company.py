@@ -113,15 +113,24 @@ def get_company(company_id: str) -> dict[str, Any] | None:
 
 def list_companies(
     status: str | None = None,
+    country: str | None = None,
+    has_ticker: bool | None = None,
     limit: int = 5000,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
-    """Return companies, optionally filtered by status. Ordered by company_name."""
+    """Return companies, optionally filtered by status, country, and ticker presence. Ordered by company_name."""
     params: dict[str, Any] = {"limit": limit, "offset": offset}
     where = "WHERE c.ticker != ''"
     if status:
         where += " AND c.status = :status"
         params["status"] = status
+    if country:
+        where += " AND c.country ILIKE :country"
+        params["country"] = normalize_country(country)
+    if has_ticker is True:
+        where += " AND c.ticker != 'Private'"
+    elif has_ticker is False:
+        where += " AND c.ticker = 'Private'"
     with get_db() as conn:
         cur = conn.execute(
             f"""
