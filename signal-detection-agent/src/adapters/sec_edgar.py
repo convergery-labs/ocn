@@ -569,7 +569,7 @@ _TRAILING_QUARTERS_COUNT = 8
 
 def get_trailing_quarterly_revenue(
     company_facts: dict, period_of_report: str, form_type: str,
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
     """Return up to the 8 most recent QUARTERLY revenue figures strictly
     before period_of_report, from the same companyfacts document already
     fetched for extract_xbrl_facts_for_filing() - no second API call, since
@@ -604,20 +604,24 @@ def get_trailing_quarterly_revenue(
     identical quarter, any one is representative since restatements are rare
     and out of scope here).
 
-    Returns a list of {end, value} dicts, oldest first, capped at the 8 most
-    recent - callers pass this straight into the prompt for the model to
-    average and compare; the "8" figure is deliberately quarters, not a form
-    of trailing-year lookback, so it covers roughly 2 fiscal years regardless
-    of form type.
+    Returns {"quarters": [{end, value, yoy_growth_pct}, ...], "trailing_average_yoy_growth_pct":
+    float | None} - oldest quarter first, capped at the 8 most recent ("8" is
+    deliberately quarters, not a trailing-year lookback, so it covers ~2
+    fiscal years regardless of form type). yoy_growth_pct per quarter and the
+    trailing average are computed HERE, not left for the model - confirmed
+    empirically this session that gpt-4.1 gets this arithmetic wrong on real
+    filings (substituting sequential quarter-over-quarter ratios for true
+    year-over-year ratios), so the model should use these values verbatim
+    rather than recompute them from the raw quarter list.
     """
     usgaap = (company_facts.get("facts") or {}).get("us-gaap") or {}
     if not period_of_report:
-        return []
+        return {"quarters": [], "trailing_average_yoy_growth_pct": None}
     try:
         from datetime import date
         cutoff = date.fromisoformat(period_of_report)
     except ValueError:
-        return []
+        return {"quarters": [], "trailing_average_yoy_growth_pct": None}
 
     by_end: dict[str, dict] = {}
     for concept in _XBRL_FIELD_CONCEPTS["revenue"]:
@@ -651,5 +655,53 @@ def get_trailing_quarterly_revenue(
         # concepts (by_end already dedupes by end date) covers a filer's
         # full history regardless of which era's tag name it used when.
 
-    ordered = sorted(by_end.values(), key=lambda e: e["end"])[-_TRAILING_QUARTERS_COUNT:]
-    return [{"end": e["end"], "value": e["value"]} for e in ordered]
+    all_ordered = sorted(by_end.values(), key=lambda e: e["end"])
+    trailing = all_ordered[-_TRAILING_QUARTERS_COUNT:]
+
+    # Pre-compute each trailing quarter's own YoY growth here, in code, rather
+    # than handing the model 8 raw {end, value} points and a prompt
+    # instruction to "compute the average YoY growth across these trailing
+    # quarters" itself. Confirmed empirically this session: gpt-4.1
+    # systematically gets this arithmetic wrong on real NVDA/FLY filings -
+    # it substitutes sequential quarter-over-quarter ratios between adjacent
+    # list entries for true year-over-year ratios (same quarter, prior year),
+    # producing a materially wrong trailing-average figure that then
+    # propagates into a wrong signal_detection verdict. Sonnet gets this
+    # right most of the time in the same test, but there is no reason to
+    # leave EITHER model doing arithmetic on numbers this function already
+    # has - the same principle already applied to extract_xbrl_facts_for_filing
+    # (exact current-period figures, not model-extracted) extends naturally
+    # to this trailing comparison.
+    from datetime import timedelta
+
+    by_end_all = {e["end"]: e["value"] for e in all_ordered}
+
+    def _yoy_for(end: str, value: float) -> float | None:
+        try:
+            end_date = date.fromisoformat(end)
+        except ValueError:
+            return None
+        prior_target = end_date - timedelta(days=365)
+        prior_window = {(prior_target + timedelta(days=d)).isoformat() for d in range(-10, 11)}
+        for candidate_end in prior_window:
+            if candidate_end in by_end_all:
+                prior_value = by_end_all[candidate_end]
+                if prior_value:
+                    return (value - prior_value) / prior_value
+        return None
+
+    result_quarters = []
+    yoy_values = []
+    for e in trailing:
+        yoy = _yoy_for(e["end"], e["value"])
+        entry = {"end": e["end"], "value": e["value"], "yoy_growth_pct": round(yoy, 4) if yoy is not None else None}
+        result_quarters.append(entry)
+        if yoy is not None:
+            yoy_values.append(yoy)
+
+    trailing_average_yoy_growth_pct = round(sum(yoy_values) / len(yoy_values), 4) if yoy_values else None
+
+    return {
+        "quarters": result_quarters,
+        "trailing_average_yoy_growth_pct": trailing_average_yoy_growth_pct,
+    }

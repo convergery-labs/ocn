@@ -168,7 +168,7 @@ async def run_filing_classification_job(job_id: int, tickers: list[str] | None =
         return
 
     system_prompt = load_sec_filing_prompt()
-    models = [config.OPENAI_MODEL]
+    models = [config.SEC_FILING_MODEL]
     semaphore = asyncio.Semaphore(config.FILING_CLASSIFY_CONCURRENCY)
     # One shared clock for ALL sec.gov/data.sec.gov calls (filing text AND
     # XBRL) - two separate clocks would each individually respect

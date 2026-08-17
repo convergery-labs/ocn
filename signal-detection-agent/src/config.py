@@ -6,6 +6,7 @@ OPENAI_API_KEY: str = os.environ.get("OPENAI_API_KEY", "")
 OPENAI_BASE_URL: str = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
 OPENAI_MODEL: str = os.environ.get("SIGNAL_DETECTION_MODEL") or os.environ.get("OPENAI_MODEL") or "gpt-4.1"
 OPENAI_MODEL_V2: str = os.environ.get("SIGNAL_DETECTION_MODEL_V2") or OPENAI_MODEL
+SEC_FILING_MODEL: str = os.environ.get("SEC_FILING_MODEL") or OPENAI_MODEL
 OPENAI_TIMEOUT: int = int(os.environ.get("OPENAI_TIMEOUT", "90"))
 OPENAI_MAX_ATTEMPTS: int = int(os.environ.get("OPENAI_MAX_ATTEMPTS", "2"))
 CLASSIFY_CONCURRENCY: int = int(os.environ.get("CLASSIFY_CONCURRENCY", "8"))

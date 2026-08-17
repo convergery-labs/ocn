@@ -431,7 +431,18 @@ RULES
   routine/in-line or a real deviation.
 - Do not assign a category. Category is not part of this step.
 - materiality must be "none" when signal_detection is "noise", and must not
-  be "none" otherwise, for any form type.
+  be "none" otherwise, for any form type. materiality answers "does THIS
+  FILING change anything new about the company's outlook" — it is NOT a
+  measure of how large the company's absolute figures are. A confirmed real
+  failure mode: scoring a filing "noise" (correctly recognizing 61% revenue
+  growth matches this company's own ~48% trailing average, so nothing
+  deviates) but then still writing materiality "low" instead of "none",
+  reasoning that $27B of revenue is "not nothing" in absolute terms. Absolute
+  scale is irrelevant to materiality once you have already decided the
+  filing itself is routine/in-line — a large, healthy, unsurprising number is
+  still noise with materiality "none", exactly like a small, boring number
+  would be. Do not let the size of the dollar figures pull materiality away
+  from "none" after you have already scored signal_detection "noise".
 - entities should include the filing company and any other named companies,
   people, or regulators central to the classification, usually 1 to 5 items.
 - If the filing text is missing, truncated, or a stub, do not guess from
