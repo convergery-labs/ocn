@@ -146,6 +146,44 @@ def insert_filing_classification(job_id: int, filing: dict[str, Any], result: di
         )
 
 
+def insert_geopolitical_classification(job_id: int, article: dict[str, Any], result: dict[str, Any]) -> None:
+    """Upsert one agent_classifications row for a geopolitical article (source_type='geopolitical').
+
+    category and materiality are left NULL - the geopolitical prompt does not
+    assign either (deferred to a later stage, see prompts/geopolitical_classifier_v1.txt).
+    concreteness/economic_scale are the two factor sub-scores unique to this domain.
+    """
+    entity_names_normalized = [
+        e["name"].lower() for e in (result.get("entities") or []) if e.get("name")
+    ]
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO agent_classifications (
+                job_id, source_type, source_id, url, title,
+                signal_detection, signal_score, signal_reason,
+                concreteness, economic_scale,
+                entities_json, entity_names_normalized, published
+            ) VALUES (%s, 'geopolitical', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT DO NOTHING
+            """,
+            (
+                job_id,
+                article.get("id"),
+                article.get("url"),
+                article.get("title"),
+                result["signal_detection"],
+                float(result["signal_score"]),
+                result.get("signal_reason"),
+                result.get("concreteness"),
+                result.get("economic_scale"),
+                json.dumps(result.get("entities") or [], ensure_ascii=False),
+                entity_names_normalized,
+                article.get("published"),
+            ),
+        )
+
+
 def get_existing_filing_source_ids(source_ids: list[str]) -> set[str]:
     """Return the subset of source_ids (accession_numbers) already classified
     as source_type='sec_filing'. One batched query, not one per filing - used

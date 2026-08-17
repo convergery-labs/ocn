@@ -134,3 +134,8 @@ def init_db() -> None:
                 ADD CONSTRAINT agent_classifications_source_type_check
                     CHECK (source_type IN ('news', 'sec_filing', 'geopolitical', 'company_specific'))
         """)
+        conn.execute("""
+            ALTER TABLE agent_classifications
+                ADD COLUMN IF NOT EXISTS concreteness FLOAT,
+                ADD COLUMN IF NOT EXISTS economic_scale FLOAT
+        """)

@@ -20,10 +20,12 @@ from models.jobs import (
     get_completed_job_for_run,
     get_recent_entity_classifications,
     insert_classification,
+    insert_geopolitical_classification,
     update_job_status,
 )
 from pipeline.classifier import classify_article_two_stage, has_usable_body, load_prompt
 from pipeline.example_selector import ExampleSelector, parse_examples
+from pipeline.geopolitical_classifier import classify_geopolitical_article, load_geopolitical_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +72,49 @@ async def submit_run(
     return job_id, news_run_id, False
 
 
+async def _run_geopolitical_classification(job_id: int, usable: list[dict[str, Any]]) -> None:
+    """Single-pass classification for geopolitical_news articles - no STORM
+    second pass (the geopolitical prompt has no refine prompt), no category/
+    materiality, no entity-history/web-search context gathering.
+    """
+    system_prompt = load_geopolitical_prompt()
+    models = [config.OPENAI_MODEL]
+    semaphore = asyncio.Semaphore(config.CLASSIFY_CONCURRENCY)
+    loop = asyncio.get_event_loop()
+
+    async def classify_one(article: dict[str, Any]) -> bool:
+        async with semaphore:
+            try:
+                result = await loop.run_in_executor(
+                    _executor,
+                    lambda a=article: classify_geopolitical_article(
+                        a,
+                        system_prompt=system_prompt,
+                        models=models,
+                        api_key=config.OPENAI_API_KEY,
+                        base_url=config.OPENAI_BASE_URL,
+                        timeout=config.OPENAI_TIMEOUT,
+                        max_attempts=config.OPENAI_MAX_ATTEMPTS,
+                    ),
+                )
+                insert_geopolitical_classification(job_id, article, result)
+                return False
+            except Exception:
+                logger.exception(
+                    "Geopolitical classification failed for article %s (job %d)",
+                    article.get("url"), job_id,
+                )
+                return True
+
+    outcomes = await asyncio.gather(*[classify_one(a) for a in usable])
+    skipped = sum(outcomes)
+
+    if skipped == len(usable) and usable:
+        update_job_status(job_id, "failed", set_completed_at=True)
+    else:
+        update_job_status(job_id, "completed", set_completed_at=True)
+
+
 async def run_agent_pipeline(job_id: int, domain: str, news_run_id: int, limit: int | None = None) -> None:
     """Background task: fetch → classify → persist."""
     update_job_status(job_id, "running")
@@ -86,6 +131,10 @@ async def run_agent_pipeline(job_id: int, domain: str, news_run_id: int, limit: 
     if limit is not None:
         usable = usable[:limit]
     update_job_status(job_id, "running", article_count=len(usable))
+
+    if domain == config.GEOPOLITICAL_DOMAIN:
+        await _run_geopolitical_classification(job_id, usable)
+        return
 
     system_prompt_v1 = load_prompt(config.DEFAULT_PROMPT)
     system_prompt_v2 = load_prompt(config.DEFAULT_PROMPT_V2)

@@ -151,6 +151,10 @@ resource "aws_ecs_task_definition" "news_retrieval" {
           valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:ocn/${var.env}/news-retrieval:SERPAPI_KEY::"
         },
         {
+          name      = "SERPAPI_KEY_GEOPOLITICAL"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:ocn/${var.env}/news-retrieval:SERPAPI_KEY_GEOPOLITICAL::"
+        },
+        {
           name      = "NEWSAPI_KEY"
           valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:ocn/${var.env}/news-retrieval:NEWSAPI_KEY::"
         },
@@ -525,6 +529,7 @@ resource "aws_cloudwatch_event_rule" "signal_detection_agent_filings_daily" {
   name                = "${var.env}-signal-detection-agent-filings-daily"
   description         = "Classify new SEC 8-K/10-Q/10-K filings (fetched by news-retrieval's poller) for the tracked ticker universe once daily"
   schedule_expression = "cron(0 13 * * ? *)"
+  state               = "DISABLED"
 }
 
 
@@ -544,7 +549,7 @@ resource "aws_cloudwatch_event_target" "signal_detection_agent_filings_daily" {
     containerOverrides = [
       {
         name    = "signal-detection-agent"
-        command = ["python", "__main__.py", "classify-filings"]
+        command = ["python", "-m", "src", "classify-filings"]
       }
     ]
   })
@@ -903,7 +908,7 @@ resource "aws_ecs_service" "signal_herald" {
 
 resource "aws_cloudwatch_event_rule" "signal_herald_daily" {
   name                = "${var.env}-signal-herald-daily"
-  schedule_expression = "cron(0 14 * * ? *)"
+  schedule_expression = "cron(0 14 ? * MON-FRI *)"
 }
 
 
