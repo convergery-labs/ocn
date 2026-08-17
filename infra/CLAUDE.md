@@ -118,6 +118,7 @@ infra/
 | `OPENAI_BASE_URL` | hardcoded | `https://openrouter.ai/api/v1` |
 | `SIGNAL_DETECTION_MODEL` | hardcoded | `anthropic/claude-sonnet-4-6` |
 | `SIGNAL_DETECTION_MODEL_V2` | hardcoded | `openai/gpt-4o-mini` - second pass only |
+| `SEC_FILING_MODEL` | hardcoded | `openai/gpt-4.1` - SEC filing classification only; falls back to `SIGNAL_DETECTION_MODEL` if unset. Tested against 59 real filings: ~91-96% agreement with sonnet, plus a real hard-failure rate on NVDA 10-K/10-Q (schema-invalid `noise` + non-`none` materiality) - mitigated by normalizing `materiality` to `none` in `validate_filing_classification()` rather than rejecting. A residual ~4-9% label-disagreement rate vs sonnet on ambiguous NVDA deceleration judgment calls was not resolved by prompt tuning or a wider trailing-revenue window (sonnet itself is not fully stable on these same filings) - accepted as a known trade-off |
 | `OPENAI_API_KEY` | Secrets Manager | `ocn/{env}/signal-detection-agent:OPENAI_API_KEY` - OpenRouter key |
 
 ### api-gateway

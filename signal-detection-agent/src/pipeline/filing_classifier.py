@@ -91,7 +91,21 @@ def validate_filing_classification(
     if materiality not in ALLOWED_MATERIALITY:
         raise ValueError(f'Invalid materiality: {materiality}')
     if signal_detection == 'noise' and materiality != 'none':
-        raise ValueError('materiality must be "none" when signal_detection is "noise"')
+        # Confirmed empirically this session: gpt-4.1 (not sonnet) sometimes
+        # correctly judges a filing "noise" (score/reason both state the
+        # event is routine/in-line) but still writes a non-"none" materiality
+        # like "low", apparently conflating the absolute size of the
+        # underlying dollar figures with whether THIS filing deviates from
+        # baseline - three separate targeted prompt rewordings (including one
+        # naming this exact failure case) did not stop it. The model's own
+        # signal_detection judgment and reasoning are trustworthy here; only
+        # the materiality token is wrong, and always wrong in this one
+        # direction (never the reverse - weak_signal/signal paired with
+        # "none" has not been observed). Normalizing here rather than
+        # rejecting-and-retrying avoids failing the whole filing over a
+        # single self-contradictory field the model has already told us how
+        # to fix in its own text.
+        materiality = 'none'
     if signal_detection in {'weak_signal', 'signal'} and materiality == 'none':
         raise ValueError('materiality must not be "none" when signal_detection is "weak_signal" or "signal"')
 
@@ -135,7 +149,7 @@ def build_filing_user_prompt(
     company_overview: dict[str, Any] | None = None,
     xbrl_facts: dict[str, Any] | None = None,
     exhibit_fetch_status: str = 'not_applicable',
-    trailing_quarterly_revenue: list[dict[str, Any]] | None = None,
+    trailing_quarterly_revenue: dict[str, Any] | None = None,
 ) -> str:
     metadata = {
         'ticker': filing.get('ticker', ''),
@@ -168,18 +182,25 @@ def build_filing_user_prompt(
             'not tag that concept, not zero):\n'
         )
         prompt += json.dumps(xbrl_facts, ensure_ascii=False, indent=2)
-    if trailing_quarterly_revenue:
+    if trailing_quarterly_revenue and trailing_quarterly_revenue.get('quarters'):
+        this_quarter_yoy = None
+        if xbrl_facts:
+            revenue = xbrl_facts.get('revenue')
+            revenue_prior_year = xbrl_facts.get('revenue_prior_year')
+            if revenue is not None and revenue_prior_year:
+                this_quarter_yoy = round((revenue - revenue_prior_year) / revenue_prior_year, 4)
         prompt += (
-            '\n\nTrailing quarterly revenue for this company, oldest first, from SEC\'s '
-            'own structured XBRL data (up to 8 quarters strictly before this filing\'s '
-            'period_of_report). Use this to judge whether THIS quarter\'s growth is normal '
-            'for this company or a real deviation - compute this quarter\'s YoY growth '
-            '(from the revenue/revenue_prior_year block above), compute the average YoY '
-            'growth across these trailing quarters, and band materiality on the DIFFERENCE '
-            'between the two, not on the raw growth percentage alone. A company that '
-            'consistently grows 60%+ every quarter is not "high" materiality for growing '
-            '60% again; a company whose growth suddenly drops from a 60% trailing average '
-            'to 12% is a real deceleration worth flagging even though 12% alone looks modest:\n'
+            '\n\nTrailing quarterly revenue for this company, oldest first, from SEC\'s own '
+            'structured XBRL data (up to 8 quarters strictly before this filing\'s '
+            'period_of_report). yoy_growth_pct per quarter and trailing_average_yoy_growth_pct '
+            'below are ALREADY COMPUTED from SEC\'s own structured data - use them verbatim, '
+            'do NOT recompute or re-derive YoY growth yourself from the raw values. this_quarter_yoy_growth_pct '
+            f'for the filing you are classifying now is {this_quarter_yoy if this_quarter_yoy is not None else "unavailable"}. '
+            'Band materiality on the DIFFERENCE between this_quarter_yoy_growth_pct and '
+            'trailing_average_yoy_growth_pct, not on the raw growth percentage alone. A company '
+            'that consistently grows 60%+ every quarter is not "high" materiality for growing '
+            '60% again; a company whose growth suddenly drops from a 60% trailing average to 12% '
+            'is a real deceleration worth flagging even though 12% alone looks modest:\n'
         )
         prompt += json.dumps(trailing_quarterly_revenue, ensure_ascii=False, indent=2)
     prompt += '\n\nFiling text:\n' + (filing_text or '(no text available)')
@@ -202,7 +223,7 @@ def classify_filing(
     company_overview: dict[str, Any] | None = None,
     xbrl_facts: dict[str, Any] | None = None,
     exhibit_fetch_status: str = 'not_applicable',
-    trailing_quarterly_revenue: list[dict[str, Any]] | None = None,
+    trailing_quarterly_revenue: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """extraction_found=False (10-K/10-Q only, set by the caller from
     extract_results_section()'s second return value) skips the LLM call
@@ -239,12 +260,18 @@ def classify_filing(
 
     trailing_quarterly_revenue (10-K/10-Q only) is
     adapters.sec_edgar.get_trailing_quarterly_revenue()'s output - up to 8
-    prior quarters of this company's own reported revenue. Lets the model
-    judge THIS quarter's growth against the company's own recent trend
-    instead of a fixed absolute-growth threshold - a fixed >10% band flags a
-    consistently high-growth filer as permanently "high" for being normal,
-    while missing the case where growth suddenly decelerates from a high
-    baseline to something that still looks fine in isolation.
+    prior quarters of this company's own reported revenue, each with its own
+    yoy_growth_pct already computed, plus a trailing_average_yoy_growth_pct.
+    Lets the model judge THIS quarter's growth against the company's own
+    recent trend instead of a fixed absolute-growth threshold - a fixed >10%
+    band flags a consistently high-growth filer as permanently "high" for
+    being normal, while missing the case where growth suddenly decelerates
+    from a high baseline to something that still looks fine in isolation.
+    The YoY arithmetic is done here, not left to the model - confirmed
+    empirically this session that gpt-4.1 gets it wrong on real filings
+    (substituting sequential quarter-over-quarter ratios for true
+    year-over-year ratios), producing a wrong trailing average that then
+    propagates into a wrong signal_detection verdict.
 
     cache_system_prompt=True (default) marks the system prompt with an
     ephemeral cache breakpoint - unlike the news classifier, this prompt has
