@@ -66,6 +66,7 @@ infra/
 | `OPENROUTER_API_KEY` | Secrets Manager | `ocn/{env}/news-retrieval:OPENROUTER_API_KEY` |
 | `OPENROUTER_MODEL` | hardcoded | `openrouter/elephant-alpha` |
 | `SERPAPI_KEY` | Secrets Manager | `ocn/{env}/news-retrieval:SERPAPI_KEY` - optional; SerpAPI key for `google_news` sources |
+| `SERPAPI_KEY_GEOPOLITICAL` | Secrets Manager | `ocn/{env}/news-retrieval:SERPAPI_KEY_GEOPOLITICAL` - dedicated SerpAPI key used only for the `geopolitical_news` domain's `google_news` source (separate quota from `SERPAPI_KEY`) |
 | `NEWSAPI_KEY` | Secrets Manager | `ocn/{env}/news-retrieval:NEWSAPI_KEY` - optional; NewsAPI key for `newsapi` sources |
 | `ALPHA_VANTAGE_API_KEY` | Secrets Manager | `ocn/{env}/news-retrieval:ALPHA_VANTAGE_API_KEY` - optional; Alpha Vantage key for `company_news` domain |
 | `RESEARCH_UNIVERSE_URL` | hardcoded | `http://research-universe.{env}.ocn.internal:8007` - optional; used to fetch tickers dynamically for `company_news` domain |
