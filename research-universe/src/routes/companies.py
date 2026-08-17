@@ -58,12 +58,14 @@ class VerifyRequest(BaseModel):
 @router.get("", response_model=list[CompanyBrief])
 def list_companies(
     status: str | None = Query(default=None, description="Filter by status: 'verified' or 'pending_review'"),
+    country: str | None = Query(default=None, description="Filter by country, e.g. 'United States' (aliases like 'US'/'USA' accepted)"),
+    has_ticker: bool | None = Query(default=None, description="true = exclude private (ticker='Private') companies; false = only private companies"),
     limit: int = Query(default=5000, ge=1, le=10000),
     offset: int = Query(default=0, ge=0),
     _user: dict | None = Depends(get_optional_user),
 ) -> list[dict[str, Any]]:
     """Return all companies. Auth optional — public read access allowed."""
-    return company_model.list_companies(status=status, limit=limit, offset=offset)
+    return company_model.list_companies(status=status, country=country, has_ticker=has_ticker, limit=limit, offset=offset)
 
 
 @router.get("/count")
