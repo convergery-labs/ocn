@@ -1174,8 +1174,9 @@ COMPANY_NEWS_SOURCES: list[dict[str, Any]] = [
             "Company-specific news and sentiment for AI economy universe"
             " entities, fetched by ticker symbol via Alpha Vantage."
         ),
-        # Tickers are now managed via _AV_BASE_TICKERS in pipeline.py.
-        # This config is kept empty — the source row is required for domain registration.
+        # Tickers are now managed via get_tracked_ticker_universe() in pipeline.py,
+        # fetched live from research-universe. This config is kept empty — the
+        # source row is required for domain registration.
         "config": {},
     },
 ]

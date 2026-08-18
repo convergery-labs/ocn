@@ -140,7 +140,8 @@ async def get_sec_filings(ticker: str) -> list[dict[str, Any]]:
 
 async def get_tracked_tickers() -> list[str]:
     """GET /market/tracked-tickers from news-retrieval - the single source of
-    truth ticker universe (_AV_BASE_TICKERS). Read live rather than
+    truth ticker universe (fetched live from research-universe by
+    news-retrieval's get_tracked_ticker_universe()). Read live rather than
     duplicating the list here, so it never drifts out of sync when
     news-retrieval's list is updated.
 
