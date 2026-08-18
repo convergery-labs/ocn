@@ -108,7 +108,7 @@ resource "aws_ecs_task_definition" "news_retrieval" {
   cpu                      = "512"
   memory                   = "1024"
   execution_role_arn       = aws_iam_role.ecs_task_execution.arn
-  task_role_arn            = aws_iam_role.ecs_task_execution.arn
+  task_role_arn            = aws_iam_role.ecs_task_exec_ssm.arn
 
   container_definitions = jsonencode([
     {
@@ -197,11 +197,12 @@ resource "aws_service_discovery_service" "news_retrieval" {
 
 
 resource "aws_ecs_service" "news_retrieval" {
-  name            = "${var.env}-news-retrieval"
-  cluster         = aws_ecs_cluster.main.id
-  task_definition = aws_ecs_task_definition.news_retrieval.arn
-  desired_count   = 1
-  launch_type     = "FARGATE"
+  name                   = "${var.env}-news-retrieval"
+  cluster                = aws_ecs_cluster.main.id
+  task_definition        = aws_ecs_task_definition.news_retrieval.arn
+  desired_count          = 1
+  launch_type            = "FARGATE"
+  enable_execute_command = true
 
 
   network_configuration {

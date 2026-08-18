@@ -36,6 +36,7 @@ signal-detection-agent/DECK.md
 news-retrieval/SUBSTACK_SOURCES.md
 SENTIMENT_PROVIDERS.md
 SENTIMENT_PROVIDERS_SUMMARY.md
+OCN_ARCHITECTURE.md
 
 # Qdrant storage (if running locally outside Docker)
 qdrant_storage/
@@ -44,6 +45,7 @@ qdrant_storage/
 **/.terraform/
 *.tfstate
 *.tfstate.backup
+*.tfplan
 infra/staging/terraform.tfvars
 infra/production/terraform.tfvars.claude/worktrees/
 .claude/

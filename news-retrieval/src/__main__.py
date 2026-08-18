@@ -83,10 +83,13 @@ def poll_market(mode: str, tickers: str | None) -> None:
     import os
     from poller import run_daily, run_quotes, run_sec_filings
 
-    from pipeline import _AV_BASE_TICKERS
-    ticker_list = list(_AV_BASE_TICKERS)
+    from pipeline import get_tracked_ticker_universe
     if tickers:
         ticker_list = [t.strip().upper() for t in tickers.split(",") if t.strip()]
+    else:
+        universe_url = os.environ.get("RESEARCH_UNIVERSE_URL")
+        universe_api_key = os.environ.get("RESEARCH_UNIVERSE_API_KEY")
+        ticker_list = get_tracked_ticker_universe(universe_url, universe_api_key)
     logger.info("[POLLER] tickers=%d", len(ticker_list))
 
     if mode == "sec_filings":

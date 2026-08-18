@@ -438,12 +438,36 @@ def _fetch_newsapi(
     return articles
 
 
-def _fetch_universe_tickers(base_url: str, api_key: str | None = None) -> list[str]:
-    """Fetch verified ticker symbols from the research-universe API.
+# research-universe tickers use dot notation for both US share classes
+# (BRK.B) and foreign exchange suffixes (6503.JP, 000660.KS, ATCO-A.ST).
+# Alpha Vantage only covers US-listed symbols and expects a dash for share
+# classes (BRK-B). A true US share class is ALL-LETTERS.SINGLE-LETTER with
+# no dash; anything else containing a dot (numeric prefixes, 2+ letter
+# suffixes, or a dash elsewhere in the ticker) is a foreign exchange
+# suffix and gets dropped.
+_AV_SHARE_CLASS_RE = re.compile(r"^([A-Z]+)\.([A-Z])$")
 
-    Calls GET /companies?status=verified and returns a deduplicated list
-    of non-empty ticker strings. Falls back to [] on any error so the
-    caller can continue with config-only tickers.
+
+def _normalize_av_ticker(ticker: str) -> str | None:
+    """Convert a research-universe ticker to Alpha Vantage format, or None if unsupported."""
+    ticker = ticker.strip().upper()
+    share_class = _AV_SHARE_CLASS_RE.match(ticker)
+    if share_class:
+        return f"{share_class.group(1)}-{share_class.group(2)}"
+    if "." in ticker:
+        return None
+    return ticker
+
+
+def _fetch_universe_tickers(base_url: str, api_key: str | None = None) -> list[str]:
+    """Fetch US-listed ticker symbols from the research-universe API.
+
+    Calls GET /companies?country=United States&has_ticker=true (both verified
+    and pending_review companies), normalizes each ticker to Alpha Vantage
+    format (see _normalize_av_ticker), and drops any still-foreign tickers
+    that slip through the country filter (the data has some mislabeled rows,
+    e.g. Japan/HK/Korea listings tagged "United States"). Falls back to []
+    on any error so the caller can continue with config-only tickers.
 
     Args:
         base_url: research-universe service base URL, e.g.
@@ -454,13 +478,24 @@ def _fetch_universe_tickers(base_url: str, api_key: str | None = None) -> list[s
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         resp = httpx.get(
             f"{base_url}/companies",
-            params={"status": "verified", "limit": 10000},
+            params={
+                "country": "United States",
+                "has_ticker": "true",
+                "limit": 10000,
+            },
             headers=headers,
             timeout=30.0,
         )
         resp.raise_for_status()
         companies = resp.json()
-        tickers = [c["ticker"] for c in companies if c.get("ticker", "").strip()]
+        tickers = []
+        for c in companies:
+            raw = c.get("ticker", "").strip()
+            if not raw:
+                continue
+            normalized = _normalize_av_ticker(raw)
+            if normalized:
+                tickers.append(normalized)
         logger.info("[ALPHA_VANTAGE] fetched %d tickers from universe API", len(tickers))
         return tickers
     except Exception as exc:
@@ -475,76 +510,23 @@ def _fetch_universe_tickers(base_url: str, api_key: str | None = None) -> list[s
 # - 1 ticker per call (multi-ticker requests return far fewer articles)
 _AV_CALLS_PER_MINUTE = 75
 _AV_MIN_INTERVAL = 60.0 / _AV_CALLS_PER_MINUTE  # ~0.8 seconds between calls
+ 
 
-# Hardcoded 500 popular US-listed AI-economy tickers for Alpha Vantage.
-# Dynamic fetch via research-universe API can ADD new tickers on top of this list
-# but will never overwrite it — these are the guaranteed baseline.
-#count = 453
-_AV_BASE_TICKERS_deprecated: list[str] = [
-    "NVDA","MSFT","AAPL","AMZN","GOOGL","META","TSLA","AVGO","ORCL","AMD",
-    "CRM","NOW","INTU","ADBE","CSCO","IBM","TXN","QCOM","ARM","INTC",
-    "AMAT","LRCX","KLAC","SNPS","CDNS","MRVL","ANSS","FTNT","PANW","CRWD",
-    "ZS","OKTA","DDOG","SNOW","MDB","PLTR","NET","ANET","SMCI","DELL",
-    "HPE","NTAP","PSTG","WDC","STX","KEYS","TRMK","VIAV","LITE","COHR",
-    "IPGP","IIVI","MKSI","ENTG","ACLS","ONTO","FORM","CAMT","COHU","KLIC",
-    "ACMR","LASE","RMBS","SIMO","ALGM","CEVA","SLAB","SITM","MTSI","NXPI",
-    "MCHP","MPWR","SWKS","QRVO","ADI","LSCC","AMBA","POWI","AXTI","AOSL",
-    "DIOD","IXYS","SMTC","VSH","CRUS","NVMI","UCTT","AAOI","IESC","RBBN",
-    "INFN","CIEN","COMM","CASA","CALX","ADTN","IDCC","EXTR","FFIV","JNPR",
-    "NTGR","EQIX","DLR","AMT","CCI","SBAC","IRM","CONE","QTS","REIT",
-    "GLPK","COLD","NSA","LSI","UNIT","CORR","NLST","CLFD","XTLB","UBER",
-    "LYFT","DASH","ABNB","BKNG","EXPE","TRIP","OPEN","RDFN","Z","SHOP",
-    "ETSY","EBAY","W","WISH","OSTK","PRTS","REAL","RENT","SQ","PYPL",
-    "AFRM","UPST","SOFI","LC","OPFI","DAVE","MOGO","CURO","COIN","MSTR",
-    "RIOT","MARA","BTDR","HUT","CIFR","IREN","WULF","CORZ","GOOG","SNAP",
-    "PINS","RDDT","MTCH","BUMBLE","IAC","NFLX","DIS","WBD","PARA","FOX",
-    "FOXA","SIRI","SPOT","SONO","RBLX","U","EA","TTWO","ATVI","NTES",
-    "SE","GRAB","GOTO","BABA","JD","PDD","BIDU","TCEHY","TME","HUYA",
-    "DOYU","IQ","BILI","TSM","ASML","SAP","CFLT","GTLB","HUBS","BILL",
-    "PAYC","PCTY","SMAR","APPN","MNDY","ASAN","JAMF","DOCN","DOMO","BOX",
-    "ALB","FCX","MP","RIO","CCJ","NEE","VST","CEG","GEV","NRG",
-    "TOELY","MU","VRT","TT","MOD","FIX","ETN","APH","PWR","ISRG",
-    "LMT","AXON","WDAY","VEEV","TEAM","ZM","DOCU","S","TENB","RPD",
-    "CYBR","QLYS","VRNT","SAIL","ENFN","RDWR","AI","BBAI","SOUN","GFAI",
-    "HOOD","NU","FLUT","MELI","BRZE","PATH","NVTS","ACHR","JOBY",
-    "RKLB","LUNR","PL","SPIR","HII","RTX","BA","NOC","GD","RIVN",
-    "LCID","XPEV","LI","NIO","SDGR","RXRX","TWST","ILMN","TEM",
-    "MDAI","VZ","T","TMUS","ADSK","ANGI","AZPN","BL",
-    "CDAY","CORT","CWAN","ESTC","FIVN","FOUR","FRSH","GENI","GWRE","HCP",
-    "HIMS","IO","KROS","LPSN","MANH","NCNO","NTNX","PCVX","PRGS","RAMP",
-    "RNG","SPT","TASK","TOST","TXRH","TYRA","VNET","VRNS","WEX",
-    "WOLF","XPOF","ZI","AMKR","AEHR","ASYS","CAVM","CLAR","ENVX",
-    "GFS","HIMX","IMOS","INTF","IXHL","KOPN","MRAM","NUVL","NVEC",
-    "PLAB","PRCT","PSI","ACAD","APLT","ARWR","BEAM","BLUE","CGEM",
-    "DNLI","EDIT","FOLD","GERN","GRPH","IMVT","IONS","IOVA","ITRI","KDNY",
-    "KRYS","LOGC","NKLA","NTLA","PACB","PRME","PTGX","REGN","RGEN","RLAY",
-    "RNA","ROOF","ACIW","ACVA","BWXT","CACI","DRS","FLIR",
-    "HEI","KTOS","LDOS","MANT","MRCY","PSN","SAIC","SPCE","SPY","SWAV",
-    "TDY","TXT","VRSN","CMBM","CSGS","DSGX","EGHT","FSLY","GCMG",
-    "GLBE","GWAV","ITRN","LMND","LPTH","MIME","MNKD","MXIM","BNTX","CFFE",
-    "CHX","CNXC","CREE","DOOO","DSEY","FARO","FLEX","FROG","GCBC",
-    "HLIO","IRBT","ITIC","JMIA","KPLT","LIQT","MNSO","NCTY","NEPT",
-    "NFLY","NKTR","NLOK","NOVA","NUAN","AKAM","ALTR","APPF","APPM","ARIS",
-    "AVLR","BCOV","BFLY","BIGC","BLKB","BVS","CARG","CGNT","CHKP","CLOU",
-    "CODA","CPRT","DCBO",
-    "SMR","TER","AZN","LLY","RHHBY","GS","ECL","DE",
-    "AEM","CC","AEIS","LNT","ASPI","APD","ATI","ALAB","ARQQ","BZAI",
-    "BMI","BX","CLS","APP","CLRO","AVAV","GHSI","ABBV","ABSI","ADPT",
-    "ALNY","ASTS","FLY","TXG","DV","MGNI","BIOA","BYDDY","BRK.B",
-]
+def get_tracked_ticker_universe(
+    universe_url: str | None, universe_api_key: str | None = None,
+) -> list[str]:
+    """Single source of truth for the tracked ticker universe: US-listed
+    tickers fetched live from research-universe, normalized and deduped.
+    Used by both the Alpha Vantage fetch (this module) and the
+    /market/tracked-tickers route, so the two never drift apart.
 
-
-
-# 60-ticker curated list
-_AV_BASE_TICKERS: list[str] = [
-    "AEM", "CC", "AEIS", "LNT", "BRK-B", "ASPI", "ACMR", "APD", "ARM", "AXTI",
-    "AMD", "ATI", "AMKR", "ALAB", "CDNS", "MU", "NVDA", "ARQQ", "BZAI", "AVGO",
-    "ADTN", "APH", "ANET", "AMT", "BMI", "BX", "CLS", "T", "BABA", "GOOG",
-    "AMZN", "META", "MSFT", "ADBE", "APP", "BBAI", "CRWD", "PLTR", "PANW", "AVAV",
-    "TSLA", "ABBV", "ABSI", "ADPT", "ALNY", "BIOA", "BNTX", "BFLY", "MDT", "ASTS",
-    "CACI", "FLY", "AFRM", "XYZ", "COIN", "ECL", "TXG", "DASH", "DV", "MGNI",
-]  # 60 tickers
-
+    Returns [] if universe_url is not set or research-universe is
+    unreachable - callers treat an empty list as "skip this poll run"
+    rather than falling back to a hardcoded list.
+    """
+    if not universe_url:
+        return []
+    return list(dict.fromkeys(_fetch_universe_tickers(universe_url, universe_api_key)))
 
 
 def _fetch_alpha_vantage(
@@ -556,13 +538,15 @@ def _fetch_alpha_vantage(
     """Fetch company-specific news from Alpha Vantage News & Sentiments API.
 
     One API call per ticker — multi-ticker requests return far fewer articles.
-    Keep config.tickers in seed.py to <= 500 to stay within the 500 calls/day quota.
+    Premium key has no daily call cap, only the per-minute rate limit above.
 
     Args:
         sources: List of alpha_vantage source dicts with ``config.tickers``.
         alpha_vantage_key: Alpha Vantage API key.
-        universe_url: research-universe base URL; if set, tickers are fetched
-            dynamically. Falls back to config tickers if unreachable.
+        universe_url: research-universe base URL; tickers are fetched
+            dynamically from here (see get_tracked_ticker_universe). If
+            unset or unreachable, no tickers are fetched and this run
+            is skipped.
         universe_api_key: Service API key (ru_ prefix) for research-universe auth.
 
     Returns:
@@ -574,21 +558,13 @@ def _fetch_alpha_vantage(
     cutoff = datetime.now(timezone.utc) - timedelta(days=_av_cutoff_days)
     time_from = cutoff.strftime("%Y%m%dT%H%M")
 
-    tickers: list[str] = list(_AV_BASE_TICKERS)
-
-    # Dynamic fetch from research-universe is wired but disabled:
-    # _AV_BASE_TICKERS already fills the 500-ticker daily quota so dynamic
-    # tickers would be cut off anyway. Re-enable when base list is reduced.
-    # if universe_url:
-    #     dynamic = _fetch_universe_tickers(universe_url, universe_api_key)
-    #     tickers.extend(dynamic)
-    # tickers = list(dict.fromkeys(tickers))
+    tickers = get_tracked_ticker_universe(universe_url, universe_api_key)
 
     if not tickers:
         logger.warning("[ALPHA_VANTAGE] no tickers configured, skipping")
         return []
 
-    logger.info("[ALPHA_VANTAGE] tickers=%d (base=%d)", len(tickers), len(_AV_BASE_TICKERS))
+    logger.info("[ALPHA_VANTAGE] tickers=%d", len(tickers))
 
     # Fixed interval: 1 call/sec to stay within 60/min steady rate
     last_call_time: list[float] = [0.0]

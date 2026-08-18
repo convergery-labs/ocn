@@ -136,11 +136,17 @@ def get_sec_filings(ticker: str) -> dict:
 
 @router.get("/market/tracked-tickers")
 def get_tracked_tickers() -> dict:
-    """The tracked ticker universe (_AV_BASE_TICKERS) - single source of truth
-    for which companies this system polls market/filing data for. Other
-    services (e.g. signal-detection-agent's SEC filing classification job)
-    read this instead of duplicating the list, so it never drifts out of sync.
+    """The tracked ticker universe - single source of truth for which
+    companies this system polls market/filing data for. Delegates to
+    pipeline.get_tracked_ticker_universe(), the same function the Alpha
+    Vantage fetch itself uses, so this route and the AV poller never
+    drift apart. Other services (e.g. signal-detection-agent's SEC filing
+    classification job) read this instead of duplicating the list.
     """
-    from pipeline import _AV_BASE_TICKERS
+    from pipeline import get_tracked_ticker_universe
 
-    return {"tickers": list(_AV_BASE_TICKERS)}
+    universe_url = os.environ.get("RESEARCH_UNIVERSE_URL")
+    universe_api_key = os.environ.get("RESEARCH_UNIVERSE_API_KEY")
+    tickers = get_tracked_ticker_universe(universe_url, universe_api_key)
+
+    return {"tickers": tickers}
