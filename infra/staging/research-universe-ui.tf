@@ -53,8 +53,12 @@ resource "aws_cloudfront_distribution" "research_universe_ui" {
       https_port               = 443
       origin_protocol_policy   = "http-only"
       origin_ssl_protocols     = ["TLSv1.2"]
-      origin_read_timeout      = 300  # match ALB idle_timeout - needed for SSE streaming
-      origin_keepalive_timeout = 60
+      # 300s (matching ALB idle_timeout, for SSE streaming) was attempted but
+      # rejected by CloudFront - origin_read_timeout has a default account
+      # quota max of 60s (AWS Support limit-increase required to go higher).
+      # Set to match what's actually live until that quota increase is filed.
+      origin_read_timeout      = 30
+      origin_keepalive_timeout = 5
     }
   }
 

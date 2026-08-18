@@ -193,7 +193,7 @@ resource "aws_dynamodb_table" "market_lock" {
 
 resource "aws_iam_role_policy" "news_retrieval_dynamodb_market" {
   name = "${var.env}-news-retrieval-dynamodb-market"
-  role = aws_iam_role.ecs_task_execution.id
+  role = aws_iam_role.ecs_task_exec_ssm.id
 
   policy = jsonencode({
     Version = "2012-10-17"

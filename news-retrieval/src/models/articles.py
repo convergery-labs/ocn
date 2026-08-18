@@ -75,6 +75,28 @@ def filter_articles_for_window(
     return filtered
 
 
+def expire_articles_for_domain(domain: str, days: int) -> int:
+    """Delete articles for a domain published more than ``days`` days ago.
+
+    Articles with a NULL ``published`` date are never deleted (fail-open) -
+    there is no reliable age to judge them by, and dropping them silently
+    would lose real data. Returns the number of rows deleted.
+    """
+    with get_db() as conn:
+        cur = conn.execute(
+            """
+            DELETE FROM articles a
+            USING runs r
+            WHERE a.run_id = r.id
+              AND r.domain = :domain
+              AND a.published IS NOT NULL
+              AND a.published < NOW() - (:days || ' days')::INTERVAL
+            """,
+            {"domain": domain, "days": days},
+        )
+        return cur.rowcount
+
+
 def get_already_stored_urls(urls: list[str]) -> set[str]:
     """Return the subset of ``urls`` already stored, across all domains.
 
