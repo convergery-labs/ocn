@@ -63,6 +63,18 @@ def trigger(domain: str, days_back: int) -> None:
     logger.info("Pipeline complete — run_id=%d", result["run_id"])
 
 
+@cli.command("expire-articles")
+@click.option("--domain", required=True, help="Domain slug to expire articles for, e.g. geopolitical_news.")
+@click.option("--days", default=7, show_default=True, help="Delete articles published more than this many days ago.")
+def expire_articles(domain: str, days: int) -> None:
+    """Delete old articles for one domain. Runs to completion and exits."""
+    from models.articles import expire_articles_for_domain
+
+    init_db()
+    deleted = expire_articles_for_domain(domain, days)
+    logger.info("[EXPIRE] domain=%s days=%d deleted=%d", domain, days, deleted)
+
+
 @cli.command("poll-market")
 @click.option(
     "--mode",

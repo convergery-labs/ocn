@@ -143,10 +143,13 @@ resource "aws_security_group" "research_universe" {
   name   = "${var.env}-research-universe"
   vpc_id = var.vpc_id
   ingress {
-    from_port       = 8007
-    to_port         = 8007
-    protocol        = "tcp"
-    security_groups = [aws_security_group.alb.id]
+    from_port = 8007
+    to_port   = 8007
+    protocol  = "tcp"
+    security_groups = [
+      aws_security_group.alb.id,
+      aws_security_group.news_retrieval.id,
+    ]
   }
   egress {
     from_port   = 0

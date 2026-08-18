@@ -179,7 +179,17 @@ resource "aws_ecs_task_definition" "news_retrieval" {
   ])
 
   lifecycle {
-    ignore_changes = [container_definitions]
+    # task_role_arn is also ignored, not just container_definitions - it's a
+    # sibling top-level attribute that Terraform's state has drifted on
+    # (stuck pointing at ecs_task_execution while the live task now uses
+    # ecs_task_exec_ssm for ECS exec support). Without this, a real
+    # `terraform apply` would force-replace this task definition purely to
+    # reconcile task_role_arn, rebuilding container_definitions from this
+    # file's own template in the process - which bakes in image_tag's
+    # unsafe "latest" default instead of the SHA-pinned image CI/CD
+    # actually deployed. Same class of drift as container_definitions;
+    # excluding it here closes that gap the same way.
+    ignore_changes = [container_definitions, task_role_arn]
   }
 }
 
@@ -265,7 +275,12 @@ resource "aws_cloudwatch_event_target" "news_retrieval_geopolitical_news_daily" 
   role_arn = aws_iam_role.ecs_events.arn
 
   ecs_target {
-    task_definition_arn = aws_ecs_task_definition.news_retrieval.arn
+    # Family-only ARN (no revision suffix) - CloudWatch resolves this to
+    # whichever revision is currently ACTIVE at trigger time, so scheduled
+    # runs never pin to a stale revision left behind in Terraform state
+    # (this rule's target previously pinned revision 22 while the live
+    # service had moved on to revision 38+, via CI/CD deploys outside TF).
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.news_retrieval.family}"
     launch_type         = "FARGATE"
     network_configuration {
       subnets          = var.public_subnet_ids
@@ -279,6 +294,41 @@ resource "aws_cloudwatch_event_target" "news_retrieval_geopolitical_news_daily" 
       {
         name    = "news-retrieval"
         command = ["python", "__main__.py", "trigger", "--domain", "geopolitical_news", "--days-back", "1"]
+      }
+    ]
+  })
+}
+
+resource "aws_cloudwatch_event_rule" "news_retrieval_geopolitical_news_expire_weekly" {
+  name = "${var.env}-news-retrieval-geopolitical-news-expire-weekly"
+  # Sunday 04:00 UTC - 2 hours after the daily 02:00 UTC geopolitical_news
+  # fetch, which typically completes by ~02:30-02:35 UTC, so this never
+  # races with that day's ingest.
+  schedule_expression = "cron(0 4 ? * SUN *)"
+}
+
+resource "aws_cloudwatch_event_target" "news_retrieval_geopolitical_news_expire_weekly" {
+  rule     = aws_cloudwatch_event_rule.news_retrieval_geopolitical_news_expire_weekly.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+
+  ecs_target {
+    # Family-only ARN (no revision suffix) - see comment on the daily fetch
+    # target above for why this is unpinned rather than a specific revision.
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.news_retrieval.family}"
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets          = var.public_subnet_ids
+      security_groups  = [var.news_sg_id]
+      assign_public_ip = true
+    }
+  }
+
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "news-retrieval"
+        command = ["python", "__main__.py", "expire-articles", "--domain", "geopolitical_news", "--days", "7"]
       }
     ]
   })
@@ -772,6 +822,10 @@ resource "aws_ecs_task_definition" "lucky_clarke" {
       }
     }
   ])
+
+  lifecycle {
+    ignore_changes = [container_definitions]
+  }
 }
 
 
@@ -810,6 +864,8 @@ resource "aws_ecs_service" "lucky_clarke" {
     ignore_changes = [task_definition]
   }
 }
+
+
 
 
 data "aws_secretsmanager_secret" "signal_herald" {
@@ -869,6 +925,10 @@ resource "aws_ecs_task_definition" "signal_herald" {
       }
     }
   ])
+
+  lifecycle {
+    ignore_changes = [container_definitions]
+  }
 }
 
 
