@@ -91,6 +91,8 @@ AV (Alpha Vantage) data is never fetched on the request path. A background polle
 
 Run manually: `python __main__.py poll-market --mode quotes`
 
+DynamoDB access for the poller is granted via an IAM role policy (`aws_iam_role_policy.news_retrieval_dynamodb_market` in `infra/modules/ecs_cluster/market_data.tf`) attached to `ecs_task_exec_ssm` (the same role used for ECS exec) - not the plain `ecs_task_execution` role. If `task_role_arn` on the news-retrieval task definition ever changes again, this policy attachment must move with it, or DynamoDB writes will start failing with an access-denied error that looks unrelated to the actual cause.
+
 ### DynamoDB tables (eu-north-1, PAY_PER_REQUEST, IAM auth)
 
 | Table | Partition key | Sort key | TTL | Mode |
@@ -123,6 +125,25 @@ Fetched from SEC EDGAR (`data.sec.gov`), not Alpha Vantage. Ticker→CIK mapping
 ### Ticker universe
 
 Single source of truth: `get_tracked_ticker_universe()` in `src/pipeline.py`, which fetches US-listed tickers live from research-universe (`GET /companies?country=United States&has_ticker=true`, requires `RESEARCH_UNIVERSE_URL`/`RESEARCH_UNIVERSE_API_KEY`) and normalizes them to Alpha Vantage/SEC EDGAR format (`_normalize_av_ticker`: dot share-class suffixes like `BRK.B` → `BRK-B`; other dotted tickers, e.g. foreign exchange suffixes, are dropped). Returns `[]` (poll run skipped) if `RESEARCH_UNIVERSE_URL` is unset or research-universe is unreachable — there is no hardcoded fallback list. Used by both the Alpha Vantage fetch and the `GET /market/tracked-tickers` route, so they never drift apart.
+
+This call crosses a security-group boundary: `research_universe`'s security group must allow ingress on port 8007 from `news_retrieval`'s security group (in addition to the ALB), or the request silently times out rather than erroring clearly — see `infra/modules/security_groups/main.tf`.
+
+## Article Retention (Postgres)
+
+Unlike the DynamoDB market-data tables (which all use native TTL), the Postgres `articles` table has no built-in expiry — rows persist indefinitely by default. Two domains have an explicit weekly cleanup job; every other domain's articles are retained forever.
+
+Manual run: `python __main__.py expire-articles --domain <slug> --days <n>` - deletes articles for one domain published more than `--days` days ago (default 7); rows with a NULL `published` date are never deleted (fail-open, no reliable age to judge them by). One-shot, runs to completion and exits, same shape as `trigger` and `poll-market`.
+
+| Domain | Retention | Schedule (CloudWatch) | Rationale |
+|--------|-----------|------------------------|-----------|
+| `geopolitical_news` | 7 days | Sunday 04:00 UTC | Short-lived event coverage; GDELT/SerpAPI volume is high and low-value past a week |
+| `company_news` | 30 days | Sunday 05:00 UTC | Matches the TTL already used for Alpha Vantage's other data types (`ocn-market-overview`, `ocn-market-earnings`) |
+
+Both schedules run after that domain's own daily fetch completes (`geopolitical_news` fetches at 02:00 UTC, `company_news` at 01:00 UTC) and are offset from each other, so no two scheduled jobs overlap. CloudWatch targets reference the task definition by family name only (no revision pinned), so a scheduled run always launches whatever revision is currently `ACTIVE` — see `infra/CLAUDE.md` for why revision-pinned targets are a real drift risk in this repo.
+
+### GDELT source scope: `geopolitical_news`
+
+The `geopolitical_news` domain's GDELT source (`source_type = 'gdelt'`) queries are scoped with `sourcecountry:US` on every theme query (e.g. `theme:SANCTIONS sourcelang:english sourcecountry:US`) - used as a proxy for "does this event involve or affect the US," on the reasoning that a US-relevant event is highly likely to be covered by at least one US-domiciled outlet. Real tradeoff: this can miss US-relevant stories where foreign outlets (Reuters, BBC, Al Jazeera, etc.) cover an event before/instead of domestic US press. Source of truth for the query list: `GDELT_SOURCE` in `src/seed.py` - existing rows are `ON CONFLICT (url) DO NOTHING` on seed, so changing this list in code does **not** retroactively update an already-seeded database; an already-existing source row must be updated directly (SQL `UPDATE sources SET config = ...`) for the change to take effect.
 
 ## Guidance
 - Read only the docs relevant to your task - not all of them
