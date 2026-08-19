@@ -19,6 +19,7 @@
 | `src/seed.py` | Idempotent batch seed for `run_statuses`, `frequencies`, `domains`, `sources`, and admin API key |
 | `src/poller.py` | Background market data poller: fetches from Alpha Vantage (GLOBAL_QUOTE, OVERVIEW, EARNINGS, TIME_SERIES_DAILY_ADJUSTED, MARKET_STATUS) and SEC EDGAR (8-K/10-Q/10-K metadata) and writes to DynamoDB; three modes — `quotes` (every 15 min), `daily` (once a day), `sec_filings` (once a day); distributed lock via `ocn-market-lock` prevents overlapping runs |
 | `src/sec_edgar.py` | SEC EDGAR fetch helpers: ticker→CIK mapping (`company_tickers.json`, cached) + per-CIK recent filings lookup (`submissions/CIK{cik}.json`), filtered to 8-K/10-Q/10-K; returns metadata + primary document link only |
+| `src/models/articles.py` | Article queries: pagination, dedup helpers, `expire_articles_for_domain(domain, days)` - deletes articles for one domain published more than `days` days ago (NULL `published` rows are never deleted) |
 | `src/models/` | Pydantic request models + SQL query functions per entity |
 | `src/routes/` | FastAPI `APIRouter` definitions, one file per resource |
 | `src/routes/market.py` | Market data read endpoints: 6 `GET` routes reading from DynamoDB, served at `/market/*` |

@@ -334,6 +334,188 @@ resource "aws_cloudwatch_event_target" "news_retrieval_geopolitical_news_expire_
   })
 }
 
+resource "aws_cloudwatch_event_rule" "news_retrieval_company_news_expire_weekly" {
+  name = "${var.env}-news-retrieval-company-news-expire-weekly"
+  # Sunday 05:00 UTC - after the daily 01:00 UTC company_news fetch and
+  # after geopolitical_news's own 04:00 UTC expiry job, so neither cleanup
+  # job overlaps with a fetch or with each other.
+  schedule_expression = "cron(0 5 ? * SUN *)"
+}
+
+resource "aws_cloudwatch_event_target" "news_retrieval_company_news_expire_weekly" {
+  rule     = aws_cloudwatch_event_rule.news_retrieval_company_news_expire_weekly.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+
+  ecs_target {
+    # Family-only ARN (no revision suffix) - see comment on the daily fetch
+    # target above for why this is unpinned rather than a specific revision.
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.news_retrieval.family}"
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets          = var.public_subnet_ids
+      security_groups  = [var.news_sg_id]
+      assign_public_ip = true
+    }
+  }
+
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "news-retrieval"
+        # 30 days - matches the TTL already used for Alpha Vantage's other
+        # data types (company overview, earnings) in DynamoDB, per poller.py.
+        command = ["python", "__main__.py", "expire-articles", "--domain", "company_news", "--days", "30"]
+      }
+    ]
+  })
+}
+
+resource "aws_cloudwatch_event_rule" "news_retrieval_vc_commentary_expire_weekly" {
+  name = "${var.env}-news-retrieval-vc-commentary-expire-weekly"
+  # Sunday 06:00 UTC - after the daily 03:00 UTC vc_commentary fetch and
+  # after geopolitical_news (04:00 UTC) / company_news (05:00 UTC) expiry
+  # jobs, so no two scheduled jobs overlap.
+  schedule_expression = "cron(0 6 ? * SUN *)"
+}
+
+resource "aws_cloudwatch_event_target" "news_retrieval_vc_commentary_expire_weekly" {
+  rule     = aws_cloudwatch_event_rule.news_retrieval_vc_commentary_expire_weekly.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+
+  ecs_target {
+    # Family-only ARN (no revision suffix) - see comment on the daily fetch
+    # target above for why this is unpinned rather than a specific revision.
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.news_retrieval.family}"
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets          = var.public_subnet_ids
+      security_groups  = [var.news_sg_id]
+      assign_public_ip = true
+    }
+  }
+
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "news-retrieval"
+        # 30 days - matches company_news's retention window.
+        command = ["python", "__main__.py", "expire-articles", "--domain", "vc_commentary", "--days", "30"]
+      }
+    ]
+  })
+}
+
+resource "aws_cloudwatch_event_rule" "news_retrieval_adverse_media_expire_weekly" {
+  name = "${var.env}-news-retrieval-adverse-media-expire-weekly"
+  # Sunday 06:15 UTC - offset from vc_commentary's own 06:00 UTC expiry job
+  # above, so neither cleanup job overlaps with the other.
+  schedule_expression = "cron(15 6 ? * SUN *)"
+}
+
+resource "aws_cloudwatch_event_target" "news_retrieval_adverse_media_expire_weekly" {
+  rule     = aws_cloudwatch_event_rule.news_retrieval_adverse_media_expire_weekly.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+
+  ecs_target {
+    # Family-only ARN (no revision suffix) - see comment on the daily fetch
+    # target above for why this is unpinned rather than a specific revision.
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.news_retrieval.family}"
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets          = var.public_subnet_ids
+      security_groups  = [var.news_sg_id]
+      assign_public_ip = true
+    }
+  }
+
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "news-retrieval"
+        # 30 days - matches company_news's retention window.
+        command = ["python", "__main__.py", "expire-articles", "--domain", "adverse_media", "--days", "30"]
+      }
+    ]
+  })
+}
+
+resource "aws_cloudwatch_event_rule" "news_retrieval_ai_news_expire_weekly" {
+  name = "${var.env}-news-retrieval-ai-news-expire-weekly"
+  # Sunday 06:30 UTC - offset from adverse_media's own 06:15 UTC expiry job
+  # above, so neither cleanup job overlaps with the other. ai_news has no
+  # scheduled daily fetch job today (fetch is manual/CLI-only), so there is
+  # no daily-job time to avoid colliding with here.
+  schedule_expression = "cron(30 6 ? * SUN *)"
+}
+
+resource "aws_cloudwatch_event_target" "news_retrieval_ai_news_expire_weekly" {
+  rule     = aws_cloudwatch_event_rule.news_retrieval_ai_news_expire_weekly.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+
+  ecs_target {
+    # Family-only ARN (no revision suffix) - see comment on the daily fetch
+    # target above for why this is unpinned rather than a specific revision.
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.news_retrieval.family}"
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets          = var.public_subnet_ids
+      security_groups  = [var.news_sg_id]
+      assign_public_ip = true
+    }
+  }
+
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "news-retrieval"
+        # 30 days - matches company_news's retention window.
+        command = ["python", "__main__.py", "expire-articles", "--domain", "ai_news", "--days", "30"]
+      }
+    ]
+  })
+}
+
+resource "aws_cloudwatch_event_rule" "news_retrieval_smart_money_expire_weekly" {
+  name = "${var.env}-news-retrieval-smart-money-expire-weekly"
+  # Sunday 06:45 UTC - offset from ai_news's own 06:30 UTC expiry job above,
+  # so neither cleanup job overlaps with the other. smart_money has no
+  # scheduled daily fetch job today (fetch is manual/CLI-only), same as
+  # ai_news above.
+  schedule_expression = "cron(45 6 ? * SUN *)"
+}
+
+resource "aws_cloudwatch_event_target" "news_retrieval_smart_money_expire_weekly" {
+  rule     = aws_cloudwatch_event_rule.news_retrieval_smart_money_expire_weekly.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+
+  ecs_target {
+    # Family-only ARN (no revision suffix) - see comment on the daily fetch
+    # target above for why this is unpinned rather than a specific revision.
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.news_retrieval.family}"
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets          = var.public_subnet_ids
+      security_groups  = [var.news_sg_id]
+      assign_public_ip = true
+    }
+  }
+
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "news-retrieval"
+        # 30 days - matches company_news's retention window.
+        command = ["python", "__main__.py", "expire-articles", "--domain", "smart_money", "--days", "30"]
+      }
+    ]
+  })
+}
+
 resource "aws_cloudwatch_event_rule" "news_retrieval_vc_commentary_daily" {
   name                = "${var.env}-news-retrieval-vc-commentary-daily"
   schedule_expression = "cron(0 3 * * ? *)"
@@ -670,6 +852,7 @@ resource "aws_iam_role_policy" "ecs_events_run_task" {
         Action   = ["iam:PassRole"]
         Resource = [
           aws_iam_role.ecs_task_execution.arn,
+          aws_iam_role.ecs_task_exec_ssm.arn,
         ]
       }
     ]
