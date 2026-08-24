@@ -63,8 +63,7 @@ infra/
 | `POSTGRES_USER` | hardcoded | `news_user` |
 | `POSTGRES_PASSWORD` | Secrets Manager | `ocn/{env}/news-retrieval:POSTGRES_PASSWORD` |
 | `AUTH_SERVICE_URL` | hardcoded | `http://auth-service.{env}.ocn.internal:8001` |
-| `OPENROUTER_API_KEY` | Secrets Manager | `ocn/{env}/news-retrieval:OPENROUTER_API_KEY` |
-| `OPENROUTER_MODEL` | hardcoded | `openrouter/elephant-alpha` |
+| `OPENROUTER_API_KEY` | Secrets Manager | `ocn/{env}/news-retrieval:OPENROUTER_API_KEY` - used for Taiwan GDELT title-dedup embeddings |
 | `SERPAPI_KEY` | Secrets Manager | `ocn/{env}/news-retrieval:SERPAPI_KEY` - optional; SerpAPI key for `google_news` sources |
 | `SERPAPI_KEY_GEOPOLITICAL` | Secrets Manager | `ocn/{env}/news-retrieval:SERPAPI_KEY_GEOPOLITICAL` - dedicated SerpAPI key used only for the `geopolitical_news` domain's `google_news` source (separate quota from `SERPAPI_KEY`) |
 | `NEWSAPI_KEY` | Secrets Manager | `ocn/{env}/news-retrieval:NEWSAPI_KEY` - optional; NewsAPI key for `newsapi` sources |

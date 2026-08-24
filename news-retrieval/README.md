@@ -2,13 +2,12 @@
 
 Part of the [ocn monorepo](../README.md). See root README for full system setup.
 
-Fetches RSS feeds and filters articles by relevance to a domain using LLMs. Returns structured JSON with articles grouped by run.
+Fetches articles from RSS feeds and other sources per domain. Returns structured JSON with articles grouped by run.
 
 ## Stack
 
 - **Server**: FastAPI + uvicorn
 - **Database**: PostgreSQL (persisted via Docker volume)
-- **LLM**: Configurable via `OPENROUTER_MODEL` (e.g. `openai/gpt-4o-mini`) via OpenRouter
 
 ## Quick start
 
@@ -27,8 +26,7 @@ The API is available at `http://localhost:8000`. Interactive docs at `/docs`.
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `OPENROUTER_API_KEY` | Yes | Server-level API key for OpenRouter |
-| `OPENROUTER_MODEL` | Yes | Default model for relevance filtering, e.g. `openai/gpt-4o-mini` |
+| `OPENROUTER_API_KEY` | Yes | Server-level API key for OpenRouter, used for Taiwan GDELT title-dedup embeddings |
 | `ADMIN_API_KEY` | Yes | Plaintext admin API key seeded into the DB on first startup |
 | `POSTGRES_HOST` | No | PostgreSQL host (default: `localhost`) |
 | `POSTGRES_PORT` | No | PostgreSQL port (default: `5432`) |
@@ -63,18 +61,16 @@ All write endpoints require an `Authorization: Bearer <token>` header. Admin-onl
 
 Submits a pipeline run. Returns `202` immediately with a `run_id`; the pipeline runs in the background.
 
-If a completed run with identical parameters (`domain`, `days_back`, `focus`, `model`) already exists for the current UTC day, returns `200` with the existing run's fields and `cache_hit: true` - no pipeline is dispatched. Use `force: true` to bypass this and always start a fresh run.
+If a completed run with identical parameters (`domain`, `days_back`, `focus`) already exists for the current UTC day, returns `200` with the existing run's fields and `cache_hit: true` - no pipeline is dispatched. Use `force: true` to bypass this and always start a fresh run.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `domain` | string | Yes | Slug of the domain to run against (e.g. `ai_news`) |
 | `days_back` | integer | No (default: `7`) | How far back to fetch articles; sources with `min_days_back > days_back` are skipped |
 | `max_articles` | integer | No | Cap on articles stored; omit for no limit |
-| `focus` | string | No | Instruction to narrow the topics the relevance filter accepts |
+| `focus` | string | No | Narrowing instruction stored on the run record |
 | `callback_url` | string | No | URL to POST a status payload to on completion or failure |
 | `force` | boolean | No (default: `false`) | Bypass the concurrent-run guard and same-day cache guard for this domain |
-| `model` | string | No | OpenRouter model string; overrides `OPENROUTER_MODEL` for this run |
-| `openrouter_api_key` | string | Required if `model` is set | OpenRouter API key to use with the model override |
 
 ```bash
 curl -X POST http://localhost:8000/run \
