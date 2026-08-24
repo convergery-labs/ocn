@@ -132,10 +132,48 @@ def init_db() -> None:
         conn.execute("""
             ALTER TABLE agent_classifications
                 ADD CONSTRAINT agent_classifications_source_type_check
-                    CHECK (source_type IN ('news', 'sec_filing', 'geopolitical', 'company_specific'))
+                    CHECK (source_type IN ('news', 'sec_filing', 'geopolitical', 'company_specific', 'taiwan_market_signal'))
         """)
         conn.execute("""
             ALTER TABLE agent_classifications
                 ADD COLUMN IF NOT EXISTS concreteness FLOAT,
                 ADD COLUMN IF NOT EXISTS economic_scale FLOAT
+        """)
+        # metadata: source-specific fields that don't warrant their own typed
+        # column, same rationale as news-retrieval's articles.metadata - the
+        # taiwan_market_signal source_type is the first to use this (revenue
+        # rank, clause-code reason, translated text, etc.), but it's a plain
+        # JSONB bag any future source_type can use the same way rather than
+        # adding narrow columns per field.
+        conn.execute("""
+            ALTER TABLE agent_classifications
+                ADD COLUMN IF NOT EXISTS metadata JSONB
+        """)
+        # signal_score was NOT NULL for every source_type, on the assumption
+        # every classification produces a confidence value. GDELT's Stage B
+        # relevance check (taiwan_market_signal, source_category=gdelt) is a
+        # forced one-word HIGH/WEAK call that never elicits a real confidence
+        # number - NULL says "not measured" instead of a fabricated constant.
+        # Other source_types keep writing a real score; this only widens what
+        # the column allows.
+        conn.execute("""
+            ALTER TABLE agent_classifications
+                ALTER COLUMN signal_score DROP NOT NULL
+        """)
+        # agent_classifications has no unique constraint at all today, so
+        # every insert_*_classification function's "ON CONFLICT DO NOTHING"
+        # has nothing to conflict against - confirmed live that re-inserting
+        # the same row creates a duplicate rather than a no-op. That's a
+        # pre-existing gap across all source types; fixing it here only for
+        # taiwan_market_signal (source_id is a real natural key for this
+        # source - ticker+period for revenue, ticker+timestamp for material
+        # announcements - unlike the other source types, which don't
+        # consistently populate source_id). A partial index scopes this fix
+        # to taiwan_market_signal only, leaving news/sec_filing/geopolitical
+        # untouched rather than risking their existing behavior.
+        conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS
+                idx_agent_classifications_taiwan_source_id
+                ON agent_classifications (source_type, source_id)
+                WHERE source_type = 'taiwan_market_signal'
         """)

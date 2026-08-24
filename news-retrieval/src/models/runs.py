@@ -146,7 +146,13 @@ def list_runs(
         params["from_date"] = from_date
 
     if to_date is not None:
-        clauses.append("started_at <= :to_date")
+        # to_date is a bare date; comparing a TIMESTAMPTZ column against it
+        # directly casts to midnight, silently excluding every run that
+        # started later that same day (confirmed live: two real runs at
+        # 10:10/10:11 UTC on 2026-08-24 were excluded by to_date=2026-08-24).
+        # Use an exclusive upper bound at the start of the NEXT day instead,
+        # so the entire to_date day is included.
+        clauses.append("started_at < :to_date + INTERVAL '1 day'")
         params["to_date"] = to_date
 
     if cursor is not None:

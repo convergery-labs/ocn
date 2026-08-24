@@ -184,6 +184,86 @@ def insert_geopolitical_classification(job_id: int, article: dict[str, Any], res
         )
 
 
+# Path 1/2 signals (revenue_rank_signal, announcement_materiality_signal)
+# use HIGH/WEAK/NOISE, distinct from this table's existing
+# signal/weak_signal/noise vocabulary used by the LLM-classified sources
+# (news, sec_filing, geopolitical) - mapped here so taiwan_market_signal
+# rows are queryable via the same signal_detection column as everything
+# else (e.g. "give me today's HIGH items" doesn't need a special case).
+_TAIWAN_SIGNAL_MAP = {"HIGH": "signal", "WEAK": "weak_signal", "NOISE": "noise"}
+
+
+def insert_taiwan_signal_classification(
+    job_id: int, article: dict[str, Any], result: dict[str, Any],
+) -> None:
+    """Upsert one agent_classifications row for a taiwan_market_signal item
+    (source_type='taiwan_market_signal') - a TWSE/TPEx revenue or material
+    announcement row read from news-retrieval.
+
+    Unlike the LLM-classified source types above, revenue ranking and
+    clause-code lookup are computed here (not news-retrieval - see
+    conversation decision to keep news-retrieval fetch/dedup-only), so
+    ``result`` carries a rank- or lookup-derived HIGH/WEAK/NOISE signal
+    rather than a model's signal/weak_signal/noise judgment. Mapped onto
+    the existing signal_detection column via _TAIWAN_SIGNAL_MAP so these
+    rows are queryable the same way as every other source_type.
+
+    Digest-composition fields (rank, translated text, percentages, etc.)
+    have no equivalent typed column on this table and go in ``metadata``
+    instead - same JSONB-bag rationale as news-retrieval's articles.metadata.
+    category/materiality/entities_json are left at their defaults (NULL/
+    '[]') - this source type doesn't use the LLM-classification vocabulary
+    those columns were built for.
+    """
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO agent_classifications (
+                job_id, source_type, source_id, url, title,
+                signal_detection, signal_score, signal_reason,
+                published, metadata
+            ) VALUES (%s, 'taiwan_market_signal', %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT DO NOTHING
+            """,
+            (
+                job_id,
+                result.get("source_id"),
+                article.get("url"),
+                article.get("title"),
+                _TAIWAN_SIGNAL_MAP[result["signal"]],
+                result.get("signal_score", 1.0),
+                result.get("reason"),
+                article.get("published"),
+                json.dumps(result.get("metadata") or {}, ensure_ascii=False),
+            ),
+        )
+
+
+def get_existing_taiwan_source_ids(source_ids: list[str]) -> set[str]:
+    """Return the subset of source_ids already classified as
+    source_type='taiwan_market_signal', across ALL prior jobs (not scoped
+    to today or to one job_id) - the twice-daily run must never reclassify
+    a ticker+period/ticker+timestamp combination once it exists, since the
+    idx_agent_classifications_taiwan_source_id unique index would reject a
+    duplicate insert anyway; checking first avoids wasting an LLM/lookup
+    call on something we already know will be a no-op.
+
+    Same shape as get_existing_filing_source_ids - one batched query, not
+    one per item.
+    """
+    if not source_ids:
+        return set()
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT source_id FROM agent_classifications
+            WHERE source_type = 'taiwan_market_signal' AND source_id = ANY(%s)
+            """,
+            (source_ids,),
+        ).fetchall()
+    return {r["source_id"] for r in rows}
+
+
 def get_existing_filing_source_ids(source_ids: list[str]) -> set[str]:
     """Return the subset of source_ids (accession_numbers) already classified
     as source_type='sec_filing'. One batched query, not one per filing - used

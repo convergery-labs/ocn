@@ -6,7 +6,7 @@ def _insert_completed_run(
     domain: str,
     days_back: int = 7,
     focus: str | None = None,
-    model: str = "test-model",
+    model: str = "none",
     started_at: str = "NOW()",
 ) -> int:
     """Insert a completed run row and return its id."""
@@ -60,25 +60,6 @@ async def test_cache_hit_response_includes_run_fields(
     assert body["cache_hit"] is True
     assert body["domain"] == "ai_news"
     assert body["status"] == "completed"
-
-
-async def test_different_model_is_separate_cache_entry(
-    client, admin_key, mock_pipeline
-) -> None:
-    """A run with a different model is not a cache hit."""
-    _insert_completed_run("ai_news", model="test-model")
-
-    resp = await client.post(
-        "/run",
-        json={
-            "domain": "ai_news",
-            "model": "other-model",
-            "openrouter_api_key": "dummy-key",
-        },
-        headers={"x-ocn-caller": admin_key},
-    )
-
-    assert resp.status_code == 202
 
 
 async def test_different_days_back_is_not_a_cache_hit(

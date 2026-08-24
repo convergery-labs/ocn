@@ -13,16 +13,26 @@
 | `tests/` | Automated test suite - see Testing section below |
 | `src/__main__.py` | CLI entry point - `click` + `uvicorn.run` |
 | `src/app.py` | FastAPI app factory and lifespan hook |
-| `src/pipeline.py` | Fetch and relevance-filter pipeline (RSS + SerpAPI Google News + NewsAPI fetch → Pass 1 LLM relevance filter); returns list of relevant articles |
+| `src/pipeline.py` | Fetch pipeline (RSS + SerpAPI Google News + NewsAPI + Alpha Vantage + Federal Register + GDELT + TWSE/TPEx fetch, branched by `source_type`); returns list of fetched articles |
 | `src/db.py` | Thin adapter: `_new_connection()` (reads `POSTGRES_*` env vars), `init_db()`, and `db_utils.configure()`; re-exports `get_db`, `transaction`, and `DuplicateError` from `shared/src/db_utils.py` so all other imports are unaffected |
 | `src/auth.py` | FastAPI dependency functions: `require_auth` (validate Bearer token), `require_admin` (role gate) |
 | `src/seed.py` | Idempotent batch seed for `run_statuses`, `frequencies`, `domains`, `sources`, and admin API key |
 | `src/poller.py` | Background market data poller: fetches from Alpha Vantage (GLOBAL_QUOTE, OVERVIEW, EARNINGS, TIME_SERIES_DAILY_ADJUSTED, MARKET_STATUS) and SEC EDGAR (8-K/10-Q/10-K metadata) and writes to DynamoDB; three modes — `quotes` (every 15 min), `daily` (once a day), `sec_filings` (once a day); distributed lock via `ocn-market-lock` prevents overlapping runs |
 | `src/sec_edgar.py` | SEC EDGAR fetch helpers: ticker→CIK mapping (`company_tickers.json`, cached) + per-CIK recent filings lookup (`submissions/CIK{cik}.json`), filtered to 8-K/10-Q/10-K; returns metadata + primary document link only |
-| `src/models/articles.py` | Article queries: pagination, dedup helpers, `expire_articles_for_domain(domain, days)` - deletes articles for one domain published more than `days` days ago (NULL `published` rows are never deleted) |
+| `src/models/articles.py` | Article queries: pagination, dedup helpers, `expire_articles_for_domain(domain, days)` - deletes articles for one domain published more than `days` days ago (NULL `published` rows are never deleted); `get_recent_gdelt_articles_for_ticker()` - recent same-ticker GDELT rows (by `created_at`, not `published`) for the Taiwan title-similarity dedup window |
 | `src/models/` | Pydantic request models + SQL query functions per entity |
 | `src/routes/` | FastAPI `APIRouter` definitions, one file per resource |
 | `src/routes/market.py` | Market data read endpoints: 6 `GET` routes reading from DynamoDB, served at `/market/*` |
+
+## Taiwan Market Signal (`taiwan_market_signal` domain)
+
+Fetch/dedup only - see `CLAUDE.md`'s "Taiwan Market Signal" section for the full source
+table, schedule, and the fetch/classify boundary with `signal-detection-agent` (which owns
+all ranking, clause-code lookup, translation, and LLM classification for this domain).
+Ticker universe (`TAIWAN_TICKER_UNIVERSE`, `src/seed.py`) and its four source configs
+(TWSE/TPEx revenue, TWSE/TPEx material announcements, GDELT) are defined in `src/seed.py`;
+fetchers (`source_type`: `twse_revenue`, `tpex_revenue`, `twse_material`, `tpex_material`,
+`gdelt`) live in `src/pipeline.py`.
 
 ## App layers
 
@@ -35,7 +45,7 @@ The application is a single FastAPI process. `POST /run` uses FastAPI `Backgroun
 | **Routes** | `src/routes/` | Thin HTTP adapters: one `APIRouter` per resource, maps domain exceptions to status codes |
 | **Controllers** | `src/controllers/` | Business logic and multi-step orchestration; owns transaction boundaries for composite operations |
 | **Repository** | `src/models/` | SQL query functions + Pydantic input models; no HTTP concepts; cursor encode/decode delegated to `shared/src/cursor_utils.py` (`encode_cursor` / `decode_cursor`) |
-| **Pipeline** | `src/pipeline.py` | Stateless pipeline: parallel RSS fetch + SerpAPI Google News fetch + NewsAPI top-headlines fetch (branched by `source_type`), title-based relevance filter (Pass 1 LLM); returns list of relevant article dicts |
+| **Pipeline** | `src/pipeline.py` | Stateless pipeline: parallel RSS fetch + SerpAPI Google News fetch + NewsAPI top-headlines fetch (branched by `source_type`); returns list of fetched article dicts |
 | **Database** | `src/db.py` + `shared/src/db_utils.py` | `db.py` is a thin adapter: supplies `_new_connection()` and calls `db_utils.configure()`; the `_Connection` wrapper, `DuplicateError`, `get_db()`, and `transaction()` live in the repo-level `shared/src/db_utils.py` and are re-exported from `db.py` for backward compatibility |
 | **Auth** | `src/auth.py` | `require_auth` / `require_admin` FastAPI dependencies; delegates all token validation to `POST {AUTH_SERVICE_URL}/validate`; returns 503 if unconfigured |
 | **Seed data** | `src/seed.py` | Idempotent batch seed for `run_statuses`, `frequencies`, `domains`, and `sources` |
@@ -44,7 +54,7 @@ The application is a single FastAPI process. `POST /run` uses FastAPI `Backgroun
 
 | Endpoint | Description |
 |----------|-------------|
-| `POST /run` | Submit a pipeline run; returns `202` with `run_id` immediately, or `200` with `cache_hit: true` if an identical run completed today UTC; optional `model` + `openrouter_api_key` override the server defaults; optional `callback_url` receives a webhook on completion or failure; `force: true` bypasses both the cache guard and concurrent-run guard |
+| `POST /run` | Submit a pipeline run; returns `202` with `run_id` immediately, or `200` with `cache_hit: true` if an identical run completed today UTC; optional `callback_url` receives a webhook on completion or failure; `force: true` bypasses both the cache guard and concurrent-run guard |
 | `GET /runs` | List runs, newest-first; filter by one or more `domain` slugs (repeat param: `?domain=A&domain=B`), `status`, `from_date`, `to_date`; cursor-paginated (`limit`, `cursor`); returns `{"runs": [...], "next_cursor": str\|null}` |
 | `GET /runs/{id}` | Single run record |
 | `GET /runs/{id}/articles` | Articles for a run; cursor-paginated (`limit`, `cursor`); returns `{"articles": [...], "next_cursor": str\|null}` |
@@ -68,12 +78,10 @@ POST /run  (returns 202 immediately, or 200 on cache hit)
   └─ BackgroundTasks.add_task(run_pipeline)  # skipped on cache hit
 
 run_pipeline()  (background, after response is sent)
-  └─ get_domain_config()        # load domain name + description from DB
   └─ pl.run()
        ├─ load_sources()        # query sources WHERE min_days_back <= days_back
-       ├─ _fetch_articles()     # branches by source_type: _fetch_rss() (feedparser, 10 workers) + _fetch_serpapi() (SerpAPI Google News, 5 workers) + _fetch_newsapi() (NewsAPI top-headlines, 5 workers); respective KEY unset → sources skipped
-       └─ _filter_articles()    # Pass 1 - LLM: title-only relevance filter
-  └─ create_articles()          # batch INSERT relevant articles
+       └─ _fetch_articles()     # branches by source_type: _fetch_rss() (feedparser, 10 workers) + _fetch_serpapi() (SerpAPI Google News, 5 workers) + _fetch_newsapi() (NewsAPI top-headlines, 5 workers); respective KEY unset → sources skipped
+  └─ create_articles()          # batch INSERT fetched articles
   └─ complete_run() / fail_run() # UPDATE runs SET status='completed'|'failed'
   └─ _fire_webhook()             # POST to callback_url if set (best-effort, 10s timeout)
 
@@ -83,14 +91,12 @@ GET /runs/{id}  →  live status poll
 ### Key behavioural rules
 
 - Sources with `frequency.min_days_back > days_back` are skipped.
-- Pass 1 (relevance filter) fails open: if a batch errors, those articles are kept.
 - Domain config is loaded fresh from the DB on every `POST /run` - adding a new domain via the API takes effect immediately without restarting.
-- The LLM never decides what tools to call - all orchestration is in Python.
-- Same-day cache guard: if a completed run with identical `(domain, days_back, focus, model)` already exists for the current UTC day, `POST /run` returns it immediately with `cache_hit: true` (HTTP 200) without dispatching a new pipeline. `force: true` bypasses this.
+- Same-day cache guard: if a completed run with identical `(domain, days_back, focus)` already exists for the current UTC day, `POST /run` returns it immediately with `cache_hit: true` (HTTP 200) without dispatching a new pipeline. `force: true` bypasses this.
 
 ## Testing
 
-Tests live in `tests/` at the project root and run against a dedicated `news-retrieval-test` PostgreSQL database. The pipeline's LLM calls are mocked at the `pipeline.run` boundary; all other app code runs in-process via `httpx.AsyncClient` + `ASGITransport`.
+Tests live in `tests/` at the project root and run against a dedicated `news-retrieval-test` PostgreSQL database. `pipeline.run` is mocked at its boundary; all other app code runs in-process via `httpx.AsyncClient` + `ASGITransport`.
 
 ### Running the tests
 
@@ -119,7 +125,7 @@ pytest news-retrieval/tests/
 | `test_pagination.py` | Cursor advances on `GET /runs` and `GET /runs/{id}/articles`; last page has `next_cursor: null` |
 | `test_webhook.py` | `callback_url` POSTed with `status=completed` on success and `status=failed` on pipeline error |
 | `test_ownership.py` | `POST /sources` and `PATCH /domains/{id}` reject non-owners → 403; null-owner domains visible to all users; multi-key grants; grant revocation; admin bypass |
-| `test_pipeline.py` | LLM batch error keeps all articles (fail-open) |
+| `test_pipeline.py` | Pipeline fetch behavior |
 
 ## Dependencies
 

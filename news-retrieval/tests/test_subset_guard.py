@@ -8,7 +8,7 @@ from models.articles import filter_articles_for_window
 def _insert_covering_run(
     domain: str,
     days_back: int = 14,
-    model: str = "test-model",
+    model: str = "none",
     focus: str | None = None,
     articles: list[dict] | None = None,
     started_at: str = "NOW()",
@@ -102,21 +102,6 @@ async def test_subset_run_id_differs_from_covering_run_id(
     body = resp.json()
     assert body["cache_hit"] is True
     assert body["id"] != covering_id
-
-
-async def test_different_model_does_not_cover(
-    client, admin_key, mock_pipeline
-) -> None:
-    """A covering run with a different model does not trigger the guard."""
-    _insert_covering_run("ai_news", days_back=14, model="other-model")
-
-    resp = await client.post(
-        "/run",
-        json={"domain": "ai_news", "days_back": 7},
-        headers={"x-ocn-caller": admin_key},
-    )
-
-    assert resp.status_code == 202
 
 
 async def test_narrower_existing_does_not_cover(

@@ -97,6 +97,114 @@ def expire_articles_for_domain(domain: str, days: int) -> int:
         return cur.rowcount
 
 
+def get_recent_gdelt_articles_for_ticker(
+    ticker: str, hours: int = 24,
+) -> list[dict]:
+    """Return recently-stored GDELT articles for one ticker, for title-
+    similarity dedup.
+
+    Scoped by ``metadata->>'ticker'`` and ``created_at`` (not ``published``)
+    - ``created_at`` is when we first saw the fact, which is what a rolling
+    dedup window needs; GDELT's own ``seendate``/``published`` can lag or
+    lead when we actually ingested it. Bounded to one ticker's recent
+    articles only (a handful of rows), not the full corpus, since the
+    similarity check only ever needs to compare against same-company,
+    same-window candidates.
+
+    Returns each row's ``id``, ``title``, ``url``, and ``metadata`` (which
+    carries the stored ``title_embedding``, if present - rows stored before
+    this field existed, or where the embedding call failed, have it absent
+    and are skipped by the caller's similarity check, not treated as
+    errors).
+    """
+    with get_db() as conn:
+        cur = conn.execute(
+            """
+            SELECT a.id, a.title, a.url, a.metadata
+            FROM articles a
+            JOIN runs r ON r.id = a.run_id
+            WHERE r.domain = 'taiwan_market_signal'
+              AND a.metadata->>'ticker' = :ticker
+              AND a.metadata->>'source_type' = 'gdelt'
+              AND a.created_at > NOW() - (:hours || ' hours')::INTERVAL
+            ORDER BY a.created_at DESC
+            """,
+            {"ticker": ticker, "hours": hours},
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
+def get_recent_articles_for_domain(
+    domain: str, hours: int = 24,
+) -> list[dict]:
+    """Return recently-stored articles for one domain, for title-similarity
+    dedup (same purpose as ``get_recent_gdelt_articles_for_ticker``, scoped
+    by domain instead of ticker since ai_news/smart_money have no ticker
+    concept).
+
+    Scoped by ``created_at`` (not ``published``) - ``created_at`` is when we
+    first saw the fact, which is what a rolling dedup window needs; a
+    source's own ``published`` timestamp can lag or lead when we actually
+    ingested it. Bounded to one domain's recent articles only, not the full
+    corpus, since the similarity check only ever needs to compare against
+    same-domain, same-window candidates.
+
+    Returns each row's ``id``, ``title``, ``url``, and ``metadata`` (which
+    carries the stored ``title_embedding``, if present - rows stored before
+    this field existed, or where the embedding call failed, have it absent
+    and are skipped by the caller's similarity check, not treated as
+    errors).
+    """
+    with get_db() as conn:
+        cur = conn.execute(
+            """
+            SELECT a.id, a.title, a.url, a.metadata
+            FROM articles a
+            JOIN runs r ON r.id = a.run_id
+            WHERE r.domain = :domain
+              AND a.created_at > NOW() - (:hours || ' hours')::INTERVAL
+            ORDER BY a.created_at DESC
+            """,
+            {"domain": domain, "hours": hours},
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
+def append_also_reported_by(article_id: int, domain: str) -> None:
+    """Record that another outlet (``domain``) also covered the story
+    already stored as ``article_id``, without inserting a duplicate row.
+
+    Used when a new GDELT article's title matches an already-stored
+    article from an earlier poll run (cross-run duplicate) - the new
+    article carries the "same story, different outlet" signal that would
+    otherwise be lost by simply dropping it. Same-batch duplicates (two new
+    articles in one poll run) don't need this - the surviving article
+    hasn't been inserted yet, so its ``also_reported_by`` list is merged
+    in-memory before the first insert instead.
+
+    Idempotent: the ``NOT (... @> ...)`` guard means re-adding a domain
+    already present in the list is a no-op, not a duplicate entry.
+    """
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE articles
+            SET metadata = jsonb_set(
+                COALESCE(metadata, '{}'::jsonb),
+                '{also_reported_by}',
+                COALESCE(metadata->'also_reported_by', '[]'::jsonb)
+                    || to_jsonb(:domain::text)
+            )
+            WHERE id = :article_id
+              AND NOT COALESCE(
+                  metadata->'also_reported_by' @> to_jsonb(:domain::text),
+                  FALSE
+              )
+            """,
+            {"article_id": article_id, "domain": domain},
+        )
+
+
 def get_already_stored_urls(urls: list[str]) -> set[str]:
     """Return the subset of ``urls`` already stored, across all domains.
 
@@ -278,7 +386,11 @@ def list_articles(
         params["from_date"] = from_date
 
     if to_date is not None:
-        clauses.append("a.published <= :to_date")
+        # Same bug/fix as models/runs.py's list_runs: a.published is a
+        # TIMESTAMPTZ, comparing directly against a bare date casts to
+        # midnight and silently excludes every article published later
+        # that same day. Exclusive upper bound at the next day instead.
+        clauses.append("a.published < :to_date + INTERVAL '1 day'")
         params["to_date"] = to_date
 
     if cursor is not None:
