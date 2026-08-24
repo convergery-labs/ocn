@@ -126,7 +126,6 @@ resource "aws_ecs_task_definition" "news_retrieval" {
         { name = "AUTH_SERVICE_URL",        value = "http://auth-service.${var.env}.ocn.internal:8001" },
         { name = "NEWS_RETRIEVAL_URL",      value = "http://news-retrieval.${var.env}.ocn.internal:8000" },
         { name = "RESEARCH_UNIVERSE_URL",   value = "http://research-universe.${var.env}.ocn.internal:8007" },
-        { name = "OPENROUTER_MODEL",        value = "openrouter/elephant-alpha" },
         { name = "AWS_REGION",                    value = var.aws_region },
         { name = "DYNAMODB_TABLE_QUOTE",          value = "ocn-market-quote" },
         { name = "DYNAMODB_TABLE_OVERVIEW",       value = "ocn-market-overview" },
@@ -242,7 +241,9 @@ resource "aws_cloudwatch_event_target" "news_retrieval_company_news_daily" {
   role_arn = aws_iam_role.ecs_events.arn
 
   ecs_target {
-    task_definition_arn = aws_ecs_task_definition.news_retrieval.arn
+    # Family-only ARN (no revision suffix) - see comment on the daily fetch
+    # target above for why this is unpinned rather than a specific revision.
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.news_retrieval.family}"
     launch_type         = "FARGATE"
     network_configuration {
       subnets          = var.public_subnet_ids
@@ -294,6 +295,64 @@ resource "aws_cloudwatch_event_target" "news_retrieval_geopolitical_news_daily" 
       {
         name    = "news-retrieval"
         command = ["python", "__main__.py", "trigger", "--domain", "geopolitical_news", "--days-back", "1"]
+      }
+    ]
+  })
+}
+
+resource "aws_cloudwatch_event_rule" "news_retrieval_taiwan_market_signal" {
+  name = "${var.env}-news-retrieval-taiwan-market-signal"
+  # Every 4 hours, bounded to 01:00-16:00 UTC only (fires at 01,05,09,13
+  # UTC), Mon-Fri (Taiwan has no weekend trading). The step must stay
+  # bounded to this range, not "0/4" unbounded (which fires all 24 hours,
+  # including well outside Taiwan trading/announcement hours - a mistake
+  # caught before an earlier version of this schedule shipped). 01:00-05:30
+  # UTC covers TWSE/TPEx's 9:00 AM-1:30 PM Taipei trading session; the
+  # window extends through 16:00 UTC (midnight Taipei) because Taiwan's
+  # 重大訊息 (material announcement) disclosures are confirmed to cluster
+  # AFTER market close through the evening (5:30 PM Taipei / 09:30 UTC
+  # onward), not during trading hours - a trading-hours-only window would
+  # miss most of that feed. TWSE/TPEx's own full-dump endpoints have no
+  # date/period query param (always return only the latest snapshot - see
+  # pipeline.py's freshness check), so polling on a schedule + dedup on
+  # ingest is the only way to capture each day's new revenue/announcement
+  # rows; missing a day's poll window loses that day's data permanently,
+  # there is no backfill - a 4-hour cadence (down from 30 min, then 2
+  # hours) trades some of that margin for lower cost/load, on the
+  # reasoning that revenue/material announcements don't need 30-minute
+  # freshness the way a live price feed would.
+  #
+  # Does NOT account for Taiwan's own holiday calendar (e.g. multi-day
+  # Lunar New Year closure), which is distinct from US holidays - on a
+  # closed trading day this simply polls a market that isn't publishing
+  # anything new, which is harmless (dedup prevents any duplicate
+  # inserts) but not worth suppressing via a holiday-aware schedule for
+  # this initial cut.
+  schedule_expression = "cron(0 1-16/4 ? * MON-FRI *)"
+}
+
+resource "aws_cloudwatch_event_target" "news_retrieval_taiwan_market_signal" {
+  rule     = aws_cloudwatch_event_rule.news_retrieval_taiwan_market_signal.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+
+  ecs_target {
+    # Family-only ARN (no revision suffix) - see comment on the daily fetch
+    # target above for why this is unpinned rather than a specific revision.
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.news_retrieval.family}"
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets          = var.public_subnet_ids
+      security_groups  = [var.news_sg_id]
+      assign_public_ip = true
+    }
+  }
+
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "news-retrieval"
+        command = ["python", "__main__.py", "trigger", "--domain", "taiwan_market_signal", "--days-back", "1"]
       }
     ]
   })
@@ -527,7 +586,9 @@ resource "aws_cloudwatch_event_target" "news_retrieval_vc_commentary_daily" {
   role_arn = aws_iam_role.ecs_events.arn
 
   ecs_target {
-    task_definition_arn = aws_ecs_task_definition.news_retrieval.arn
+    # Family-only ARN (no revision suffix) - see comment on the daily fetch
+    # target above for why this is unpinned rather than a specific revision.
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.news_retrieval.family}"
     launch_type         = "FARGATE"
     network_configuration {
       subnets          = var.public_subnet_ids
@@ -557,7 +618,9 @@ resource "aws_cloudwatch_event_target" "news_retrieval_adverse_media_daily" {
   role_arn = aws_iam_role.ecs_events.arn
 
   ecs_target {
-    task_definition_arn = aws_ecs_task_definition.news_retrieval.arn
+    # Family-only ARN (no revision suffix) - see comment on the daily fetch
+    # target above for why this is unpinned rather than a specific revision.
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.news_retrieval.family}"
     launch_type         = "FARGATE"
     network_configuration {
       subnets          = var.public_subnet_ids
@@ -756,8 +819,10 @@ resource "aws_service_discovery_service" "signal_detection_agent" {
 # filing's body text directly (adapters/sec_edgar.py, text-fetch only).
 # Scheduled for 13:00 UTC, one hour after news-retrieval's own sec_filings
 # poller (12:00 UTC, see news-retrieval's CloudWatch rule) so this job always
-# reads that day's freshly-fetched filings, not yesterday's - and both finish
-# well before signal-herald's unrelated 14:00 UTC digest run.
+# reads that day's freshly-fetched filings, not yesterday's. Note this job
+# is currently DISABLED, but if re-enabled it now runs AFTER signal-herald's
+# unrelated 12:30 UTC digest run, so that day's filings won't appear in that
+# day's digest.
 resource "aws_cloudwatch_event_rule" "signal_detection_agent_filings_daily" {
   name                = "${var.env}-signal-detection-agent-filings-daily"
   description         = "Classify new SEC 8-K/10-Q/10-K filings (fetched by news-retrieval's poller) for the tracked ticker universe once daily"
@@ -771,7 +836,10 @@ resource "aws_cloudwatch_event_target" "signal_detection_agent_filings_daily" {
   arn      = aws_ecs_cluster.main.arn
   role_arn = aws_iam_role.ecs_events.arn
   ecs_target {
-    task_definition_arn = aws_ecs_task_definition.signal_detection_agent.arn
+    # Family-only ARN (no revision suffix) - see comment on
+    # news_retrieval_taiwan_market_signal's target above for why this is
+    # unpinned rather than a specific revision.
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.signal_detection_agent.family}"
     launch_type         = "FARGATE"
     network_configuration {
       subnets         = var.private_subnet_ids
@@ -783,6 +851,49 @@ resource "aws_cloudwatch_event_target" "signal_detection_agent_filings_daily" {
       {
         name    = "signal-detection-agent"
         command = ["python", "-m", "src", "classify-filings"]
+      }
+    ]
+  })
+}
+
+
+resource "aws_cloudwatch_event_rule" "signal_detection_agent_taiwan_signals" {
+  name        = "${var.env}-signal-detection-agent-taiwan-signals"
+  description = "Classify today's pooled taiwan_market_signal news-retrieval runs (rank/clause-lookup/translate/GDELT-classify), twice daily: post-Asia-close and pre-US-open"
+  # 14:00 UTC = right after news-retrieval's last Taiwan fetch of the
+  # window (01:00-16:00 UTC, see news_retrieval_taiwan_market_signal above)
+  # has had time to land the evening 重大訊息 announcement cluster -
+  # "post-Asia-close" pass.
+  # 21:00 UTC = well before the next US trading day's pre-market (13:00 UTC
+  # / 9am ET open) - "pre-US-open" pass, catching anything the 14:00 UTC
+  # run missed plus same-day re-polls.
+  # Both passes call classify-taiwan-signals with default from_date=to_date
+  # =today (UTC), which pools ALL of today's completed runs so far (not
+  # just the latest) and skips already-classified source_ids, so the two
+  # runs are additive rather than duplicating work.
+  schedule_expression = "cron(0 14,21 ? * MON-FRI *)"
+}
+
+resource "aws_cloudwatch_event_target" "signal_detection_agent_taiwan_signals" {
+  rule     = aws_cloudwatch_event_rule.signal_detection_agent_taiwan_signals.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+  ecs_target {
+    # Family-only ARN (no revision suffix) - see comment on
+    # news_retrieval_taiwan_market_signal's target above for why this is
+    # unpinned rather than a specific revision.
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.signal_detection_agent.family}"
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets         = var.private_subnet_ids
+      security_groups = [var.signal_detection_agent_sg_id]
+    }
+  }
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "signal-detection-agent"
+        command = ["python", "-m", "src", "classify-taiwan-signals"]
       }
     ]
   })
@@ -1152,7 +1263,7 @@ resource "aws_ecs_service" "signal_herald" {
 
 resource "aws_cloudwatch_event_rule" "signal_herald_daily" {
   name                = "${var.env}-signal-herald-daily"
-  schedule_expression = "cron(0 14 ? * MON-FRI *)"
+  schedule_expression = "cron(30 12 ? * MON-FRI *)"
 }
 
 
@@ -1161,7 +1272,12 @@ resource "aws_cloudwatch_event_target" "signal_herald_daily" {
   arn      = aws_ecs_cluster.main.arn
   role_arn = aws_iam_role.ecs_events.arn
   ecs_target {
-    task_definition_arn = aws_ecs_task_definition.signal_herald.arn
+    # Family-only ARN (no revision suffix) - see comment on
+    # news_retrieval_taiwan_market_signal's target above for why this is
+    # unpinned rather than a specific revision (CI/CD registers new task-def
+    # revisions directly, bypassing terraform apply, so a pinned ARN here
+    # drifts stale the moment CI/CD deploys next).
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.signal_herald.family}"
     launch_type         = "FARGATE"
     network_configuration {
       subnets         = var.private_subnet_ids
@@ -1300,7 +1416,10 @@ resource "aws_cloudwatch_event_target" "research_universe_scan" {
   role_arn = aws_iam_role.ecs_events.arn
 
   ecs_target {
-    task_definition_arn = aws_ecs_task_definition.research_universe.arn
+    # Family-only ARN (no revision suffix) - see comment on
+    # news_retrieval_taiwan_market_signal's target above for why this is
+    # unpinned rather than a specific revision.
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.research_universe.family}"
     launch_type         = "FARGATE"
     network_configuration {
       subnets         = var.private_subnet_ids
