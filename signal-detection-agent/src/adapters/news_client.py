@@ -158,6 +158,48 @@ async def get_tracked_tickers() -> list[str]:
         raise NewsRetrievalError(f"Failed to fetch tracked tickers: {exc}") from exc
 
 
+async def list_completed_runs(
+    domain: str, from_date: str, to_date: str,
+) -> list[int]:
+    """GET /runs?domain=&status=completed&from_date=&to_date=, paginated;
+    return ALL matching run ids, not just the latest one.
+
+    news-retrieval polls taiwan_market_signal every 30 minutes, so a single
+    day can have up to ~30 separate completed runs - a twice-daily
+    classification pass needs to read across all of them, not just
+    fetch_latest_run's single most-recent run, or it would silently miss
+    everything from earlier runs that same day.
+    """
+    run_ids: list[int] = []
+    cursor: str | None = None
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        while True:
+            params: dict[str, Any] = {
+                "domain": domain, "status": "completed",
+                "from_date": from_date, "to_date": to_date,
+                "limit": 100,
+            }
+            if cursor:
+                params["cursor"] = cursor
+            try:
+                resp = await client.get(
+                    f"{config.NEWS_RETRIEVAL_URL}/runs",
+                    params=params,
+                    headers=_headers(),
+                )
+                resp.raise_for_status()
+            except httpx.HTTPError as exc:
+                raise NewsRetrievalError(
+                    f"Failed to list runs for domain={domain!r}: {exc}"
+                ) from exc
+            data = resp.json()
+            run_ids.extend(int(r["id"]) for r in data.get("runs", []))
+            cursor = data.get("next_cursor")
+            if not cursor:
+                break
+    return run_ids
+
+
 async def get_run_articles(run_id: int) -> list[dict[str, Any]]:
     """Paginate GET /runs/{run_id}/articles; return all articles with body."""
     articles: list[dict[str, Any]] = []

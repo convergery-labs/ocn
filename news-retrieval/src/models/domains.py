@@ -16,32 +16,6 @@ class DomainRow(TypedDict):
     created_at: datetime
 
 
-class DomainConfig(TypedDict):
-    """Domain name and description for pipeline use."""
-
-    name: str
-    description: Optional[str]
-
-
-def get_domain_config(slug: str) -> Optional[DomainConfig]:
-    """Load config (name + description) for a domain slug.
-
-    Returns:
-        ``DomainConfig``, or ``None`` if the slug does not exist.
-    """
-    with get_db() as conn:
-        row = conn.execute(
-            "SELECT name, description FROM domains WHERE slug = ?",
-            (slug,),
-        ).fetchone()
-    if not row:
-        return None
-    return {
-        "name": row["name"],
-        "description": row["description"],
-    }  # type: ignore[return-value]
-
-
 def list_domains(
     caller_id: Optional[int] = None,
 ) -> list[DomainRow]:

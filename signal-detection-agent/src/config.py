@@ -30,3 +30,4 @@ DEFAULT_PROMPT_V2: Path = PROMPTS_DIR / "ai_universe_signal_classifier_v2_refine
 GEOPOLITICAL_PROMPT: Path = PROMPTS_DIR / "geopolitical_classifier_v1.txt"
 
 GEOPOLITICAL_DOMAIN: str = os.environ.get("GEOPOLITICAL_DOMAIN", "geopolitical_news")
+TAIWAN_SIGNAL_DOMAIN: str = os.environ.get("TAIWAN_SIGNAL_DOMAIN", "taiwan_market_signal")

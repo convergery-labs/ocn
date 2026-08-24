@@ -81,6 +81,46 @@ DOMAINS: list[dict[str, Any]] = [
             " presidential documents affecting foreign policy and trade."
         ),
     },
+    {
+        "name": "Taiwan Market Signal",
+        "slug": "taiwan_market_signal",
+        "description": (
+            "Monthly revenue and material announcements for Taiwan"
+            " AI-supply-chain companies, fetched via the TWSE and TPEx"
+            " OpenData APIs."
+        ),
+    },
+]
+
+# P0 core universe (spec Section 14.1), hardcoded pending research-universe
+# integration for Taiwan. Ticker codes are as listed on their exchange —
+# 公司代號/SecuritiesCompanyCode in the TWSE/TPEx API responses.
+# NOTE: 3324 (Auras Technology) is TPEx, not TWSE as some reference material
+# states — verified live against both revenue dumps on 2026-08-19.
+# native_name is the Chinese company name used for GDELT queries (native-
+# language press generally refers to companies by this name, not the English
+# one) — sourced from spec Section 14.1.
+TAIWAN_TICKER_UNIVERSE: list[dict[str, str]] = [
+    {"ticker": "2330", "company": "TSMC", "native_name": "台積電", "exchange": "TWSE"},
+    {"ticker": "2317", "company": "Hon Hai / Foxconn", "native_name": "鴻海", "exchange": "TWSE"},
+    {"ticker": "2382", "company": "Quanta", "native_name": "廣達", "exchange": "TWSE"},
+    {"ticker": "3231", "company": "Wistron", "native_name": "緯創", "exchange": "TWSE"},
+    {"ticker": "6669", "company": "Wiwynn", "native_name": "緯穎", "exchange": "TWSE"},
+    {"ticker": "2356", "company": "Inventec", "native_name": "英業達", "exchange": "TWSE"},
+    {"ticker": "3017", "company": "Asia Vital Components", "native_name": "奇鋐", "exchange": "TWSE"},
+    {"ticker": "3324", "company": "Auras Technology", "native_name": "雙鴻", "exchange": "TPEx"},
+    {"ticker": "2308", "company": "Delta Electronics", "native_name": "台達電", "exchange": "TWSE"},
+    {"ticker": "3665", "company": "BizLink", "native_name": "貿聯-KY", "exchange": "TWSE"},
+    {"ticker": "3533", "company": "Lotes", "native_name": "嘉澤", "exchange": "TWSE"},
+    {"ticker": "2059", "company": "King Slide", "native_name": "川湖", "exchange": "TWSE"},
+    {"ticker": "8210", "company": "Chenbro", "native_name": "勤誠", "exchange": "TWSE"},
+    {"ticker": "2368", "company": "Gold Circuit Electronics", "native_name": "金像電", "exchange": "TWSE"},
+    {"ticker": "2383", "company": "Elite Material", "native_name": "台光電", "exchange": "TWSE"},
+    {"ticker": "3037", "company": "Unimicron", "native_name": "欣興", "exchange": "TWSE"},
+    {"ticker": "3711", "company": "ASE Technology", "native_name": "日月光投控", "exchange": "TWSE"},
+    {"ticker": "2449", "company": "King Yuan Electronics", "native_name": "京元電子", "exchange": "TWSE"},
+    {"ticker": "3661", "company": "Alchip", "native_name": "世芯-KY", "exchange": "TWSE"},
+    {"ticker": "5274", "company": "Aspeed Technology", "native_name": "信驊", "exchange": "TPEx"},
 ]
 
 
@@ -1209,6 +1249,186 @@ FEDERAL_REGISTER_SOURCES: list[dict[str, Any]] = [
     },
 ]
 
+# TWSE / TPEx OpenData monthly revenue (t187ap05_L / mopsfin_t187ap05_O).
+# Both are full-dump, keyless JSON endpoints with no ticker query param -
+# the fetcher pulls the whole dataset and filters to TAIWAN_TICKER_UNIVERSE.
+# Fetchers (source_type: "twse_revenue" / "tpex_revenue") in pipeline.py.
+TAIWAN_REVENUE_SOURCES: list[dict[str, Any]] = [
+    {
+        "domain_slug": "taiwan_market_signal",
+        "url": "twse_revenue:monthly",
+        "name": "TWSE Monthly Revenue",
+        "source_type": "twse_revenue",
+        "frequency_name": "daily",
+        "description": (
+            "TWSE OpenAPI monthly revenue (t187ap05_L) for TWSE-listed"
+            " tickers in the Taiwan universe, with MoM/YoY deltas."
+        ),
+        "config": {
+            "tickers": [
+                t["ticker"] for t in TAIWAN_TICKER_UNIVERSE
+                if t["exchange"] == "TWSE"
+            ],
+            # Known-correct English company names, keyed by ticker - used
+            # by the fetcher to set metadata.translated_company_name
+            # directly, rather than asking an LLM to translate the raw
+            # Chinese name (confirmed live: this produced serious errors,
+            # e.g. 2383 Elite Material mistranslated as "Taiwan
+            # Semiconductor Manufacturing Company", 8210 Chenbro translated
+            # literally as "Diligence and sincerity"). We already have the
+            # ground truth here; no reason to let a model guess it.
+            "ticker_names": {
+                t["ticker"]: t["company"] for t in TAIWAN_TICKER_UNIVERSE
+                if t["exchange"] == "TWSE"
+            },
+        },
+    },
+    {
+        "domain_slug": "taiwan_market_signal",
+        "url": "tpex_revenue:monthly",
+        "name": "TPEx Monthly Revenue",
+        "source_type": "tpex_revenue",
+        "frequency_name": "daily",
+        "description": (
+            "TPEx OpenAPI monthly revenue (mopsfin_t187ap05_O) for"
+            " TPEx/OTC-listed tickers in the Taiwan universe, with"
+            " MoM/YoY deltas."
+        ),
+        "config": {
+            "tickers": [
+                t["ticker"] for t in TAIWAN_TICKER_UNIVERSE
+                if t["exchange"] == "TPEx"
+            ],
+            "ticker_names": {
+                t["ticker"]: t["company"] for t in TAIWAN_TICKER_UNIVERSE
+                if t["exchange"] == "TPEx"
+            },
+        },
+    },
+]
+
+# TWSE / TPEx OpenData material announcements (t187ap04_L / mopsfin_t187ap04_O).
+# Same full-dump-then-filter shape as revenue above. TPEx's feed uses a
+# different keyset (Date/SecuritiesCompanyCode/CompanyName vs TWSE's
+# 出表日期/公司代號/公司名稱) - normalized to a common shape in the fetcher.
+# Fetchers (source_type: "twse_material" / "tpex_material") in pipeline.py.
+TAIWAN_MATERIAL_SOURCES: list[dict[str, Any]] = [
+    {
+        "domain_slug": "taiwan_market_signal",
+        "url": "twse_material:announcements",
+        "name": "TWSE Material Announcements",
+        "source_type": "twse_material",
+        "frequency_name": "daily",
+        "description": (
+            "TWSE OpenAPI material announcements (t187ap04_L, 重大訊息)"
+            " for TWSE-listed tickers in the Taiwan universe."
+        ),
+        "config": {
+            "tickers": [
+                t["ticker"] for t in TAIWAN_TICKER_UNIVERSE
+                if t["exchange"] == "TWSE"
+            ],
+            "ticker_names": {
+                t["ticker"]: t["company"] for t in TAIWAN_TICKER_UNIVERSE
+                if t["exchange"] == "TWSE"
+            },
+        },
+    },
+    {
+        "domain_slug": "taiwan_market_signal",
+        "url": "tpex_material:announcements",
+        "name": "TPEx Material Announcements",
+        "source_type": "tpex_material",
+        "frequency_name": "daily",
+        "description": (
+            "TPEx OpenAPI material announcements (mopsfin_t187ap04_O)"
+            " for TPEx/OTC-listed tickers in the Taiwan universe."
+        ),
+        "config": {
+            "tickers": [
+                t["ticker"] for t in TAIWAN_TICKER_UNIVERSE
+                if t["exchange"] == "TPEx"
+            ],
+            "ticker_names": {
+                t["ticker"]: t["company"] for t in TAIWAN_TICKER_UNIVERSE
+                if t["exchange"] == "TPEx"
+            },
+        },
+    },
+]
+
+# GDELT DOC 2.0 API scoped to Taiwan-language press for the Taiwan universe,
+# reusing the existing gdelt fetcher (source_type: "gdelt", implemented in
+# pipeline.py — same _fetch_gdelt/_fetch_one_gdelt code path already used by
+# geopolitical_news, just with different queries).
+#
+# Verified live that "<name> sourcelang:chinese sourcecountry:TW" returns
+# genuine Taiwan financial press (SETN, DigiTimes) with real signal (revenue
+# prints, order news), NOT pre-translated to English (GDELT's "language"
+# field on these results is "Chinese" and titles are in Chinese — contrary
+# to the original spec's claim of "already translated"; a translation step
+# is required downstream, not optional).
+#
+# GDELT rejects any query keyword of 2 CJK characters or fewer with a
+# distinct ("keyword too short") response — confirmed live, HTTP 200 with a
+# non-JSON plain-text body, which is NOT the same failure as a 429 and is
+# not currently retried/handled specially by the fetcher (it would parse-
+# error and log a generic warning every poll). 11 of the 20 tickers have
+# exactly 2-character native names (鴻海, 廣達, 緯創, 緯穎, 奇鋐, 雙鴻, 嘉澤,
+# 川湖, 勤誠, 欣興, 信驊). Two attempts to pad these to 3+ characters with a
+# generic suffix were tested live and BOTH failed to surface results even
+# for Hon Hai (2317), a company confirmed to have heavy Chinese-language
+# coverage: "鴻海集團" (+Group) and "鴻海精密" (+Precision, its own formal
+# name) both returned a clean empty response, not an error — meaning
+# suffix-padding is unreliable per-company and would silently look
+# identical to "no news" if shipped. Bare ticker-code queries were also
+# tested and ruled out the same way (2330/TSMC returned empty despite
+# known heavy coverage).
+#
+# Given no verified-working padding scheme, native-name querying is
+# dropped for these 11 tickers; only the English-name query is used for
+# them (already confirmed working and ≥3 chars for all 20 companies). The
+# other 9 tickers with 3+ character native names keep both queries.
+_GDELT_MIN_QUERY_CHARS = 3
+
+TAIWAN_GDELT_SOURCE: dict[str, Any] = {
+    "domain_slug": "taiwan_market_signal",
+    "url": "gdelt:taiwan_market_signal",
+    "name": "GDELT DOC API (Taiwan)",
+    "source_type": "gdelt",
+    "frequency_name": "daily",
+    "description": (
+        "Taiwan-language financial press coverage via GDELT DOC 2.0,"
+        " scoped to sourcelang:chinese sourcecountry:TW, queried per"
+        " ticker by native Chinese name (when >=3 characters) and"
+        " English name."
+    ),
+    "config": {
+        "queries": [
+            q
+            for t in TAIWAN_TICKER_UNIVERSE
+            for q in (
+                [f"{t['native_name']} sourcelang:chinese sourcecountry:TW"]
+                if len(t["native_name"]) >= _GDELT_MIN_QUERY_CHARS
+                else []
+            ) + [f"{t['company']} sourcelang:chinese sourcecountry:TW"]
+        ],
+        # Maps each query string back to its ticker, since GDELT queries by
+        # company name (there is no ticker query param) and the fetcher
+        # otherwise has no way to know which company a result belongs to.
+        # Used for the title-similarity dedup, which is scoped per-ticker.
+        "query_ticker": {
+            q: t["ticker"]
+            for t in TAIWAN_TICKER_UNIVERSE
+            for q in (
+                ([f"{t['native_name']} sourcelang:chinese sourcecountry:TW"]
+                 if len(t["native_name"]) >= _GDELT_MIN_QUERY_CHARS else [])
+                + [f"{t['company']} sourcelang:chinese sourcecountry:TW"]
+            )
+        },
+    },
+}
+
 # GDELT DOC 2.0 API, queried once per individual theme code (not OR-joined -
 # only single bare "theme:X" queries are confirmed working against the live
 # API; multi-theme "(theme:X OR theme:Y)" queries could not be verified and
@@ -1717,6 +1937,12 @@ SOURCES: list[dict[str, Any]] = [
     *FEDERAL_REGISTER_SOURCES,
     GEOPOLITICAL_GOOGLE_NEWS_SOURCE,
     GDELT_SOURCE,
+    # ------------------------------------------------------------------
+    # Taiwan market signal (TWSE + TPEx OpenData)
+    # ------------------------------------------------------------------
+    *TAIWAN_REVENUE_SOURCES,
+    *TAIWAN_MATERIAL_SOURCES,
+    TAIWAN_GDELT_SOURCE,
 ]
 
 # VC commentary / investor blogs.

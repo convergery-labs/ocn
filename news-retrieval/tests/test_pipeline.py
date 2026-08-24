@@ -1,4 +1,4 @@
-"""Tests for pipeline.py behaviour, specifically fail-open on LLM error."""
+"""Tests for pipeline.py fetch and dedup behaviour."""
 import types
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
@@ -23,40 +23,6 @@ GDELT_RESPONSE_FIXTURE = {
         },
     ],
 }
-
-
-def test_llm_batch_error_keeps_all_articles() -> None:
-    """LLM API error on a batch keeps all articles (fail-open)."""
-    entry = types.SimpleNamespace(published_parsed=None)
-    entry.get = lambda k, d="": {  # type: ignore[assignment]
-        "title": "Fail-open Article",
-        "link": "http://example.com/fail-open",
-        "published": "2026-01-01",
-        "summary": "Summary.",
-    }.get(k, d)
-    fake_feed = types.SimpleNamespace(
-        entries=[entry],
-        feed=types.SimpleNamespace(
-            get=lambda k, d="": "Test Feed"
-        ),
-    )
-    mock_client: MagicMock = MagicMock()
-    mock_client.chat.completions.create.side_effect = Exception(
-        "Simulated LLM timeout"
-    )
-
-    with (
-        patch("feedparser.parse", return_value=fake_feed),
-        patch("pipeline._make_client", return_value=mock_client),
-    ):
-        result = pipeline_module.run(
-            domain_slug="ai_news",
-            domain_name="AI News",
-            days_back=7,
-            model="test-model",
-        )
-
-    assert len(result["articles"]) > 0
 
 
 def _make_entry(*, content_words: int = 0) -> types.SimpleNamespace:
@@ -88,7 +54,6 @@ def _fake_pipeline_run(
     source: dict,
     *,
     content_words: int = 0,
-    mock_client: MagicMock,
     trafilatura_patches: dict | None = None,
 ) -> dict:
     """Run the pipeline with a controlled source and feed entry.
@@ -96,7 +61,6 @@ def _fake_pipeline_run(
     Args:
         source: Source dict with ``url`` and ``no_fetch`` keys.
         content_words: Words in the ``content:encoded`` value; 0 = absent.
-        mock_client: Pre-configured mock LLM client.
         trafilatura_patches: Optional dict mapping
             ``"fetch_url"`` / ``"extract"`` to return values.
 
@@ -108,14 +72,6 @@ def _fake_pipeline_run(
         entries=[entry],
         feed=types.SimpleNamespace(get=lambda k, d="": "Test Feed"),
     )
-    patches: list = [
-        patch("feedparser.parse", return_value=fake_feed),
-        patch("pipeline._make_client", return_value=mock_client),
-        patch(
-            "pipeline.load_sources",
-            return_value=[source],
-        ),
-    ]
     tf = trafilatura_patches or {}
     fetch_patch = patch(
         "trafilatura.fetch_url",
@@ -126,12 +82,13 @@ def _fake_pipeline_run(
         return_value=tf.get("extract"),
     )
     with fetch_patch as mock_fetch, extract_patch as mock_extract:
-        with patches[0], patches[1], patches[2]:
+        with (
+            patch("feedparser.parse", return_value=fake_feed),
+            patch("pipeline.load_sources", return_value=[source]),
+        ):
             result = pipeline_module.run(
                 domain_slug="ai_news",
-                domain_name="AI News",
                 days_back=7,
-                model="test-model",
             )
     return result, mock_fetch, mock_extract
 
@@ -143,17 +100,8 @@ def test_body_from_content_encoded() -> None:
         "min_days_back": 1,
         "no_fetch": False,
     }
-    mock_client: MagicMock = MagicMock()
-    mock_client.chat.completions.create.return_value = MagicMock(
-        choices=[MagicMock(message=MagicMock(
-            content='{"articles": [{"url": "http://example.com/test",'
-                    ' "relevant": true}]}'
-        ))]
-    )
 
-    result, mock_fetch, _ = _fake_pipeline_run(
-        source, content_words=150, mock_client=mock_client
-    )
+    result, mock_fetch, _ = _fake_pipeline_run(source, content_words=150)
 
     assert len(result["articles"]) == 1
     body = result["articles"][0]["body"]
@@ -169,19 +117,11 @@ def test_body_trafilatura_fallback() -> None:
         "min_days_back": 1,
         "no_fetch": False,
     }
-    mock_client: MagicMock = MagicMock()
-    mock_client.chat.completions.create.return_value = MagicMock(
-        choices=[MagicMock(message=MagicMock(
-            content='{"articles": [{"url": "http://example.com/test",'
-                    ' "relevant": true}]}'
-        ))]
-    )
     trafilatura_body = "Extracted article body text from Trafilatura."
 
     result, mock_fetch, mock_extract = _fake_pipeline_run(
         source,
         content_words=0,
-        mock_client=mock_client,
         trafilatura_patches={
             "fetch_url": "<html>page</html>",
             "extract": trafilatura_body,
@@ -217,8 +157,8 @@ def _insert_stored_run_with_article(domain: str, url: str) -> None:
 
 
 def test_cross_run_dedup_excludes_previously_stored_url() -> None:
-    """An article whose URL is already stored for the domain is dropped
-    before it reaches the relevance filter, and never re-inserted."""
+    """An article whose URL is already stored for the domain is dropped,
+    and never re-inserted."""
     domain = "ai_news"
     seen_url = "http://example.com/already-seen"
     _insert_stored_run_with_article(domain, seen_url)
@@ -242,28 +182,10 @@ def test_cross_run_dedup_excludes_previously_stored_url() -> None:
         feed=types.SimpleNamespace(get=lambda k, d="": "Test Feed"),
     )
 
-    mock_client: MagicMock = MagicMock()
-    mock_client.chat.completions.create.return_value = MagicMock(
-        choices=[MagicMock(message=MagicMock(
-            content=(
-                '{"articles": ['
-                f'{{"url": "{seen_url}", "relevant": true}},'
-                '{"url": "http://example.com/brand-new",'
-                ' "relevant": true}'
-                ']}'
-            )
-        ))]
-    )
-
-    with (
-        patch("feedparser.parse", return_value=fake_feed),
-        patch("pipeline._make_client", return_value=mock_client),
-    ):
+    with patch("feedparser.parse", return_value=fake_feed):
         result = pipeline_module.run(
             domain_slug=domain,
-            domain_name="AI News",
             days_back=7,
-            model="test-model",
         )
 
     urls = {a["url"] for a in result["articles"]}
@@ -288,21 +210,13 @@ def test_cross_domain_dedup_excludes_url_stored_under_different_domain() -> None
         feed=types.SimpleNamespace(get=lambda k, d="": "Test Feed"),
     )
 
-    mock_client: MagicMock = MagicMock()
-
-    with (
-        patch("feedparser.parse", return_value=fake_feed),
-        patch("pipeline._make_client", return_value=mock_client),
-    ):
+    with patch("feedparser.parse", return_value=fake_feed):
         result = pipeline_module.run(
             domain_slug="ai_news",
-            domain_name="AI News",
             days_back=7,
-            model="test-model",
         )
 
     assert result["articles"] == []
-    mock_client.chat.completions.create.assert_not_called()
 
 
 def test_fetch_gdelt_parses_doc_response() -> None:
@@ -486,19 +400,150 @@ def test_body_null_for_no_fetch_source() -> None:
         "min_days_back": 1,
         "no_fetch": True,
     }
-    mock_client: MagicMock = MagicMock()
-    mock_client.chat.completions.create.return_value = MagicMock(
-        choices=[MagicMock(message=MagicMock(
-            content='{"articles": [{"url": "http://example.com/test",'
-                    ' "relevant": true}]}'
-        ))]
-    )
 
     result, mock_fetch, mock_extract = _fake_pipeline_run(
-        source, content_words=0, mock_client=mock_client
+        source, content_words=0
     )
 
     assert len(result["articles"]) == 1
     assert result["articles"][0]["body"] is None
     mock_fetch.assert_not_called()
     mock_extract.assert_not_called()
+
+
+def _article(title: str, url: str, source: str = "Test Feed") -> dict:
+    """Return a minimal article dict for title-dedup tests."""
+    return {
+        "title": title,
+        "url": url,
+        "source": source,
+        "summary": "",
+        "published": "2026-01-01T00:00:00",
+        "body": None,
+    }
+
+
+def test_title_dedup_drops_cross_run_near_duplicate() -> None:
+    """A new article whose title is a near-duplicate (by embedding
+    similarity) of an already-stored ai_news article is dropped, and the
+    new outlet is recorded on the existing row via also_reported_by."""
+    new_article = _article(
+        "OpenAI unveils its next-generation GPT-5 model",
+        "http://example.com/new-story",
+        source="Outlet B",
+    )
+
+    with (
+        patch(
+            "pipeline._embed_titles",
+            return_value=[[1.0, 0.0]],
+        ),
+        patch(
+            "pipeline.get_recent_articles_for_domain",
+            return_value=[{
+                "id": 42,
+                "title": "OpenAI Releases GPT-5",
+                "url": "http://example.com/original-story",
+                "metadata": {"title_embedding": [1.0, 0.0]},
+            }],
+        ),
+        patch("pipeline.append_also_reported_by") as mock_append,
+    ):
+        result = pipeline_module._dedup_by_title_similarity_for_domain(
+            [new_article], "ai_news",
+        )
+
+    assert result == []
+    mock_append.assert_called_once_with(42, "Outlet B")
+
+
+def test_title_dedup_keeps_distinct_titles() -> None:
+    """Articles with dissimilar title embeddings are both kept."""
+    articles = [
+        _article("OpenAI Releases GPT-5", "http://example.com/a"),
+        _article("Tesla Reports Q3 Earnings", "http://example.com/b"),
+    ]
+
+    with (
+        patch(
+            "pipeline._embed_titles",
+            return_value=[[1.0, 0.0], [0.0, 1.0]],
+        ),
+        patch("pipeline.get_recent_articles_for_domain", return_value=[]),
+    ):
+        result = pipeline_module._dedup_by_title_similarity_for_domain(
+            articles, "ai_news",
+        )
+
+    assert len(result) == 2
+
+
+def test_title_dedup_same_batch_duplicate_merged_in_memory() -> None:
+    """Two near-duplicate articles surfacing in the same run are merged
+    without a DB round-trip - only the first is kept, and the second
+    outlet is recorded in its in-memory also_reported_by list."""
+    first = _article(
+        "OpenAI Releases GPT-5", "http://example.com/a", source="Outlet A",
+    )
+    second = _article(
+        "OpenAI unveils GPT-5", "http://example.com/b", source="Outlet B",
+    )
+
+    with (
+        patch(
+            "pipeline._embed_titles",
+            return_value=[[1.0, 0.0], [1.0, 0.0]],
+        ),
+        patch("pipeline.get_recent_articles_for_domain", return_value=[]),
+        patch("pipeline.append_also_reported_by") as mock_append,
+    ):
+        result = pipeline_module._dedup_by_title_similarity_for_domain(
+            [first, second], "ai_news",
+        )
+
+    assert len(result) == 1
+    assert result[0]["url"] == "http://example.com/a"
+    assert result[0]["metadata"]["also_reported_by"] == ["Outlet B"]
+    mock_append.assert_not_called()
+
+
+def test_title_dedup_fails_open_on_embedding_failure() -> None:
+    """An article whose title embedding failed (None) is kept, not dropped
+    or silently deduped."""
+    article = _article("Some Article", "http://example.com/a")
+
+    with (
+        patch("pipeline._embed_titles", return_value=[None]),
+        patch("pipeline.get_recent_articles_for_domain", return_value=[]),
+    ):
+        result = pipeline_module._dedup_by_title_similarity_for_domain(
+            [article], "ai_news",
+        )
+
+    assert len(result) == 1
+
+
+def test_title_dedup_only_applied_for_configured_domains() -> None:
+    """run() only invokes title-similarity dedup for ai_news/smart_money,
+    not for domains pre-scoped by other means (e.g. company_news)."""
+    entry = types.SimpleNamespace(published_parsed=None)
+    entry.get = lambda k, d="": {  # type: ignore[assignment]
+        "title": "Some Article",
+        "link": "http://example.com/company-news-article",
+        "published": "2026-01-01",
+        "summary": "Summary.",
+    }.get(k, d)
+    fake_feed = types.SimpleNamespace(
+        entries=[entry],
+        feed=types.SimpleNamespace(get=lambda k, d="": "Test Feed"),
+    )
+
+    with (
+        patch("feedparser.parse", return_value=fake_feed),
+        patch(
+            "pipeline._dedup_by_title_similarity_for_domain"
+        ) as mock_dedup,
+    ):
+        pipeline_module.run(domain_slug="company_news", days_back=7)
+
+    mock_dedup.assert_not_called()

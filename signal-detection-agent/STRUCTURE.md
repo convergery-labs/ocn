@@ -15,7 +15,8 @@
 
 ```
 src/
-├── __main__.py          Entry point - Click group: serve
+├── __main__.py          Entry point - Click group: serve, classify-filings,
+│                                       classify-taiwan-signals
 ├── app.py               App factory - assembles FastAPI, registers routers
 ├── auth.py              Infrastructure - x-ocn-caller header extraction
 ├── db.py                Infrastructure - _new_connection(), init_db() (creates
@@ -48,14 +49,30 @@ src/
 │   │                                     apply_verification_adjustments() (QA score → final score + trace),
 │   │                                     build_user_prompt_v2(), build_user_prompt(),
 │   │                                     has_usable_body(); OpenAI-compatible API (OPENAI_BASE_URL)
-│   └── category_candidates.py  PARKED - embedding cosine-similarity pre-step to
-│                                         shortlist top-k categories per article;
-│                                         not called in v1; re-enable via category_hints
-│                                         param in classify_article() if needed
+│   ├── category_candidates.py  PARKED - embedding cosine-similarity pre-step to
+│   │                                     shortlist top-k categories per article;
+│   │                                     not called in v1; re-enable via category_hints
+│   │                                     param in classify_article() if needed
+│   └── taiwan_signal_classifier.py  Deterministic + LLM classifier for
+│                                     taiwan_market_signal - rank_revenue_by_yoy()
+│                                     (mops_revenue, pure ranking, no LLM),
+│                                     classify_material_announcements() (mops_material,
+│                                     clause-code lookup table, no LLM),
+│                                     translate_taiwan_articles() (LLM translation via
+│                                     OPENAI_MODEL_V2, per source_category field map),
+│                                     classify_gdelt_articles() (gdelt - the one real LLM
+│                                     HIGH/WEAK classification call),
+│                                     classify_taiwan_signal_batch() (top-level: rank +
+│                                     clause-lookup + translate, called by
+│                                     controllers/run.py's run_taiwan_signal_classification)
 └── adapters/
     ├── news_client.py   Infrastructure - async HTTP client for news-retrieval:
     │                                     trigger_run(), fetch_latest_run(),
-    │                                     poll_run_until_done(), get_run_articles()
+    │                                     poll_run_until_done(), get_run_articles(),
+    │                                     list_completed_runs() (pools ALL completed runs
+    │                                     in a date range - used by the Taiwan path, which
+    │                                     needs the full day's pooled articles rather than
+    │                                     just the latest run)
     └── web_search.py    Infrastructure - urllib search client for entity context:
                                           search_entity_context(); providers: duckduckgo
                                           (default, free), tavily, brave
@@ -89,6 +106,35 @@ Background task (`run_agent_pipeline`):
 8. `insert_classification(job_id, article, result)` - persists to `agent_classifications`
 9. `update_job_status(job_id, "completed")`
 
+## Taiwan Signal Pipeline (`taiwan_market_signal` domain)
+
+Not triggered via `POST /run` - runs as a scheduled CLI job (`classify-taiwan-signals`),
+twice daily (14:00 UTC post-Asia-close, 21:00 UTC pre-US-open, Mon-Fri; see
+`infra/modules/ecs_cluster/services.tf`'s `signal_detection_agent_taiwan_signals` rule).
+news-retrieval fetches this domain independently on its own 4-hourly schedule
+(`news_retrieval_taiwan_market_signal`) and stops at fetch/dedup - all ranking,
+clause-code lookup, translation, and LLM classification happen here.
+
+```
+classify-taiwan-signals [--from-date] [--to-date]   (defaults: today, UTC)
+  └─ create_job(domain=TAIWAN_SIGNAL_DOMAIN)
+  └─ run_taiwan_signal_classification(job_id, from_date, to_date)
+       ├─ list_completed_runs(domain, from_date, to_date)   # ALL runs in window, not just latest
+       ├─ get_run_articles(run_id) per run, deduped by url  → pooled article set
+       ├─ classify_taiwan_signal_batch(pooled_articles)     # full set together - ranking needs it
+       │    ├─ rank_revenue_by_yoy()              # mops_revenue: deterministic YoY rank
+       │    ├─ classify_material_announcements()  # mops_material: clause-code table lookup
+       │    ├─ translate_taiwan_articles()        # LLM translation (OPENAI_MODEL_V2), per-field
+       │    └─ classify_gdelt_articles()          # gdelt: LLM HIGH/WEAK verdict on translated title
+       ├─ get_existing_taiwan_source_ids(candidate_source_ids)  # dedup vs already-classified
+       └─ insert_taiwan_signal_classification() per new item → update_job_status("completed")
+```
+
+`source_id` is derived deterministically per source_category (ticker+period for
+mops_revenue/mops_material, ticker+timestamp for gdelt) - not from the news-retrieval
+article row id - so the same underlying fact re-appearing across multiple news-retrieval
+polls is only ever classified/persisted once, even across the two daily runs.
+
 ## HTTP API
 
 | Method | Path | Auth | Description |
@@ -107,11 +153,12 @@ Tables live in the signal-detection Postgres DB with an `agent_` prefix (mirrors
 |-------|-------------|
 | `agent_job_statuses` | `status TEXT PK` - reference values: pending, running, completed, failed |
 | `agent_jobs` | `id SERIAL PK`, `news_run_id`, `domain`, `status FK`, `article_count`, `created_at`, `completed_at` |
-| `agent_classifications` | `id SERIAL PK`, `job_id FK`, `article_id`, `url`, `title`, `signal_detection`, `signal_score`, `signal_reason`, `materiality`, `category`, `entities_json TEXT`, `entity_names_normalized TEXT[]`, `stored_at`, `base_signal_detection`, `base_signal_score`, `novelty`, `novelty_basis`, `confidence`, `confidence_basis`, `refinement_reason`, `pre_verification_score`, `verification_qa JSONB` |
+| `agent_classifications` | `id SERIAL PK`, `job_id FK`, `article_id`, `url`, `title`, `signal_detection`, `signal_score`, `signal_reason`, `materiality`, `category`, `entities_json TEXT`, `entity_names_normalized TEXT[]`, `stored_at`, `base_signal_detection`, `base_signal_score`, `novelty`, `novelty_basis`, `confidence`, `confidence_basis`, `refinement_reason`, `pre_verification_score`, `verification_qa JSONB`, `source_type`, `source_id`, `metadata JSONB` |
 
 `url` and `title` are lightweight display references only - full article content stays in news-retrieval.
 Second-pass columns (`base_*`, `novelty*`, `confidence*`, `refinement_reason`, `pre_verification_score`, `verification_qa`) are NULL for noise articles and for rows classified before the two-stage pipeline (backward-compatible).
 `entity_names_normalized` is a lowercased TEXT[] for exact array-overlap entity matching; GIN-indexed. NULL/empty on pre-normalisation rows (backfilled on startup).
+`source_type` CHECK constraint includes `'taiwan_market_signal'`; `metadata JSONB` carries Taiwan-specific fields (rank, clause-code reason, translated text, etc.) that don't fit the AI-universe schema above. `signal_score` is nullable to support gdelt's unmeasured-confidence NULL case (HIGH/WEAK has no probabilistic score). A partial unique index on `(source_type, source_id) WHERE source_type='taiwan_market_signal'` enforces the dedup described in the Taiwan Signal Pipeline section above.
 
 ## LLM Output Schema
 

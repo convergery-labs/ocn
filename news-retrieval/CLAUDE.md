@@ -141,6 +141,54 @@ Manual run: `python __main__.py expire-articles --domain <slug> --days <n>` - de
 
 Both schedules run after that domain's own daily fetch completes (`geopolitical_news` fetches at 02:00 UTC, `company_news` at 01:00 UTC) and are offset from each other, so no two scheduled jobs overlap. CloudWatch targets reference the task definition by family name only (no revision pinned), so a scheduled run always launches whatever revision is currently `ACTIVE` — see `infra/CLAUDE.md` for why revision-pinned targets are a real drift risk in this repo.
 
+## Taiwan Market Signal (`taiwan_market_signal` domain)
+
+Fetch-and-store only - all ranking, clause-code classification, translation, and LLM
+classification happen downstream in `signal-detection-agent` (see that service's CLAUDE.md),
+not here. This domain's own `POST /run`/`trigger` fetch is the only responsibility owned by
+news-retrieval; the boundary is deliberate (`src/pipeline.py`, near the end of the Taiwan
+fetch path) so that no source type computes a signal or translates text inside this service.
+
+Ticker universe: `TAIWAN_TICKER_UNIVERSE` in `src/seed.py` - a fixed list of `{ticker,
+company, native_name, exchange}` (TWSE or TPEx), used to scope every Taiwan source below and
+to set `metadata.translated_company_name` directly from known-correct English names (LLM
+translation of bare 2-4 character Taiwan company names was confirmed live to produce serious
+errors, e.g. 2383 Elite Material mistranslated as "Taiwan Semiconductor Manufacturing
+Company" - so this field is never LLM-translated).
+
+| Source | `source_type` | `source_category` (metadata) | What it fetches |
+|--------|---------------|-------------------------------|------------------|
+| TWSE Monthly Revenue | `twse_revenue` | `mops_revenue` | TWSE OpenAPI monthly revenue (`t187ap05_L`), full-dump filtered to TWSE tickers in the universe, with MoM/YoY deltas |
+| TPEx Monthly Revenue | `tpex_revenue` | `mops_revenue` | TPEx OpenAPI monthly revenue (`mopsfin_t187ap05_O`), same shape for TPEx/OTC tickers |
+| TWSE Material Announcements | `twse_material` | `mops_material` | TWSE OpenAPI material announcements (`t187ap04_L`, 重大訊息) |
+| TPEx Material Announcements | `tpex_material` | `mops_material` | TPEx OpenAPI material announcements (`mopsfin_t187ap04_O`) - different keyset than TWSE's, normalized to a common shape in the fetcher |
+| GDELT DOC API (Taiwan) | `gdelt` | `gdelt` | Taiwan-language financial press via GDELT DOC 2.0, scoped `sourcelang:chinese sourcecountry:TW`, queried per ticker by native Chinese name (when ≥3 chars - GDELT rejects shorter query keywords) and English company name |
+
+Both TWSE/TPEx OpenData endpoints are full-dump, keyless JSON with no ticker/date query
+param - the fetcher pulls the entire dataset each poll and filters to
+`TAIWAN_TICKER_UNIVERSE`, and there is no backfill: missing a poll window loses that day's
+new rows permanently, so the poll schedule (below) is the only capture mechanism.
+
+GDELT's own API response (`mode=artlist`) has no body/snippet field, but this domain's GDELT
+fetch does not rely on that - it separately fetches each surviving article's real webpage via
+Trafilatura and sets `article["body"]` from the extracted page text, same as
+`geopolitical_news`'s GDELT path.
+
+**Schedule:** `${env}-news-retrieval-taiwan-market-signal` CloudWatch rule, every 4 hours
+bounded to 01:00-16:00 UTC (fires 01/05/09/13 UTC), Mon-Fri only. The window covers TWSE/TPEx's
+9:00 AM-1:30 PM Taipei trading session (01:00-05:30 UTC) *and* extends through 16:00 UTC
+because 重大訊息 material-announcement disclosures are confirmed to cluster after market
+close through the evening (17:30 Taipei / 09:30 UTC onward), not during trading hours. Does
+not account for Taiwan's own holiday calendar (e.g. Lunar New Year) - polling a closed market
+day is harmless (dedup prevents duplicate inserts) but not currently suppressed.
+
+Downstream: `signal-detection-agent`'s `classify-taiwan-signals` CLI command runs twice daily
+(14:00 UTC post-Asia-close, 21:00 UTC pre-US-open, Mon-Fri) and pools **all** of a day's
+completed runs for this domain via `GET /runs?domain=taiwan_market_signal&status=completed`
+(news-retrieval's own poll cadence above can produce several completed runs per day - the
+consumer must read across all of them, not just the latest, or it silently misses earlier
+runs' data).
+
 ### GDELT source scope: `geopolitical_news`
 
 The `geopolitical_news` domain's GDELT source (`source_type = 'gdelt'`) queries are scoped with `sourcecountry:US` on every theme query (e.g. `theme:SANCTIONS sourcelang:english sourcecountry:US`) - used as a proxy for "does this event involve or affect the US," on the reasoning that a US-relevant event is highly likely to be covered by at least one US-domiciled outlet. Real tradeoff: this can miss US-relevant stories where foreign outlets (Reuters, BBC, Al Jazeera, etc.) cover an event before/instead of domestic US press. Source of truth for the query list: `GDELT_SOURCE` in `src/seed.py` - existing rows are `ON CONFLICT (url) DO NOTHING` on seed, so changing this list in code does **not** retroactively update an already-seeded database; an already-existing source row must be updated directly (SQL `UPDATE sources SET config = ...`) for the change to take effect.

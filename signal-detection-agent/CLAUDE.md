@@ -51,7 +51,8 @@ signal-detection-agent/
 │   │   └── jobs.py
 │   ├── pipeline/
 │   │   ├── classifier.py
-│   │   └── category_candidates.py   (parked - not wired in v1)
+│   │   ├── category_candidates.py   (parked - not wired in v1)
+│   │   └── taiwan_signal_classifier.py   (taiwan_market_signal: rank/clause-lookup/translate/classify)
 │   └── adapters/
 │       ├── news_client.py
 │       └── web_search.py
@@ -75,6 +76,24 @@ signal-detection-agent/
 | `WEB_SEARCH_PROVIDER` | Web search backend: `duckduckgo` (default), `tavily`, `brave` |
 | `WEB_SEARCH_API_KEY` | API key for Tavily or Brave (not required for DuckDuckGo) |
 | `CLASSIFY_CONCURRENCY` | Max concurrent article classifiers (default: 5) |
+| `TAIWAN_SIGNAL_DOMAIN` | news-retrieval domain slug for the Taiwan pipeline (default: `taiwan_market_signal`) |
+
+## Taiwan Signal Pipeline
+
+`taiwan_market_signal` (TWSE/TPEx revenue + material announcements, plus GDELT Taiwan
+coverage) is classified by a separate path from the AI-universe `POST /run` pipeline above
+- see [STRUCTURE.md](STRUCTURE.md) for the full flow. Entry point: `python -m src
+classify-taiwan-signals` (Click command in `__main__.py`), scheduled twice daily (14:00 UTC
+post-Asia-close, 21:00 UTC pre-US-open, Mon-Fri) via the `signal_detection_agent_taiwan_signals`
+CloudWatch rule in `infra/modules/ecs_cluster/services.tf`. news-retrieval fetches this domain
+on its own independent 4-hourly schedule and stops at fetch/dedup; all ranking, clause-code
+lookup, translation (`OPENAI_MODEL_V2`), and LLM classification (gdelt only) happen in
+`pipeline/taiwan_signal_classifier.py`. Results persist to the same `agent_classifications`
+table as the AI-universe pipeline, distinguished by `source_type = 'taiwan_market_signal'`,
+with Taiwan-specific fields (rank, clause reason, translated text) in the `metadata JSONB`
+column. Dedup across the two daily runs (and across news-retrieval's ~4-6 polls per day) is by
+a deterministic `source_id` (ticker+period or ticker+timestamp), not article row id, enforced
+by a partial unique index - a run never re-classifies or re-inserts something already done.
 
 ## Guidance
 

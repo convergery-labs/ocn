@@ -27,7 +27,6 @@ os.environ.setdefault("POSTGRES_PORT", "5433")
 os.environ["POSTGRES_DB"] = "news-retrieval-test"
 os.environ.setdefault("POSTGRES_USER", "news-retrieval")
 os.environ.setdefault("POSTGRES_PASSWORD", "news-retrieval")
-os.environ["OPENROUTER_MODEL"] = "test-model"
 
 from app import create_app  # noqa: E402
 from db import get_db, init_db  # noqa: E402

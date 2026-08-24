@@ -11,6 +11,7 @@ from adapters.news_client import (
     NewsRetrievalError,
     fetch_latest_run,
     get_run_articles,
+    list_completed_runs,
     poll_run_until_done,
     trigger_run,
 )
@@ -18,14 +19,17 @@ from adapters.web_search import search_entity_context
 from models.jobs import (
     create_job,
     get_completed_job_for_run,
+    get_existing_taiwan_source_ids,
     get_recent_entity_classifications,
     insert_classification,
     insert_geopolitical_classification,
+    insert_taiwan_signal_classification,
     update_job_status,
 )
 from pipeline.classifier import classify_article_two_stage, has_usable_body, load_prompt
 from pipeline.example_selector import ExampleSelector, parse_examples
 from pipeline.geopolitical_classifier import classify_geopolitical_article, load_geopolitical_prompt
+from pipeline.taiwan_signal_classifier import classify_taiwan_signal_batch
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +117,82 @@ async def _run_geopolitical_classification(job_id: int, usable: list[dict[str, A
         update_job_status(job_id, "failed", set_completed_at=True)
     else:
         update_job_status(job_id, "completed", set_completed_at=True)
+
+
+async def run_taiwan_signal_classification(job_id: int, from_date: str, to_date: str) -> None:
+    """Classify taiwan_market_signal items across ALL of news-retrieval's
+    completed runs in [from_date, to_date] - not just the latest run.
+
+    news-retrieval polls this domain every 30 minutes, so a single day can
+    have ~30 separate completed runs; fetch_latest_run/get_run_articles
+    (built for the single-run news/sec_filing/geopolitical paths) would
+    silently see only the most recent one. This function instead lists
+    every completed run in the window and pools their articles before
+    classifying, so a twice-daily pass sees the full day's fetched data.
+
+    Only classifies items not already classified - checked via
+    get_existing_taiwan_source_ids against the (ticker+period or
+    ticker+timestamp) source_id classify_taiwan_signal_batch derives, not
+    against article id, since the same underlying fact can legitimately
+    appear in multiple news-retrieval runs (re-fetched, not yet superseded)
+    and must still only be classified once.
+    """
+    update_job_status(job_id, "running")
+    try:
+        run_ids = await list_completed_runs(
+            config.TAIWAN_SIGNAL_DOMAIN, from_date, to_date,
+        )
+        all_articles: list[dict[str, Any]] = []
+        seen_urls: set[str] = set()
+        for run_id in run_ids:
+            for article in await get_run_articles(run_id):
+                url = article.get("url")
+                if url and url not in seen_urls:
+                    seen_urls.add(url)
+                    all_articles.append(article)
+    except NewsRetrievalError:
+        logger.exception(
+            "Failed to fetch taiwan_market_signal articles for job %d", job_id,
+        )
+        update_job_status(job_id, "failed", set_completed_at=True)
+        return
+
+    if not all_articles:
+        update_job_status(job_id, "completed", article_count=0, set_completed_at=True)
+        return
+
+    # Rank/classify/translate needs the FULL pooled set together (ranking
+    # spans all tickers for a period), so this runs before the
+    # already-classified filter below - filtering first would rank against
+    # a partial set and produce wrong ranks, same reasoning as
+    # news-retrieval's original per-poll ranking gap.
+    classified = classify_taiwan_signal_batch(all_articles)
+
+    candidate_source_ids = [c["result"]["source_id"] for c in classified]
+    already_done = get_existing_taiwan_source_ids(candidate_source_ids)
+    to_insert = [c for c in classified if c["result"]["source_id"] not in already_done]
+
+    update_job_status(job_id, "running", article_count=len(to_insert))
+
+    inserted = 0
+    for c in to_insert:
+        try:
+            insert_taiwan_signal_classification(job_id, c["article"], c["result"])
+            inserted += 1
+        except Exception:
+            logger.exception(
+                "Failed to insert taiwan_market_signal classification for"
+                " source_id=%s (job %d)",
+                c["result"]["source_id"], job_id,
+            )
+
+    logger.info(
+        "[TAIWAN_SIGNAL] job=%d runs=%d pooled_articles=%d classified=%d"
+        " already_done=%d inserted=%d",
+        job_id, len(run_ids), len(all_articles), len(classified),
+        len(already_done), inserted,
+    )
+    update_job_status(job_id, "completed", article_count=inserted, set_completed_at=True)
 
 
 async def run_agent_pipeline(job_id: int, domain: str, news_run_id: int, limit: int | None = None) -> None:
