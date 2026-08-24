@@ -305,6 +305,24 @@ jobs:
             -f signal-herald/Dockerfile .
           docker push $IMAGE:$TAG
           docker push $IMAGE:latest
+      - name: Deploy
+        env:
+          IMAGE: ${{ secrets.ECR_REGISTRY }}/ocn/signal-herald
+          TAG:   ${{ github.sha }}
+        run: |
+          TASK_DEF=$(aws ecs describe-task-definition \
+            --task-definition staging-signal-herald \
+            --query taskDefinition)
+          NEW_TASK=$(echo $TASK_DEF | jq \
+            --arg img "$IMAGE:$TAG" \
+            'del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy)
+            | .containerDefinitions[0].image = $img')
+          aws ecs register-task-definition --cli-input-json "$NEW_TASK"
+          aws ecs update-service \
+            --cluster staging-ocn-cluster \
+            --service staging-signal-herald \
+            --task-definition staging-signal-herald \
+            --force-new-deployment
 
 
   deploy-research-universe:
