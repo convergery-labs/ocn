@@ -20,7 +20,6 @@ import config
 logger = logging.getLogger(__name__)
 
 _REVENUE_RANK_TOP_N = 3
-_REVENUE_RANK_BOTTOM_N = 3
 
 # Starter table built from clause codes observed live against the TWSE/TPEx
 # material-announcements feed. A real table should be built from ~2 weeks
@@ -35,12 +34,6 @@ _CLAUSE_CODE_TABLE: dict[str, str] = {
     "第53款": "NOISE",  # observed live: company name change - admin
 }
 _CLAUSE_CODE_DEFAULT = "WEAK"
-
-_TAIWAN_SIGNAL_TO_SCORE = {"HIGH": 1.0, "WEAK": 1.0, "NOISE": 1.0}
-# Deterministic classifications (rank, clause lookup) always get
-# signal_score=1.0 - there is no probabilistic "confidence" for "this IS
-# rank 2 of 20" the way there is for an LLM judgment; 1.0 reflects
-# certainty in the computation, not a guess.
 
 # Which metadata/top-level fields need translation, per source_category.
 # company_name is deliberately NOT translated here - news-retrieval already
@@ -144,9 +137,17 @@ def rank_revenue_by_yoy(articles: list[dict[str, Any]]) -> None:
     A fixed percentage cutoff doesn't work for this universe - these
     companies routinely post 50-300% YoY as their normal run rate, so a
     flat threshold would flag nearly everyone, nearly every month. Ranking
-    is self-calibrating and guarantees a stable number of HIGH signals per
-    period. Never NOISE - a monthly statutory filing is never noise by
-    definition.
+    is self-calibrating for the top end and guarantees a stable number of
+    top-N HIGH signals per period. Never NOISE - a monthly statutory filing
+    is never noise by definition.
+
+    The bottom end is NOT rank-based: in a month where every tracked
+    company grew, the slowest grower is still just a normal month, not a
+    signal. HIGH at the bottom only fires on actual negative YoY - a real
+    contraction, not merely "smallest gain in a good month." This means
+    the number of HIGH signals per period varies (some months more, some
+    fewer, some none at the bottom) - that's correct, not a bug to force
+    back to a fixed count.
 
     Ranks ALL revenue articles passed in together, per period - callers
     are responsible for passing in every article for a given day's
@@ -174,9 +175,10 @@ def rank_revenue_by_yoy(articles: list[dict[str, Any]]) -> None:
         n = len(ranked)
         for i, article in enumerate(ranked):
             rank = i + 1
+            yoy_pct = article["metadata"]["yoy_pct"]
             is_top = rank <= _REVENUE_RANK_TOP_N
-            is_bottom = rank > n - _REVENUE_RANK_BOTTOM_N
-            signal = "HIGH" if (is_top or is_bottom) else "WEAK"
+            is_shrinking = yoy_pct < 0
+            signal = "HIGH" if (is_top or is_shrinking) else "WEAK"
             article["metadata"]["revenue_rank_signal"] = signal
             article["metadata"]["revenue_yoy_rank"] = rank
             article["metadata"]["revenue_rank_reason"] = f"rank_{rank}_of_{n}_yoy"
@@ -459,8 +461,14 @@ def classify_taiwan_signal_batch(
         results.append({
             "article": a,
             "result": {
+                # Both mops_revenue (rank) and mops_material (clause-code
+                # lookup) are deterministic rules, not scored judgments -
+                # null is more honest than a fabricated 1.0, and each
+                # already has a self-describing reason/rank field to sort
+                # or filter on instead. signal_score is reserved for a
+                # path where a model genuinely produces one (gdelt).
                 "signal": signal,
-                "signal_score": _TAIWAN_SIGNAL_TO_SCORE[signal],
+                "signal_score": None,
                 "source_id": source_id,
                 "reason": reason,
                 "metadata": meta,
