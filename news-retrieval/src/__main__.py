@@ -59,7 +59,7 @@ def trigger(domain: str, days_back: int) -> None:
         sys.exit(0)
 
     logger.info("Starting pipeline — domain=%s run_id=%d", domain, result["run_id"])
-    run_pipeline(result["run_id"], request, result["domain_config"])
+    run_pipeline(result["run_id"], request)
     logger.info("Pipeline complete — run_id=%d", result["run_id"])
 
 
