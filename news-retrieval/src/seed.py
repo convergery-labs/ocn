@@ -1426,6 +1426,22 @@ TAIWAN_GDELT_SOURCE: dict[str, Any] = {
                 + [f"{t['company']} sourcelang:chinese sourcecountry:TW"]
             )
         },
+        # Maps each query string to the ticker's English name, regardless of
+        # whether the query itself used the native or English name - lets
+        # the company-name-in-title filter accept an English-language
+        # headline even for a native-name query (confirmed live: GDELT's
+        # sourcelang:chinese scope still returns some English-language
+        # articles, e.g. Taipei Times/Focus Taiwan syndication, which were
+        # being dropped even though they genuinely name the company).
+        "query_english_name": {
+            q: t["company"]
+            for t in TAIWAN_TICKER_UNIVERSE
+            for q in (
+                ([f"{t['native_name']} sourcelang:chinese sourcecountry:TW"]
+                 if len(t["native_name"]) >= _GDELT_MIN_QUERY_CHARS else [])
+                + [f"{t['company']} sourcelang:chinese sourcecountry:TW"]
+            )
+        },
     },
 }
 

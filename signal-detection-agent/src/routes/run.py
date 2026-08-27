@@ -3,10 +3,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from adapters.news_client import NewsRetrievalError
 from auth import require_auth
 from controllers.run import run_agent_pipeline, submit_run
 
@@ -28,13 +29,16 @@ async def trigger_run(
     background_tasks: BackgroundTasks,
     caller: dict[str, Any] = Depends(require_auth),
 ) -> JSONResponse:
-    job_id, news_run_id, cached = await submit_run(
-        domain=body.domain,
-        run_id=body.run_id,
-        days_back=body.days_back,
-        use_latest_run=body.use_latest_run,
-        force=body.force,
-    )
+    try:
+        job_id, news_run_id, cached = await submit_run(
+            domain=body.domain,
+            run_id=body.run_id,
+            days_back=body.days_back,
+            use_latest_run=body.use_latest_run,
+            force=body.force,
+        )
+    except NewsRetrievalError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     if cached:
         return JSONResponse(status_code=200, content={"job_id": job_id, "cached": True})
     background_tasks.add_task(run_agent_pipeline, job_id, body.domain, news_run_id, body.limit)

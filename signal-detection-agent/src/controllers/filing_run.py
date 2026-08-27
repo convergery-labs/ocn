@@ -30,7 +30,11 @@ from models.jobs import (
     insert_filing_classification,
     update_job_status,
 )
-from pipeline.filing_classifier import classify_filing, load_sec_filing_prompt
+from pipeline.filing_classifier import (
+    classify_filing_two_stage,
+    load_sec_filing_prompt,
+    load_sec_filing_summary_prompt,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +172,7 @@ async def run_filing_classification_job(job_id: int, tickers: list[str] | None =
         return
 
     system_prompt = load_sec_filing_prompt()
+    summary_system_prompt = load_sec_filing_summary_prompt()
     models = [config.SEC_FILING_MODEL]
     semaphore = asyncio.Semaphore(config.FILING_CLASSIFY_CONCURRENCY)
     # One shared clock for ALL sec.gov/data.sec.gov calls (filing text AND
@@ -217,9 +222,10 @@ async def run_filing_classification_job(job_id: int, tickers: list[str] | None =
                     )
                 result = await loop.run_in_executor(
                     _executor,
-                    lambda f=filing, t=filing_text, found=extraction_found, xf=xbrl_facts, efs=exhibit_fetch_status, tqr=trailing_quarterly_revenue: classify_filing(
+                    lambda f=filing, t=filing_text, found=extraction_found, xf=xbrl_facts, efs=exhibit_fetch_status, tqr=trailing_quarterly_revenue: classify_filing_two_stage(
                         f, t,
-                        system_prompt=system_prompt,
+                        summary_system_prompt=summary_system_prompt,
+                        classify_system_prompt=system_prompt,
                         models=models,
                         api_key=config.OPENAI_API_KEY,
                         base_url=config.OPENAI_BASE_URL,

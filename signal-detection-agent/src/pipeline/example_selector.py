@@ -1,14 +1,22 @@
 """Dynamic example selector for the v1 signal classifier prompt.
 
-Parses all 75 labelled examples out of the v1 system prompt at import time,
+Parses all labelled examples out of the v1 system prompt at import time,
 then for each article selects a small targeted subset:
   - 3 examples matching the article's predicted category
   - 2 noise examples (always included to reinforce conservatism)
   - 2 signal/weak_signal wildcard examples from other categories
   - 1 edge-case example (stock price, governance, academic) if article text hints at one
 
-This keeps the injected examples to ~8 vs the full 75, saving ~13,000 input
-tokens per article while retaining the full rules/definitions/schema section.
+This keeps the injected examples to ~8 vs the full set, saving thousands of
+input tokens per article while retaining the full rules/definitions/schema
+section.
+
+Edge-case and noise-anchor example numbers below are pinned to specific
+article content (see the comment on each entry) rather than being assumed
+stable. If the prompt's examples are ever reordered, added, or removed,
+re-run the mapping in this docstring's companion check before trusting the
+numbers: grep each old article snippet in the current prompt file and update
+the number to match.
 """
 from __future__ import annotations
 
@@ -116,16 +124,27 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
     ],
 }
 
-# Edge-case hint patterns → example numbers that best illustrate the rule
+# Edge-case hint patterns → example numbers that best illustrate the rule.
+# Each number is pinned to specific article content (noted below), not a
+# fixed position in the file — re-verify against the prompt if examples
+# are ever added, removed, or reordered.
 _EDGE_CASE_EXAMPLES: list[tuple[list[str], list[int]]] = [
-    (["stock", "share price", "surge", "all-time high", "52-week"], [33, 34, 37]),
-    (["governance", "commission", "study group", "encyclical", "ethics", "consultation"], [11, 13, 14]),
-    (["scholarship", "grant", "university", "research award", "academic"], [6, 16, 61]),
-    (["fundrais", "in talks", "exploring", "seeking capital", "series"], [12, 67]),
-    (["short-seller", "fraud", "misconduct", "allegation"], [20, 22]),
-    (["layoff", "restructur", "headcount", "job cut"], [19, 22, 30]),
-    (["permitting", "injunction", "regulatory action", "enforcement"], [20, 40, 59]),
-    (["bankruptcy", "shutdown", "wind-down", "discontinu"], [21, 24, 28, 48]),
+    # Dell earnings beat / Dell all-time-high / Dell minor move (noise)
+    (["stock", "share price", "surge", "all-time high", "52-week"], [28, 29, 30]),
+    # Vatican AI commission / workplace AI report / White House "may pivot"
+    (["governance", "commission", "study group", "encyclical", "ethics", "consultation"], [10, 12, 13]),
+    # AI scholarship fund (noise) / MIT benchmark paper (noise)
+    (["scholarship", "grant", "university", "research award", "academic"], [15, 53]),
+    # AI lab "reportedly in talks" to raise / IonQ Series E
+    (["fundrais", "in talks", "exploring", "seeking capital", "series"], [11, 58]),
+    # Clearview AI GDPR fine / Intel Falcon Shores cancellation
+    (["short-seller", "fraud", "misconduct", "allegation"], [19, 21]),
+    # Scale AI layoffs / Intel Falcon Shores layoffs / Figure AI BMW layoffs
+    (["layoff", "restructur", "headcount", "job cut"], [18, 21, 26]),
+    # Clearview AI GDPR fine / Oklo NRC permit denial / EU AI Act enforcement
+    (["permitting", "injunction", "regulatory action", "enforcement"], [19, 22, 51]),
+    # Stability AI shuts down Stable Audio Open / Harvey Chapter 11 bankruptcy
+    (["bankruptcy", "shutdown", "wind-down", "discontinu"], [20, 41]),
 ]
 
 
@@ -232,8 +251,8 @@ class ExampleSelector:
             for e in noise_in_cat[:take_noise_cat]:
                 selected_nums.add(e.number)
 
-        # 2. Fixed generic noise anchors (ex 5=think-piece, 6=small grant, 13=opinion)
-        for num in [5, 6, 13][:n_noise]:
+        # 2. Fixed generic noise anchors (ex 5=think-piece, 15=scholarship fund, 12=opinion report)
+        for num in [5, 15, 12][:n_noise]:
             selected_nums.add(num)
 
         # 3. Wildcard signal/weak_signal — one from each of n_wildcard DISTINCT categories

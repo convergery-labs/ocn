@@ -65,7 +65,9 @@ def get_quote(ticker: str) -> dict:
 
 @router.get("/market/overview/{ticker}")
 def get_overview(ticker: str) -> dict:
-    """Fundamentals strip: market cap, P/E, 52-week range, analyst target, beta, sector."""
+    """Fundamentals strip: market cap, P/E, 52-week range, analyst target, beta, sector,
+    momentum_roc, momentum_mom, 50/200-day moving averages, EPS/forward PE/price-to-book/
+    EV-to-EBITDA, margins, YoY earnings/revenue growth, dividend yield/per-share."""
     item = _latest("overview", "ticker", ticker.upper())
     if not item:
         raise _not_found(ticker)

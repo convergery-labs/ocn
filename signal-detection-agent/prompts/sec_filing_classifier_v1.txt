@@ -52,21 +52,27 @@ You have been given:
    present (a recent IPO, a data gap), say the trend comparison is
    unavailable and judge materiality from the raw YoY percentage alone
    rather than guessing a baseline.
-5. Filing text: the fetched primary document (8-K) or extracted results-of-
-   operations plus qualitative notes on income taxes/contingencies/debt
-   (10-Q, 10-K — not the full document). For 8-K items 2.02 (earnings
-   results), 7.01 (Reg FD), and 8.01 (other events), the text below is
-   followed by an "Attached exhibit(s)" section containing the fetched
-   EX-99* exhibit(s) (usually the press release and/or supplemental
-   commentary) whenever fetching succeeded — this is where the actual
-   figures for an earnings 8-K live, not the cover page. An
-   "exhibit_fetch_status" field in the metadata tells you whether this
-   happened: "full" (all referenced exhibits fetched), "partial" (primary
-   document only, exhibit fetch failed or was empty), or "not_applicable"
-   (this item code doesn't warrant an exhibit fetch). Only conclude the
-   figures are "not included" when exhibit_fetch_status is "partial" —
-   if it is "full" and you still don't see figures, the exhibit itself
-   didn't contain them, which is different information than a fetch failure.
+5. Filing text: a structured JSON summary of the filing's prose content — not
+   the raw fetched document. A separate extraction step has already read the
+   full primary document (and, for 8-K items 2.02/7.01/8.01, the attached
+   EX-99* exhibit(s) whenever fetching succeeded) and pulled out headline,
+   guidance, stated_figures, positives, negatives, outlook,
+   disclosure_flags, and citations (each citation gives a verbatim
+   source_snippet you can treat as if you had read that part of the filing
+   yourself). That extraction deliberately EXCLUDES any figure that appears
+   in a financial-statement table (revenue, net income, EPS, any margin,
+   operating income) — those are covered exactly by the XBRL block above,
+   not by this summary, so do not expect or ask for them here; use the
+   XBRL block for those figures and this summary for everything else
+   (deal terms, guidance language, qualitative context, disclosure timing).
+   An "exhibit_fetch_status" field in the metadata tells you whether the
+   underlying exhibit fetch happened before this summary was produced:
+   "full" (all referenced exhibits fetched), "partial" (primary document
+   only, exhibit fetch failed or was empty), or "not_applicable" (this item
+   code doesn't warrant an exhibit fetch). Only conclude figures are "not
+   included" when exhibit_fetch_status is "partial" — if it is "full" and
+   the summary still shows no figures, the exhibit itself didn't contain
+   them, which is different information than a fetch failure.
 
 ==============================
 FORM TYPE CONTEXT
@@ -104,10 +110,16 @@ varies is whether the information is NEW.
 
 Indicators the content was already public:
 - The filing's substance sits in an attached press release exhibit
-- The text references a previously issued announcement, release, or statement
+- The summary's citations reference a previously issued announcement,
+  release, or statement
 - The event described is dated meaningfully before accepted_at
 - accepted_at falls shortly after a market close, which is the standard slot
   for filing an already-issued earnings release
+- The summary's disclosure_flags.references_prior_disclosure is true — this
+  is a starting signal from the extraction step, not a final answer; weigh
+  it alongside the other indicators here and the EXCEPTION below rather than
+  copying it directly, since that flag does not know about the item-code
+  exceptions that follow.
 
 If the filing restates already-public content:
 - Set "already_disclosed": true

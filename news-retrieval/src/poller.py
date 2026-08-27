@@ -180,12 +180,43 @@ def _company_news_running() -> bool:
 # Daily mode: OVERVIEW, EARNINGS, TIME_SERIES_DAILY_ADJUSTED
 # ---------------------------------------------------------------------------
 
+_ROC_TIME_PERIOD = 10  # trading days — short-term window, more reactive to recent news
+_MOM_TIME_PERIOD = 10  # same window as ROC, so the two are directly comparable
+
+
+def _fetch_technical_indicator(
+    ticker: str, av_key: str, last_call: list[float], function: str, time_period: int,
+) -> Decimal:
+    """Latest value of a single-field AV technical indicator (ROC, MOM, ...). 0 on any failure."""
+    _rate_sleep(last_call)
+    data = _av_get(
+        {
+            "function": function,
+            "symbol": ticker,
+            "interval": "daily",
+            "time_period": time_period,
+            "series_type": "close",
+        },
+        av_key,
+    )
+    series = data.get(f"Technical Analysis: {function}", {})
+    if not series:
+        logger.warning("[AV] %s empty for %s", function, ticker)
+        return Decimal("0")
+
+    latest_date = max(series.keys())
+    return _to_decimal(series[latest_date].get(function, "0"))
+
+
 def _poll_overview(ticker: str, av_key: str, last_call: list[float]) -> None:
     _rate_sleep(last_call)
     data = _av_get({"function": "OVERVIEW", "symbol": ticker}, av_key)
     if not data or "MarketCapitalization" not in data:
         logger.warning("[AV] OVERVIEW empty for %s", ticker)
         return
+
+    roc = _fetch_technical_indicator(ticker, av_key, last_call, "ROC", _ROC_TIME_PERIOD)
+    mom = _fetch_technical_indicator(ticker, av_key, last_call, "MOM", _MOM_TIME_PERIOD)
 
     _table("overview").put_item(Item={
         "ticker": ticker,
@@ -201,9 +232,27 @@ def _poll_overview(ticker: str, av_key: str, last_call: list[float]) -> None:
         "sector": data.get("Sector", ""),
         "revenue_ttm": _to_decimal(data.get("RevenueTTM", "0")),
         "shares_outstanding": _to_decimal(data.get("SharesOutstanding", "0")),
+        "momentum_roc": roc,
+        "momentum_mom": mom,
+        "moving_avg_50day": _to_decimal(data.get("50DayMovingAverage", "0")),
+        "moving_avg_200day": _to_decimal(data.get("200DayMovingAverage", "0")),
+        "eps": _to_decimal(data.get("EPS", "0")),
+        "forward_pe": _to_decimal(data.get("ForwardPE", "0")),
+        "price_to_book": _to_decimal(data.get("PriceToBookRatio", "0")),
+        "ev_to_ebitda": _to_decimal(data.get("EVToEBITDA", "0")),
+        "profit_margin": _to_decimal(data.get("ProfitMargin", "0")),
+        "operating_margin_ttm": _to_decimal(data.get("OperatingMarginTTM", "0")),
+        "return_on_equity_ttm": _to_decimal(data.get("ReturnOnEquityTTM", "0")),
+        "quarterly_earnings_growth_yoy": _to_decimal(data.get("QuarterlyEarningsGrowthYOY", "0")),
+        "quarterly_revenue_growth_yoy": _to_decimal(data.get("QuarterlyRevenueGrowthYOY", "0")),
+        "dividend_yield": _to_decimal(data.get("DividendYield", "0")),
+        "dividend_per_share": _to_decimal(data.get("DividendPerShare", "0")),
         "ttl": _ttl(30),
     })
-    logger.info("[DYNAMODB] overview written ticker=%s", ticker)
+    logger.info(
+        "[DYNAMODB] overview written ticker=%s momentum_roc=%s momentum_mom=%s",
+        ticker, roc, mom,
+    )
 
 
 def _poll_earnings(ticker: str, av_key: str, last_call: list[float]) -> None:

@@ -15,20 +15,15 @@ from adapters.news_client import (
     poll_run_until_done,
     trigger_run,
 )
-from adapters.web_search import search_entity_context
 from models.jobs import (
     create_job,
     get_completed_job_for_run,
     get_existing_taiwan_source_ids,
-    get_recent_entity_classifications,
-    insert_classification,
-    insert_geopolitical_classification,
     insert_taiwan_signal_classification,
     update_job_status,
 )
-from pipeline.classifier import classify_article_two_stage, has_usable_body, load_prompt
-from pipeline.example_selector import ExampleSelector, parse_examples
-from pipeline.geopolitical_classifier import classify_geopolitical_article, load_geopolitical_prompt
+from pipeline.classifier import has_usable_body
+from pipeline.dispatch import get_domain_config, known_domains
 from pipeline.taiwan_signal_classifier import classify_taiwan_signal_batch
 
 logger = logging.getLogger(__name__)
@@ -74,49 +69,6 @@ async def submit_run(
             return int(existing["id"]), news_run_id, True
     job_id = create_job(domain=domain, news_run_id=news_run_id)
     return job_id, news_run_id, False
-
-
-async def _run_geopolitical_classification(job_id: int, usable: list[dict[str, Any]]) -> None:
-    """Single-pass classification for geopolitical_news articles - no STORM
-    second pass (the geopolitical prompt has no refine prompt), no category/
-    materiality, no entity-history/web-search context gathering.
-    """
-    system_prompt = load_geopolitical_prompt()
-    models = [config.OPENAI_MODEL]
-    semaphore = asyncio.Semaphore(config.CLASSIFY_CONCURRENCY)
-    loop = asyncio.get_event_loop()
-
-    async def classify_one(article: dict[str, Any]) -> bool:
-        async with semaphore:
-            try:
-                result = await loop.run_in_executor(
-                    _executor,
-                    lambda a=article: classify_geopolitical_article(
-                        a,
-                        system_prompt=system_prompt,
-                        models=models,
-                        api_key=config.OPENAI_API_KEY,
-                        base_url=config.OPENAI_BASE_URL,
-                        timeout=config.OPENAI_TIMEOUT,
-                        max_attempts=config.OPENAI_MAX_ATTEMPTS,
-                    ),
-                )
-                insert_geopolitical_classification(job_id, article, result)
-                return False
-            except Exception:
-                logger.exception(
-                    "Geopolitical classification failed for article %s (job %d)",
-                    article.get("url"), job_id,
-                )
-                return True
-
-    outcomes = await asyncio.gather(*[classify_one(a) for a in usable])
-    skipped = sum(outcomes)
-
-    if skipped == len(usable) and usable:
-        update_job_status(job_id, "failed", set_completed_at=True)
-    else:
-        update_job_status(job_id, "completed", set_completed_at=True)
 
 
 async def run_taiwan_signal_classification(job_id: int, from_date: str, to_date: str) -> None:
@@ -196,12 +148,20 @@ async def run_taiwan_signal_classification(job_id: int, from_date: str, to_date:
 
 
 async def run_agent_pipeline(job_id: int, domain: str, news_run_id: int, limit: int | None = None) -> None:
-    """Background task: fetch → classify → persist."""
+    """Background task: fetch → classify → persist.
+
+    Routing is entirely dispatch.get_domain_config(domain) - sec_filing and
+    taiwan_market_signal never reach this function (they have their own
+    entry points: controllers/filing_run.py, run_taiwan_signal_classification
+    above), so an unregistered domain here is either a caller error (typo,
+    stale domain string) or a genuinely new domain that hasn't been
+    registered in pipeline/dispatch.py yet - either way, fail the job loudly
+    rather than silently classifying it against the wrong domain's prompt
+    and schema.
+    """
     update_job_status(job_id, "running")
     try:
-        run_id = news_run_id
-
-        articles = await get_run_articles(run_id)
+        articles = await get_run_articles(news_run_id)
     except NewsRetrievalError:
         logger.exception("Pre-classification pipeline failed for job %d", job_id)
         update_job_status(job_id, "failed", set_completed_at=True)
@@ -212,34 +172,14 @@ async def run_agent_pipeline(job_id: int, domain: str, news_run_id: int, limit: 
         usable = usable[:limit]
     update_job_status(job_id, "running", article_count=len(usable))
 
-    if domain == config.GEOPOLITICAL_DOMAIN:
-        await _run_geopolitical_classification(job_id, usable)
+    domain_config = get_domain_config(domain)
+    if domain_config is None:
+        logger.error(
+            "No classifier registered for domain=%r (job %d) - known domains: %s",
+            domain, job_id, ", ".join(known_domains()),
+        )
+        update_job_status(job_id, "failed", set_completed_at=True)
         return
-
-    system_prompt_v1 = load_prompt(config.DEFAULT_PROMPT)
-    system_prompt_v2 = load_prompt(config.DEFAULT_PROMPT_V2)
-    models = [config.OPENAI_MODEL]
-    example_selector = ExampleSelector(parse_examples(system_prompt_v1))
-    models_v2 = [config.OPENAI_MODEL_V2]
-
-    def entity_history_fn(entity_names: list[str]) -> list[dict]:
-        return get_recent_entity_classifications(entity_names)
-
-    def web_search_fn(entity_names: list[str], signal_reason: str = "") -> list[dict]:
-        results: list[dict] = []
-        event_hint = signal_reason[:60].strip() if signal_reason else ""
-        for i, name in enumerate(entity_names[:2]):
-            query = f"{name} {event_hint}".strip() if event_hint else name
-            results.extend(
-                search_entity_context(
-                    query,
-                    provider=config.WEB_SEARCH_PROVIDER,
-                    api_key=config.WEB_SEARCH_API_KEY,
-                    # apply delay on 2nd+ query to avoid DuckDuckGo rate limiting
-                    rate_delay=(i > 0 and config.WEB_SEARCH_PROVIDER == "duckduckgo"),
-                )
-            )
-        return results
 
     batch_context = [
         {"title": a.get("title", ""), "url": a.get("url", "")}
@@ -255,28 +195,14 @@ async def run_agent_pipeline(job_id: int, domain: str, news_run_id: int, limit: 
             try:
                 result = await loop.run_in_executor(
                     _executor,
-                    lambda a=article: classify_article_two_stage(
-                        a,
-                        system_prompt_v1=system_prompt_v1,
-                        system_prompt_v2=system_prompt_v2,
-                        entity_history_fn=entity_history_fn,
-                        web_search_fn=web_search_fn,
-                        models=models,
-                        api_key=config.OPENAI_API_KEY,
-                        base_url=config.OPENAI_BASE_URL,
-                        timeout=config.OPENAI_TIMEOUT,
-                        max_attempts=config.OPENAI_MAX_ATTEMPTS,
-                        batch_context=[b for b in batch_context if b["url"] != a.get("url")],
-                        example_selector=example_selector,
-                        models_v2=models_v2,
-                    ),
+                    lambda a=article: domain_config.classify_one(a, batch_context=batch_context),
                 )
-                insert_classification(job_id, article, result)
+                domain_config.insert_fn(job_id, article, result)
                 return False
             except Exception:
                 logger.exception(
-                    "Classification failed for article %s (job %d)",
-                    article.get("url"), job_id,
+                    "Classification failed for article %s (job %d, domain=%s)",
+                    article.get("url"), job_id, domain,
                 )
                 return True
 

@@ -738,7 +738,12 @@ def _fetch_federal_register(sources: list[dict], days_back: int) -> list[dict]:
 
 
 _GDELT_DOC_URL = "https://api.gdeltproject.org/api/v2/doc/doc"
-_GDELT_MIN_INTERVAL = 10.0  # GDELT's documented floor is 5s; observed to tighten under load
+_GDELT_MIN_INTERVAL = 15.0  # GDELT's documented floor is 5s; observed to tighten under load -
+# bumped from 10.0 after a live run showed 17/29 queries failing (429s, SSL handshake
+# timeouts, connection resets) even at 10s spacing for the Taiwan per-company-name query
+# pattern specifically (vs. geopolitical_news's broader theme queries, which succeed
+# reliably at the same interval) - this alone won't fix the separate, larger loss from
+# the company-name-in-title filter (Path 3 Stage A) dropping most surviving results.
 _GDELT_MAXRECORDS = 250
 _GDELT_MAX_ROUNDS = 3  # round-robin passes over rate-limited queries before giving up
 _GDELT_USER_AGENT = (
@@ -888,7 +893,9 @@ def _filter_by_domain_allowlist(
 
 
 def _filter_by_company_name_in_title(
-    articles: list[dict], query_ticker: dict[str, str],
+    articles: list[dict],
+    query_ticker: dict[str, str],
+    query_english_name: dict[str, str] | None = None,
 ) -> list[dict]:
     """Drop GDELT articles whose title doesn't actually contain the company
     name that was queried for.
@@ -907,9 +914,18 @@ def _filter_by_company_name_in_title(
     quality. Case-insensitive for English names; exact substring match for
     Chinese names (no case concept).
 
+    Also accepts the ticker's English name as a fallback match, even for a
+    native-name query - GDELT's sourcelang:chinese scope still surfaces some
+    English-language syndication (Taipei Times, Focus Taiwan), which was
+    being dropped by a native-name-only check despite genuinely naming the
+    company. ``query_english_name`` is optional so other sources (e.g.
+    geopolitical_news's theme queries, which have no ticker mapping at all)
+    are unaffected.
+
     Keyed on ``_query`` presence, same reasoning as the allowlist filter
     above - source_category isn't set yet at this point in the pipeline.
     """
+    query_english_name = query_english_name or {}
     kept = []
     dropped = 0
     for a in articles:
@@ -920,14 +936,19 @@ def _filter_by_company_name_in_title(
         # The query string is "{name} sourcelang:chinese sourcecountry:TW" -
         # the name is everything before the first operator.
         name = query.split(" sourcelang:")[0].strip()
+        english_name = query_english_name.get(query, "")
         title = a.get("title") or ""
-        if name and name.lower() in title.lower():
+        title_lower = title.lower()
+        if (name and name.lower() in title_lower) or (
+            english_name and english_name.lower() in title_lower
+        ):
             kept.append(a)
         else:
             dropped += 1
             logger.info(
-                "[PATH3-A] dropped (queried name %r not found in title %r)",
-                name, title,
+                "[PATH3-A] dropped (queried name %r / english name %r not"
+                " found in title %r)",
+                name, english_name, title,
             )
     if dropped:
         logger.info(
@@ -1340,8 +1361,11 @@ def _fetch_gdelt(sources: list[dict], days_back: int) -> list[dict]:
     )
 
     query_ticker: dict[str, str] = {}
+    query_english_name: dict[str, str] = {}
     for source in sources:
-        query_ticker.update((source.get("config") or {}).get("query_ticker", {}))
+        config = source.get("config") or {}
+        query_ticker.update(config.get("query_ticker", {}))
+        query_english_name.update(config.get("query_english_name", {}))
 
     # Path 3, Stage A (spec order: allowlist -> name-in-title -> dedup).
     # All three are no-ops for sources with no ticker mapping (e.g.
@@ -1352,7 +1376,9 @@ def _fetch_gdelt(sources: list[dict], days_back: int) -> list[dict]:
     if query_ticker:
         before_stage_a = len(articles)
         articles = _filter_by_domain_allowlist(articles, query_ticker)
-        articles = _filter_by_company_name_in_title(articles, query_ticker)
+        articles = _filter_by_company_name_in_title(
+            articles, query_ticker, query_english_name,
+        )
         logger.info(
             "[GDELT] Path 3 Stage A (allowlist + name-check): %d -> %d article(s)",
             before_stage_a, len(articles),
