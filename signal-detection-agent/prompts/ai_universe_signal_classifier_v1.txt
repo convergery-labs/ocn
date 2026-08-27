@@ -442,20 +442,7 @@ Output:
   "entities": []
 }
 
-Example 6, Noise:
-Article: "A regional foundation awards a $25,000 grant to a university team
-studying AI-assisted cancer detection."
-Output:
-{
-  "signal_detection": "noise",
-  "signal_score": 0.28,
-  "signal_reason": "The grant funds early-stage university AI research, but there is no commercialization, deployment, regulatory milestone, or material company impact.",
-  "materiality": "none",
-  "category": "Applications & Digital Economy",
-  "entities": []
-}
-
-Example 7, Weak signal, low materiality, Applications & Economy:
+Example 6, Weak signal, low materiality, Applications & Economy:
 Article: "ABB pilots a new AI-assisted maintenance dashboard with one regional
 manufacturing customer, but rollout plans and commercial scale remain unclear."
 Output:
@@ -470,7 +457,7 @@ Output:
   ]
 }
 
-Example 8, Signal, medium materiality, AI Models:
+Example 7, Signal, medium materiality, AI Models:
 Article: "Mistral releases open-weights Mixtral-Next model with improved
 reasoning benchmarks; pricing matches existing tier."
 Output:
@@ -486,7 +473,7 @@ Output:
   ]
 }
 
-Example 9, Signal, medium materiality, Robotics & Physical AI:
+Example 8, Signal, medium materiality, Robotics & Physical AI:
 Article: "Figure raises $1.5B Series C led by Microsoft and NVIDIA to scale
 humanoid robot deployments in BMW factories."
 Output:
@@ -504,7 +491,7 @@ Output:
   ]
 }
 
-Example 10, Weak signal, low materiality, Software / Infrastructure:
+Example 9, Weak signal, low materiality, Software / Infrastructure:
 Article: "Hugging Face details vLLM V1 migration fixes for RL training,
 including processed logprobs, runtime defaults, inflight weight updates, and
 fp32 lm_head parity improvements."
@@ -521,7 +508,7 @@ Output:
   ]
 }
 
-Example 11, Weak signal, low materiality, Applications & Economy:
+Example 10, Weak signal, low materiality, Applications & Economy:
 Article: "The Vatican establishes an interdicasterial commission on artificial
 intelligence to study ethics, labor, and governance questions."
 Output:
@@ -536,7 +523,7 @@ Output:
   ]
 }
 
-Example 12, Weak signal, low materiality, AI Models:
+Example 11, Weak signal, low materiality, AI Models:
 Article: "An AI lab is reportedly in talks to raise $500 million from investors
 to expand open-weight models and cloud services."
 Output:
@@ -549,7 +536,7 @@ Output:
   "entities": []
 }
 
-Example 13, Noise:
+Example 12, Noise:
 Article: "A new report argues current workplace AI regulation is misguided and
 recommends more consultation and safeguards for employees."
 Output:
@@ -562,7 +549,7 @@ Output:
   "entities": []
 }
 
-Example 14, Noise:
+Example 13, Noise:
 Article: "The White House may pivot toward AI oversight and is considering a
 future model-licensing regime as political backlash grows."
 Output:
@@ -575,7 +562,7 @@ Output:
   "entities": []
 }
 
-Example 15, Signal, low materiality, Applications & Economy:
+Example 14, Signal, low materiality, Applications & Economy:
 Article: "Google adds YouTube Premium Lite at no extra cost to its AI Pro
 subscription, changing the paid bundle for its consumer AI plan."
 Output:
@@ -591,7 +578,7 @@ Output:
   ]
 }
 
-Example 16, Noise:
+Example 15, Noise:
 Article: "Tech company launches AI scholarship fund awarding 500 grants to underrepresented students studying machine learning and data science."
 Output:
 {
@@ -603,7 +590,7 @@ Output:
   "entities": []
 }
 
-Example 17, Noise:
+Example 16, Noise:
 Article: "Security researchers discover malicious packages in a popular GitHub registry targeting software developers, compromising thousands of open-source projects."
 Output:
 {
@@ -615,7 +602,7 @@ Output:
   "entities": []
 }
 
-Example 18, Noise:
+Example 17, Noise:
 Article: "BeautyAI launches an AI-powered skin-tone matching feature in its salon booking app to help small cosmetics businesses personalise customer recommendations."
 Output:
 {
@@ -627,7 +614,7 @@ Output:
   "entities": []
 }
 
-Example 19, Signal, medium materiality, AI Data:
+Example 18, Signal, medium materiality, AI Data:
 Article: "Scale AI confirms 400 layoffs, cutting roughly 20% of its workforce
 amid a slowdown in demand for human-labeled training data as model providers
 shift to synthetic data generation."
@@ -643,7 +630,7 @@ Output:
   ]
 }
 
-Example 20, Signal, medium materiality, AI Data:
+Example 19, Signal, medium materiality, AI Data:
 Article: "Italy's data protection authority orders Clearview AI to delete all
 facial recognition data collected from Italian citizens and imposes a €20M fine
 for GDPR violations, effective immediately."
@@ -660,7 +647,7 @@ Output:
   ]
 }
 
-Example 21, Signal, medium materiality, AI Models:
+Example 20, Signal, medium materiality, AI Models:
 Article: "Stability AI shuts down its Stable Audio Open platform and disbands
 its audio team following the collapse of acquisition talks and worsening cash
 flow constraints."
@@ -677,7 +664,7 @@ Output:
   ]
 }
 
-Example 22, Signal, medium materiality, Semiconductor Manufacturing:
+Example 21, Signal, medium materiality, Semiconductor Manufacturing:
 Article: "Intel confirms it is cancelling its Falcon Shores AI accelerator
 program and laying off 2,000 engineers from its XPU division, citing
 uncompetitive die costs at Intel 18A versus NVIDIA Blackwell on TSMC N3."
@@ -695,7 +682,7 @@ Output:
   ]
 }
 
-Example 23, Signal, medium materiality, Nuclear & Advanced Energy:
+Example 22, Signal, medium materiality, Nuclear & Advanced Energy:
 Article: "The Nuclear Regulatory Commission denies the site permit for Oklo's
 Aurora microreactor project in Culpeper, Virginia, removing 50 MW of committed
 carbon-free power from a hyperscaler-backed AI campus that had planned to break
@@ -713,25 +700,7 @@ Output:
   ]
 }
 
-Example 24, Signal, medium materiality, Cloud & Compute Market:
-Article: "GPU cloud startup Voltage Park shuts down its compute rental platform
-and notifies customers of a 30-day wind-down after failing to close a $300M
-Series B, citing inability to compete on spot pricing with CoreWeave and AWS."
-Output:
-{
-  "signal_detection": "signal",
-  "signal_score": 0.78,
-  "signal_reason": "Voltage Park confirmed the shutdown of its GPU cloud platform with a 30-day wind-down notice, a concrete exit from the neocloud market citing competitive pricing pressure from larger players.",
-  "materiality": "medium",
-  "category": "Cloud & Compute Platforms",
-  "entities": [
-    {"name": "Voltage Park", "type": "company"},
-    {"name": "CoreWeave", "type": "company"},
-    {"name": "AWS", "type": "company"}
-  ]
-}
-
-Example 25, Signal, medium materiality, Data Center Infrastructure:
+Example 23, Signal, medium materiality, Data Center Infrastructure:
 Article: "DigitalBridge confirms it is cancelling its planned 200 MW AI campus
 in Loudoun County following an 18-month PJM grid interconnection delay and a
 40% rise in construction financing costs since the site was acquired."
@@ -748,7 +717,7 @@ Output:
   ]
 }
 
-Example 26, Signal, medium materiality, Computer Hardware:
+Example 24, Signal, medium materiality, Computer Hardware:
 Article: "Supermicro confirms 15% of its liquid-cooled H100 rack orders have
 been cancelled following pump failures at three hyperscaler deployments; the
 company is issuing a mandatory field replacement kit for all affected cooling
@@ -765,39 +734,7 @@ Output:
   ]
 }
 
-Example 27, Signal, low materiality, Thermal & Cooling:
-Article: "Vertiv issues a mandatory field-replacement notice for 3,200 deployed
-CoolChip liquid cooling distribution units after confirming pump seal failures
-caused overheating incidents at two hyperscaler AI data centers."
-Output:
-{
-  "signal_detection": "signal",
-  "signal_score": 0.68,
-  "signal_reason": "Vertiv confirmed a mandatory recall of 3,200 liquid cooling units following pump failures at hyperscaler AI data centers, a concrete product defect with direct impact on deployed AI compute capacity.",
-  "materiality": "low",
-  "category": "Data Centers & Physical Infrastructure",
-  "entities": [
-    {"name": "Vertiv", "type": "company"}
-  ]
-}
-
-Example 28, Signal, medium materiality, Software / Infrastructure:
-Article: "Together AI shuts down its public GPU inference cloud with 60 days'
-notice to API customers, citing unsustainable margins against hyperscaler
-spot-GPU pricing; the hosted inference service will be fully terminated."
-Output:
-{
-  "signal_detection": "signal",
-  "signal_score": 0.73,
-  "signal_reason": "Together AI confirmed the shutdown of its public inference cloud, a concrete platform exit removing a named independent AI inference provider from the software infrastructure market.",
-  "materiality": "medium",
-  "category": "AI Software Infrastructure",
-  "entities": [
-    {"name": "Together AI", "type": "company"}
-  ]
-}
-
-Example 29, Signal, medium materiality, Minerals & Raw Materials:
+Example 25, Signal, medium materiality, Minerals & Raw Materials:
 Article: "MP Materials confirms its Mountain Pass rare earth processing facility
 will halt operations for six weeks following a fire in the solvent extraction
 circuit, reducing North American rare earth oxide output by approximately 15%."
@@ -814,7 +751,7 @@ Output:
   ]
 }
 
-Example 30, Signal, low materiality, Robotics & Physical AI:
+Example 26, Signal, low materiality, Robotics & Physical AI:
 Article: "Figure AI confirms it is ending its BMW factory humanoid robot
 deployment and laying off 120 operations staff, with BMW citing missed
 throughput targets and software reliability issues in the program review."
@@ -831,7 +768,7 @@ Output:
   ]
 }
 
-Example 31, Signal, high materiality, AI Models:
+Example 27, Signal, high materiality, AI Models:
 Article: "A US federal judge grants The New York Times a preliminary injunction
 ordering OpenAI to halt ingestion of its archive content for model training,
 pausing one component of OpenAI's data pipeline pending a full copyright
@@ -849,7 +786,7 @@ Output:
   ]
 }
 
-Example 32, Signal, medium materiality, Computer Hardware:
+Example 28, Signal, medium materiality, Computer Hardware:
 Article: "Dell Technologies stock surges 18% after Q2 2026 earnings: AI server
 revenue jumped 88% year-over-year to $4.1B, AI infrastructure backlog now
 stands at $9B — Dell's fastest-growing segment — as enterprise AI hardware
@@ -866,7 +803,7 @@ Output:
   ]
 }
 
-Example 33, Weak signal, low materiality, Computer Hardware:
+Example 29, Weak signal, low materiality, Computer Hardware:
 Article: "Dell stock hits all-time high of $420.91 — a 100% surge over 12
 months — as investors bet on continued AI infrastructure spending through 2027;
 analysts explicitly cite AI server demand as the primary driver."
@@ -882,7 +819,7 @@ Output:
   ]
 }
 
-Example 34, Noise:
+Example 30, Noise:
 Article: "Dell stock up 2.3% today as broader tech market rallies; some analysts
 remain bullish on AI spending."
 Output:
@@ -897,7 +834,7 @@ Output:
   ]
 }
 
-Example 35, Signal, medium materiality, Semiconductor Manufacturing:
+Example 31, Signal, medium materiality, Semiconductor Manufacturing:
 Article: "Intel reports Q3 AI accelerator revenue of $800M, missing analyst
 consensus of $1.4B by 43%; management cuts full-year AI data center guidance
 by $2B, citing execution issues on the Gaudi 3 ramp — stock falls 14%."
@@ -914,7 +851,7 @@ Output:
   ]
 }
 
-Example 36, Signal, high materiality, Cloud & Compute Market:
+Example 32, Signal, high materiality, Cloud & Compute Market:
 Article: "Microsoft reduces FY2027 AI infrastructure capex guidance by $5B to
 $68B, with CFO Amy Hood citing slower-than-expected enterprise AI monetization
 and a need to be more selective on data center commitments."
@@ -931,24 +868,7 @@ Output:
   ]
 }
 
-Example 37, Weak signal, low materiality, Cloud & Compute Market:
-Article: "CoreWeave shares fall to a new 52-week low of $18.40, down 22%,
-after a major analyst firm downgrades the stock citing concerns that
-hyperscaler AI monetization is taking longer than expected to offset GPU
-cloud pricing pressure."
-Output:
-{
-  "signal_detection": "weak_signal",
-  "signal_score": 0.45,
-  "signal_reason": "CoreWeave hit a named 52-week low with a 22% drop explicitly attributed to AI monetization concerns — a market validation data point on the downside, though no new primary business event is reported.",
-  "materiality": "low",
-  "category": "Cloud & Compute Platforms",
-  "entities": [
-    {"name": "CoreWeave", "type": "company"}
-  ]
-}
-
-Example 38, Signal, high materiality, Cloud & Compute Market:
+Example 33, Signal, high materiality, Cloud & Compute Market:
 Article: "Microsoft announces a $50B AI data center and compute infrastructure
 capex plan for FY2027, targeting hyperscale AI inference capacity across
 Azure regions in the US, EU, and Asia-Pacific."
@@ -965,7 +885,7 @@ Output:
   ]
 }
 
-Example 39, Signal, high materiality, AI Models:
+Example 34, Signal, high materiality, AI Models:
 Article: "Google confirms it has acquired Character.AI for $2.7B, bringing
 founder Noam Shazeer back to Google DeepMind and absorbing Character's
 consumer AI platform and model technology."
@@ -984,26 +904,7 @@ Output:
   ]
 }
 
-Example 40, Signal, medium materiality, AI Models:
-Article: "Italy's data protection authority orders OpenAI to suspend ChatGPT's
-data collection from Italian users within 20 days pending a full GDPR
-compliance audit, the second such action by a European DPA against a frontier
-model provider."
-Output:
-{
-  "signal_detection": "signal",
-  "signal_score": 0.80,
-  "signal_reason": "Italy's Garante issued a binding suspension order against OpenAI's ChatGPT data collection, a concrete regulatory enforcement action imposing compliance obligations on a frontier model provider in the EU.",
-  "materiality": "medium",
-  "category": "AI Models & Intelligence Layer",
-  "entities": [
-    {"name": "OpenAI", "type": "company"},
-    {"name": "ChatGPT", "type": "model_product"},
-    {"name": "Italy Garante", "type": "regulator"}
-  ]
-}
-
-Example 41, Signal, medium materiality, AI Data:
+Example 35, Signal, medium materiality, AI Data:
 Article: "Hugging Face confirms unauthorized access to its Spaces platform
 credentials store; tokens for approximately 723 organisation accounts may
 have been exfiltrated; affected users are being force-notified and all
@@ -1021,7 +922,7 @@ Output:
   ]
 }
 
-Example 42, Signal, high materiality, Semiconductor Manufacturing:
+Example 36, Signal, high materiality, Semiconductor Manufacturing:
 Article: "TSMC breaks ground on its second Arizona fab building dedicated to the
 N2 process node, backed by $12B in CHIPS Act funding with Apple and NVIDIA
 confirmed as anchor customers for advanced AI chip production."
@@ -1039,7 +940,7 @@ Output:
   ]
 }
 
-Example 43, Signal, medium materiality, Energy:
+Example 37, Signal, medium materiality, Energy:
 Article: "Google signs a 10-year nuclear power purchase agreement with
 Constellation Energy for 500 MW of carbon-free power to support its Northern
 Virginia AI data center cluster, the largest tech-sector nuclear PPA to date."
@@ -1056,7 +957,7 @@ Output:
   ]
 }
 
-Example 44, Signal, medium materiality, Data Center Infrastructure:
+Example 38, Signal, medium materiality, Data Center Infrastructure:
 Article: "Equinix opens its LD12x hyperscale campus in London, adding 200 MW
 of AI-optimised compute capacity with Microsoft Azure and Google Cloud
 confirmed as anchor tenants."
@@ -1074,25 +975,7 @@ Output:
   ]
 }
 
-Example 45, Signal, medium materiality, Semiconductor Manufacturing:
-Article: "SK Hynix signs a multi-year HBM4 supply agreement with NVIDIA to
-support Blackwell Ultra GPU production through 2027, securing exclusive
-capacity allocation at its Icheon fab ahead of competing memory suppliers."
-Output:
-{
-  "signal_detection": "signal",
-  "signal_score": 0.84,
-  "signal_reason": "SK Hynix locked in a multi-year exclusive HBM4 supply deal with NVIDIA for Blackwell Ultra, a concrete supply chain commitment that directly shapes AI GPU memory availability through 2027.",
-  "materiality": "medium",
-  "category": "Semiconductor Manufacturing",
-  "entities": [
-    {"name": "SK Hynix", "type": "company"},
-    {"name": "NVIDIA", "type": "company"},
-    {"name": "Blackwell Ultra", "type": "model_product"}
-  ]
-}
-
-Example 46, Signal, medium materiality, Financial Infrastructure & AI Capital:
+Example 39, Signal, medium materiality, Financial Infrastructure & AI Capital:
 Article: "JPMorgan Chase confirms it has deployed its LLM Suite AI assistant
 to 60,000 employees, reporting a 20% productivity increase in software
 development teams, and plans to expand to 80,000 seats by Q3."
@@ -1109,7 +992,7 @@ Output:
   ]
 }
 
-Example 47, Signal, high materiality, AI Models:
+Example 40, Signal, high materiality, AI Models:
 Article: "The UAE announces a $10B sovereign AI fund to invest in foundation
 model development, compute infrastructure, and AI company partnerships, with
 the first tranche targeting US-based frontier model labs including Anthropic
@@ -1128,7 +1011,7 @@ Output:
   ]
 }
 
-Example 48, Signal, low materiality, Applications & Economy:
+Example 41, Signal, low materiality, Applications & Economy:
 Article: "AI legal research startup Harvey confirms it has filed for Chapter 11
 bankruptcy protection after failing to close a Series D, with $12M in
 liabilities and 180 employees to be laid off."
@@ -1144,7 +1027,7 @@ Output:
   ]
 }
 
-Example 49, Signal, medium materiality, Defense, Aerospace & Sovereign AI:
+Example 42, Signal, medium materiality, Defense, Aerospace & Sovereign AI:
 Article: "Palantir wins a $480M US Army AI data platform contract to deploy its
 AI operating system across 12 Army commands, its largest single federal
 award and a material expansion of defence AI data infrastructure."
@@ -1161,7 +1044,7 @@ Output:
   ]
 }
 
-Example 50, Weak signal, low materiality, Thermal & Cooling:
+Example 43, Weak signal, low materiality, Thermal & Cooling:
 Article: "CoolIT Systems signs a three-year direct liquid cooling supply
 agreement with a major unnamed hyperscaler for next-generation AI rack
 deployments, with delivery commencing Q2 2027."
@@ -1177,7 +1060,7 @@ Output:
   ]
 }
 
-Example 51, Signal, high materiality, AI Models:
+Example 44, Signal, high materiality, AI Models:
 Article: "Anthropic prices its IPO at $28 per share on Nasdaq, valuing the
 company at $52B and raising $3.5B in primary proceeds to fund frontier model
 development and compute infrastructure expansion."
@@ -1193,7 +1076,7 @@ Output:
   ]
 }
 
-Example 52, Signal, medium materiality, AI Models:
+Example 45, Signal, medium materiality, AI Models:
 Article: "OpenAI chief scientist Ilya Sutskever confirms he has left the
 company, effective immediately, citing disagreements over safety priorities
 and the pace of capability development; he is the fourth member of the safety
@@ -1211,7 +1094,7 @@ Output:
   ]
 }
 
-Example 53, Signal, high materiality, Cloud & Compute Market:
+Example 46, Signal, high materiality, Cloud & Compute Market:
 Article: "The US Department of Justice opens a formal antitrust investigation
 into Microsoft's AI bundling practices, examining whether Azure OpenAI's
 exclusive enterprise agreements foreclose competition in the cloud AI market."
@@ -1229,25 +1112,7 @@ Output:
   ]
 }
 
-Example 54, Signal, medium materiality, AI Models:
-Article: "Anthropic closes $2B in convertible debt financing led by JPMorgan
-and Goldman Sachs, structured as notes convertible at IPO or maturity,
-extending its compute runway and supplementing its existing equity capital."
-Output:
-{
-  "signal_detection": "signal",
-  "signal_score": 0.75,
-  "signal_reason": "Anthropic closed $2B in convertible debt from JPMorgan and Goldman Sachs, a concrete financing event that extends its compute runway and signals institutional confidence ahead of a public market debut.",
-  "materiality": "medium",
-  "category": "AI Models & Intelligence Layer",
-  "entities": [
-    {"name": "Anthropic", "type": "company"},
-    {"name": "JPMorgan", "type": "company"},
-    {"name": "Goldman Sachs", "type": "company"}
-  ]
-}
-
-Example 55, Signal, high materiality, Semiconductor Manufacturing:
+Example 47, Signal, high materiality, Semiconductor Manufacturing:
 Article: "A 7.4 magnitude earthquake strikes Hualien County, Taiwan, forcing
 TSMC to halt production at Fab 18 and Fab 20; the company confirms equipment
 assessment is underway and estimates a 3-5 day suspension of N3 and N2 node
@@ -1266,7 +1131,7 @@ Output:
   ]
 }
 
-Example 56, Signal, medium materiality, Cloud & Compute Market:
+Example 48, Signal, medium materiality, Cloud & Compute Market:
 Article: "A Microsoft Azure networking failure takes down Azure OpenAI Service,
 Azure Machine Learning, and Azure AI Search across US East and EU West regions
 for six hours, disrupting AI inference and training workloads for thousands
@@ -1284,7 +1149,7 @@ Output:
   ]
 }
 
-Example 57, Signal, high materiality, Semiconductor Manufacturing:
+Example 49, Signal, high materiality, Semiconductor Manufacturing:
 Article: "NVIDIA reports Q2 FY2027 data center revenue of $35.6B, up 122%
 year-over-year, beating consensus of $31.2B; CEO Jensen Huang raises FY2027
 guidance to $160B and confirms Blackwell Ultra shipments begin Q3."
@@ -1302,7 +1167,7 @@ Output:
   ]
 }
 
-Example 58, Signal, high materiality, AI Models:
+Example 50, Signal, high materiality, AI Models:
 Article: "The White House issues an executive order establishing a National AI
 Safety Board with mandatory pre-deployment reporting requirements for frontier
 AI models above a defined compute threshold, effective in 90 days."
@@ -1319,7 +1184,7 @@ Output:
   ]
 }
 
-Example 59, Signal, high materiality, AI Models:
+Example 51, Signal, high materiality, AI Models:
 Article: "The EU AI Act's obligations for high-risk AI systems and general
 purpose AI models enter into force today; providers must complete conformity
 assessments, register in the EU database, and meet transparency requirements
@@ -1337,7 +1202,7 @@ Output:
   ]
 }
 
-Example 60, Signal, medium materiality, Life Sciences & Healthcare AI:
+Example 52, Signal, medium materiality, Life Sciences & Healthcare AI:
 Article: "DeepMind publishes AlphaFold 3 under a commercial licence allowing
 pharmaceutical companies to use its protein structure prediction tool in drug
 discovery pipelines; Eli Lilly and Novartis confirm active integrations for
@@ -1357,7 +1222,7 @@ Output:
   ]
 }
 
-Example 61, Noise:
+Example 53, Noise:
 Article: "Researchers at MIT publish a paper showing a new transformer
 architecture that achieves 40% better reasoning on mathematical benchmarks
 using half the parameters, with no named product launch, commercial deployment,
@@ -1374,26 +1239,7 @@ Output:
   ]
 }
 
-Example 62, Signal, high materiality, Nuclear & Advanced Energy:
-Article: "Microsoft signs a 20-year power purchase agreement with Constellation
-Energy to restart Unit 1 of Three Mile Island nuclear plant, providing 835 MW
-of carbon-free baseload power dedicated to Microsoft AI data centers across
-the PJM grid, with first power delivery targeted for 2028."
-Output:
-{
-  "signal_detection": "signal",
-  "signal_score": 0.91,
-  "signal_reason": "Microsoft committed to a 20-year 835 MW nuclear PPA to restart Three Mile Island Unit 1, a concrete long-term carbon-free power commitment directly dedicated to AI data center baseload supply.",
-  "materiality": "high",
-  "category": "Nuclear & Advanced Energy",
-  "entities": [
-    {"name": "Microsoft", "type": "company"},
-    {"name": "Constellation Energy", "type": "company"},
-    {"name": "Three Mile Island", "type": "facility"}
-  ]
-}
-
-Example 63, Signal, medium materiality, Nuclear & Advanced Energy:
+Example 54, Signal, medium materiality, Nuclear & Advanced Energy:
 Article: "Kairos Power breaks ground on its Hermes demonstration reactor in Oak
 Ridge, Tennessee — the first new nuclear reactor to begin construction in the
 US in over a decade — backed by a DOE $303M advanced reactor demonstration
@@ -1413,7 +1259,7 @@ Output:
   ]
 }
 
-Example 64, Signal, high materiality, Defense, Aerospace & Sovereign AI:
+Example 55, Signal, high materiality, Defense, Aerospace & Sovereign AI:
 Article: "L3Harris Technologies wins a $1.4B US Air Force contract to deploy its
 AI-powered ISR fusion platform across 12 combat air wings, integrating
 real-time sensor fusion, target classification, and autonomous threat
@@ -1431,7 +1277,7 @@ Output:
   ]
 }
 
-Example 65, Signal, high materiality, Defense, Aerospace & Sovereign AI:
+Example 56, Signal, high materiality, Defense, Aerospace & Sovereign AI:
 Article: "Saudi Arabia establishes the Saudi Center for AI (SCAI) with $6B in
 committed sovereign capital to build domestic foundation models, GPU
 infrastructure, and AI talent programs, targeting AI self-sufficiency by 2030
@@ -1449,7 +1295,7 @@ Output:
   ]
 }
 
-Example 66, Signal, medium materiality, Quantum Computing & Sensing:
+Example 57, Signal, medium materiality, Quantum Computing & Sensing:
 Article: "IBM releases its Heron r2 quantum processor achieving 156 qubits with
 99.9% two-qubit gate fidelity — IBM's highest gate fidelity to date — and makes
 it available via IBM Quantum Platform to enterprise and research customers
@@ -1468,7 +1314,7 @@ Output:
   ]
 }
 
-Example 67, Weak signal, low materiality, Quantum Computing & Sensing:
+Example 58, Weak signal, low materiality, Quantum Computing & Sensing:
 Article: "IonQ raises $400M Series E to fund scale-up of its trapped-ion quantum
 computers toward fault-tolerant operation, with no named enterprise customer
 deployments or revenue milestones disclosed."
@@ -1484,7 +1330,7 @@ Output:
   ]
 }
 
-Example 68, Signal, medium materiality, Networking, Optical & Interconnect:
+Example 59, Signal, medium materiality, Networking, Optical & Interconnect:
 Article: "Coherent Corp ships first volume quantities of its 1.6T optical
 transceivers to three hyperscalers for AI cluster interconnect deployments,
 with revenue recognition beginning Q3 and backlog reaching $2.1B."
@@ -1500,7 +1346,7 @@ Output:
   ]
 }
 
-Example 69, Signal, medium materiality, Networking, Optical & Interconnect:
+Example 60, Signal, medium materiality, Networking, Optical & Interconnect:
 Article: "Arista Networks reports Q2 revenue of $1.93B, up 16% year-over-year,
 with AI networking now representing 25% of total revenue as hyperscalers
 accelerate spine-layer upgrades to 400G and 800G for AI cluster backbones."
@@ -1516,7 +1362,7 @@ Output:
   ]
 }
 
-Example 70, Signal, medium materiality, Telecom & Connectivity:
+Example 61, Signal, medium materiality, Telecom & Connectivity:
 Article: "Nokia wins a €900M contract from Deutsche Telekom to deploy AirScale
 5G RAN across Germany's eastern network regions, with AI-optimised spectrum
 management and dedicated network slicing for enterprise AI workload traffic."
@@ -1533,7 +1379,7 @@ Output:
   ]
 }
 
-Example 71, Signal, medium materiality, Telecom & Connectivity:
+Example 62, Signal, medium materiality, Telecom & Connectivity:
 Article: "SpaceX confirms Starlink has reached 4.6M active subscribers globally
 and signs a direct-to-cell roaming agreement with T-Mobile covering the
 continental US, enabling AI-powered IoT and edge compute connectivity in
@@ -1552,7 +1398,7 @@ Output:
   ]
 }
 
-Example 72, Signal, medium materiality, Life Sciences & Healthcare AI:
+Example 63, Signal, medium materiality, Life Sciences & Healthcare AI:
 Article: "Recursion Pharmaceuticals confirms its AI drug discovery platform
 identified a novel KRAS inhibitor candidate that has entered Phase I clinical
 trials at MD Anderson, with Roche holding co-development rights under a $150M
@@ -1571,7 +1417,7 @@ Output:
   ]
 }
 
-Example 73, Signal, medium materiality, Financial Infrastructure & AI Capital:
+Example 64, Signal, medium materiality, Financial Infrastructure & AI Capital:
 Article: "Visa confirms it has deployed its AI-powered fraud detection model
 across 100% of its global transaction network, processing 500B+ signals per
 year and reducing false positive rates by 35% compared to its prior rules-based
@@ -1588,7 +1434,7 @@ Output:
   ]
 }
 
-Example 74, Signal, low materiality, Water & Resource Infrastructure:
+Example 65, Signal, low materiality, Water & Resource Infrastructure:
 Article: "Veolia confirms a 20-year water recycling and waste heat recovery
 contract with a Microsoft hyperscale data center campus in Arizona, supplying
 12M gallons per day of reclaimed water and recovering 40 MW of waste heat for
@@ -1606,7 +1452,7 @@ Output:
   ]
 }
 
-Example 75, Noise:
+Example 66, Noise:
 Article: "A consultancy publishes a report recommending that data center
 operators adopt closed-loop cooling to reduce water usage intensity, citing
 industry averages and projecting potential savings if best practices are

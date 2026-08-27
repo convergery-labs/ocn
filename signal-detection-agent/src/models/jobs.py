@@ -113,19 +113,35 @@ def insert_filing_classification(job_id: int, filing: dict[str, Any], result: di
 
     category is left NULL - not computed at this stage for filings.
     materiality matches the base-pass news schema (high/medium/low/none).
+
+    form_type/item_codes/filing_filed_at and result["filing_summary"] (the
+    stage-1 summarizer's structured output - headline, guidance,
+    stated_figures, positives, negatives, outlook, disclosure_flags,
+    citations - set by classify_filing_two_stage(), absent when the
+    extraction_found=False short-circuit skipped stage 1 entirely) all go in
+    metadata, not dedicated typed columns - they're sec_filing-specific the
+    same way Taiwan's rank/clause-reason/translated-text fields are
+    taiwan_market_signal-specific, and metadata is the existing JSONB bag for
+    exactly that (see insert_taiwan_signal_classification).
     """
     entity_names_normalized = [
         e["name"].lower() for e in (result.get("entities") or []) if e.get("name")
     ]
+    metadata: dict[str, Any] = {
+        "form_type": result.get("form_type"),
+        "item_codes": result.get("item_codes") or [],
+        "filing_filed_at": result.get("filed_at"),
+    }
+    if result.get("filing_summary"):
+        metadata["filing_summary"] = result["filing_summary"]
     with get_db() as conn:
         conn.execute(
             """
             INSERT INTO agent_classifications (
                 job_id, source_type, source_id, url, title,
                 signal_detection, signal_score, signal_reason, materiality,
-                entities_json, entity_names_normalized,
-                form_type, item_codes, filing_filed_at
-            ) VALUES (%s, 'sec_filing', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                entities_json, entity_names_normalized, metadata
+            ) VALUES (%s, 'sec_filing', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT DO NOTHING
             """,
             (
@@ -139,9 +155,7 @@ def insert_filing_classification(job_id: int, filing: dict[str, Any], result: di
                 result.get("materiality"),
                 json.dumps(result.get("entities") or [], ensure_ascii=False),
                 entity_names_normalized,
-                result.get("form_type"),
-                result.get("item_codes") or [],
-                result.get("filed_at") or None,
+                json.dumps(metadata, ensure_ascii=False),
             ),
         )
 

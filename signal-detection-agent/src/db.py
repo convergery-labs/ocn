@@ -108,10 +108,7 @@ def init_db() -> None:
         conn.execute("""
             ALTER TABLE agent_classifications
                 ADD COLUMN IF NOT EXISTS source_type TEXT NOT NULL DEFAULT 'news',
-                ADD COLUMN IF NOT EXISTS source_id TEXT,
-                ADD COLUMN IF NOT EXISTS form_type TEXT,
-                ADD COLUMN IF NOT EXISTS item_codes TEXT[],
-                ADD COLUMN IF NOT EXISTS filing_filed_at TIMESTAMPTZ
+                ADD COLUMN IF NOT EXISTS source_id TEXT
         """)
         # company_rank/company_percentile: added for a company-relative ranking
         # feature that was deprioritized before any code ever read or wrote
@@ -148,6 +145,16 @@ def init_db() -> None:
         conn.execute("""
             ALTER TABLE agent_classifications
                 ADD COLUMN IF NOT EXISTS metadata JSONB
+        """)
+        # form_type/item_codes/filing_filed_at were sec_filing-only typed
+        # columns, added before metadata existed - now redundant with it,
+        # same JSONB-bag rationale as company_rank/company_percentile above.
+        # insert_filing_classification() writes these into metadata instead.
+        conn.execute("""
+            ALTER TABLE agent_classifications
+                DROP COLUMN IF EXISTS form_type,
+                DROP COLUMN IF EXISTS item_codes,
+                DROP COLUMN IF EXISTS filing_filed_at
         """)
         # signal_score was NOT NULL for every source_type, on the assumption
         # every classification produces a confidence value. GDELT's Stage B

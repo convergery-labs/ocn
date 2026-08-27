@@ -380,6 +380,7 @@ async def classify_filings_for_ticker(
 
 
 SEC_FILING_PROMPT_PATH = Path(__file__).parent.parent.parent / 'prompts' / 'sec_filing_classifier_v1.txt'
+SEC_FILING_SUMMARY_PROMPT_PATH = Path(__file__).parent.parent.parent / 'prompts' / 'sec_filing_summarizer_v1.txt'
 
 
 def load_sec_filing_prompt() -> str:
@@ -387,3 +388,275 @@ def load_sec_filing_prompt() -> str:
     if not text.strip():
         raise ValueError(f'Prompt file is empty: {SEC_FILING_PROMPT_PATH}')
     return text
+
+
+def load_sec_filing_summary_prompt() -> str:
+    text = SEC_FILING_SUMMARY_PROMPT_PATH.read_text(encoding='utf-8')
+    if not text.strip():
+        raise ValueError(f'Prompt file is empty: {SEC_FILING_SUMMARY_PROMPT_PATH}')
+    return text
+
+
+ALLOWED_GUIDANCE_DIRECTION = {'raised', 'cut', 'maintained', 'initiated', 'withdrawn', 'not_provided'}
+SUMMARY_REQUIRED_FIELDS = (
+    'extraction_quality', 'headline', 'guidance', 'stated_figures',
+    'positives', 'negatives', 'outlook', 'disclosure_flags', 'citations',
+)
+
+
+def validate_filing_summary(payload: dict[str, Any]) -> dict[str, Any]:
+    missing = [field for field in SUMMARY_REQUIRED_FIELDS if field not in payload]
+    if missing:
+        raise ValueError(f'Missing fields: {", ".join(missing)}')
+
+    extraction_quality = norm(str(payload.get('extraction_quality', '')))
+    if extraction_quality not in ALLOWED_EXTRACTION_QUALITY:
+        raise ValueError(f'Invalid extraction_quality: {extraction_quality}')
+
+    headline = norm(str(payload.get('headline', '')))
+
+    guidance = payload.get('guidance')
+    if not isinstance(guidance, dict):
+        raise ValueError('guidance must be an object')
+    guidance_direction = norm(str(guidance.get('direction', '')))
+    if guidance_direction not in ALLOWED_GUIDANCE_DIRECTION:
+        raise ValueError(f'Invalid guidance.direction: {guidance_direction}')
+    cleaned_guidance = {
+        'direction': guidance_direction,
+        'metric': guidance.get('metric'),
+        'new_range_stated': guidance.get('new_range_stated'),
+        'prior_range_stated': guidance.get('prior_range_stated'),
+    }
+
+    stated_figures = payload.get('stated_figures', [])
+    if not isinstance(stated_figures, list):
+        raise ValueError('stated_figures must be a list')
+    cleaned_figures: list[dict[str, Any]] = []
+    for item in stated_figures:
+        if not isinstance(item, dict) or not norm(str(item.get('label', ''))) or not norm(str(item.get('value', ''))):
+            raise ValueError('stated_figures items must have non-empty label and value')
+        cleaned_figures.append({
+            'label': norm(str(item['label'])),
+            'value': norm(str(item['value'])),
+            'comparison_stated': item.get('comparison_stated'),
+        })
+
+    positives = payload.get('positives', [])
+    negatives = payload.get('negatives', [])
+    if not isinstance(positives, list) or not isinstance(negatives, list):
+        raise ValueError('positives and negatives must be lists')
+    cleaned_positives = [norm(str(p)) for p in positives if norm(str(p))][:5]
+    cleaned_negatives = [norm(str(n)) for n in negatives if norm(str(n))][:5]
+
+    outlook = norm(str(payload.get('outlook', '')))
+    if not outlook:
+        raise ValueError('outlook must be non-empty (use "none stated" when absent)')
+
+    disclosure_flags = payload.get('disclosure_flags')
+    if not isinstance(disclosure_flags, dict):
+        raise ValueError('disclosure_flags must be an object')
+    cleaned_flags: dict[str, bool] = {}
+    for key in ('references_prior_disclosure', 'going_concern', 'material_weakness', 'segment_reclassification'):
+        value = disclosure_flags.get(key)
+        if not isinstance(value, bool):
+            raise ValueError(f'disclosure_flags.{key} must be a boolean')
+        cleaned_flags[key] = value
+
+    citations = payload.get('citations', [])
+    if not isinstance(citations, list):
+        raise ValueError('citations must be a list')
+    cleaned_citations: list[dict[str, str]] = []
+    for item in citations:
+        if not isinstance(item, dict) or not norm(str(item.get('claim', ''))) or not norm(str(item.get('source_snippet', ''))):
+            raise ValueError('citations items must have non-empty claim and source_snippet')
+        cleaned_citations.append({
+            'claim': norm(str(item['claim'])),
+            'source_snippet': norm(str(item['source_snippet'])),
+        })
+
+    return {
+        'extraction_quality': extraction_quality,
+        'headline': headline,
+        'guidance': cleaned_guidance,
+        'stated_figures': cleaned_figures,
+        'positives': cleaned_positives,
+        'negatives': cleaned_negatives,
+        'outlook': outlook,
+        'disclosure_flags': cleaned_flags,
+        'citations': cleaned_citations,
+    }
+
+
+def build_filing_summary_user_prompt(filing: dict[str, Any], filing_text: str) -> str:
+    metadata = {
+        'ticker': filing.get('ticker', ''),
+        'form_type': filing.get('form_type', ''),
+        'item_codes': filing.get('item_codes', []),
+        'filed_at': filing.get('filed_at', ''),
+        'period_of_report': filing.get('period_of_report', ''),
+    }
+
+    import json
+    prompt = 'Filing metadata:\n' + json.dumps(metadata, ensure_ascii=False, indent=2)
+    prompt += '\n\nFiling text:\n' + (filing_text or '(no text available)')
+    prompt += '\n\nReturn strict JSON only.'
+    return prompt
+
+
+def summarize_filing(
+    filing: dict[str, Any],
+    filing_text: str,
+    *,
+    system_prompt: str,
+    models: list[str],
+    api_key: str,
+    base_url: str,
+    timeout: int,
+    max_attempts: int,
+    cache_system_prompt: bool = True,
+) -> dict[str, Any]:
+    """Stage 1 of the two-stage filing pipeline: extract a structured, cited
+    summary of the filing's PROSE content only (no financial-statement-table
+    figures - those come from XBRL separately and are merged in by the
+    caller, never by this LLM call, to avoid restating a number the filer's
+    own structured data already gives exactly). Returns the summary dict
+    validated by validate_filing_summary().
+
+    This never sees xbrl_facts/trailing_quarterly_revenue/company_overview -
+    those bypass the summarizer entirely and are passed directly into
+    classify_filing()'s stage 2 prompt by the caller, unchanged.
+    """
+    user_prompt = build_filing_summary_user_prompt(filing, filing_text)
+    errors: list[str] = []
+    for model in models:
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return classify_with_model(
+                    system_prompt, user_prompt, model, api_key, base_url, timeout,
+                    validator=validate_filing_summary,
+                    # 1800 was too tight for content-dense filings (confirmed
+                    # empirically this session: two real DV 8.01 filings - a
+                    # ~$2.15B M&A announcement and its follow-up merger
+                    # agreement - both hit finish_reason=length and failed
+                    # JSON parsing at 1800, succeeded cleanly at 3000 using
+                    # only ~1500 of the 3000 tokens available).
+                    max_tokens=3000,
+                    cache_system_prompt=cache_system_prompt,
+                    stage='sec_filing_summary',
+                    article_id=filing.get('accession_number'),
+                )
+            except Exception as exc:
+                errors.append(f'{model} attempt {attempt}: {exc}')
+                time.sleep(0.25)
+                continue
+    raise RuntimeError('Filing summarization failed: ' + ' | '.join(errors))
+
+
+def render_summary_as_filing_text(summary: dict[str, Any]) -> str:
+    """Flatten a validated filing summary back into a text block for
+    classify_filing()'s existing filing_text-shaped prompt slot - stage 2's
+    prompt/validation logic is unchanged, it just reads a summary instead of
+    raw fetched text.
+    """
+    import json
+    return json.dumps(summary, ensure_ascii=False, indent=2)
+
+
+def classify_filing_two_stage(
+    filing: dict[str, Any],
+    filing_text: str,
+    *,
+    summary_system_prompt: str,
+    classify_system_prompt: str,
+    models: list[str],
+    api_key: str,
+    base_url: str,
+    timeout: int,
+    max_attempts: int,
+    extraction_found: bool = True,
+    cache_system_prompt: bool = True,
+    company_overview: dict[str, Any] | None = None,
+    xbrl_facts: dict[str, Any] | None = None,
+    exhibit_fetch_status: str = 'not_applicable',
+    trailing_quarterly_revenue: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Two-stage filing pipeline: summarize_filing() (stage 1, narrative only)
+    -> classify_filing() (stage 2) fed the summary instead of raw filing_text.
+    xbrl_facts/trailing_quarterly_revenue/company_overview keep bypassing the
+    summarizer entirely, exactly as they already bypass stage 2's own prose
+    handling - only filing_text itself is replaced with the summary.
+
+    Stage 1 is skipped (same as classify_filing()'s own extraction_found=False
+    short-circuit) when extraction_found is False - there is no reliable text
+    to summarize, so summarizing it would produce a confident-looking but
+    ungrounded result, same reasoning as classify_filing()'s existing check.
+
+    STAGE 2 IS TEMPORARILY DISABLED (commented out below) while stage 1 is
+    being validated on its own - every filing gets a placeholder
+    classification and only the real stage 1 summary in filing_summary.
+    Uncomment the classify_filing() call and its return to re-enable.
+    """
+    if not extraction_found:
+        return classify_filing(
+            filing, filing_text,
+            system_prompt=classify_system_prompt,
+            models=models,
+            api_key=api_key,
+            base_url=base_url,
+            timeout=timeout,
+            max_attempts=max_attempts,
+            extraction_found=False,
+            cache_system_prompt=cache_system_prompt,
+            company_overview=company_overview,
+            xbrl_facts=xbrl_facts,
+            exhibit_fetch_status=exhibit_fetch_status,
+            trailing_quarterly_revenue=trailing_quarterly_revenue,
+        )
+
+    summary = summarize_filing(
+        filing, filing_text,
+        system_prompt=summary_system_prompt,
+        models=models,
+        api_key=api_key,
+        base_url=base_url,
+        timeout=timeout,
+        max_attempts=max_attempts,
+        cache_system_prompt=cache_system_prompt,
+    )
+
+    # --- STAGE 2 (commented out for now - stage 1 only) ---
+    # summary_text = render_summary_as_filing_text(summary)
+    # result = classify_filing(
+    #     filing, summary_text,
+    #     system_prompt=classify_system_prompt,
+    #     models=models,
+    #     api_key=api_key,
+    #     base_url=base_url,
+    #     timeout=timeout,
+    #     max_attempts=max_attempts,
+    #     extraction_found=True,
+    #     cache_system_prompt=cache_system_prompt,
+    #     company_overview=company_overview,
+    #     xbrl_facts=xbrl_facts,
+    #     exhibit_fetch_status=exhibit_fetch_status,
+    #     trailing_quarterly_revenue=trailing_quarterly_revenue,
+    # )
+    # result['filing_summary'] = summary
+    # return result
+
+    return {
+        'signal_detection': 'noise',
+        'signal_score': 0.0,
+        'signal_reason': 'Stage 2 classification is disabled - this row holds only the stage 1 summary, not a real classification.',
+        'materiality': 'none',
+        'already_disclosed': False,
+        'extraction_quality': summary.get('extraction_quality', 'full'),
+        'entities': [],
+        'ticker': filing.get('ticker', ''),
+        'form_type': filing.get('form_type', ''),
+        'item_codes': filing.get('item_codes', []),
+        'accession_number': filing.get('accession_number', ''),
+        'filed_at': filing.get('filed_at', ''),
+        'primary_doc_url': filing.get('primary_doc_url', ''),
+        'filing_summary': summary,
+    }

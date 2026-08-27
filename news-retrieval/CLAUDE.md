@@ -86,7 +86,7 @@ AV (Alpha Vantage) data is never fetched on the request path. A background polle
 | Mode | Schedule | What it fetches |
 |------|----------|----------------|
 | `quotes` | Hourly, 14:00-20:00 UTC, Mon-Fri (CloudWatch) | `GLOBAL_QUOTE` per ticker, SPY/QQQ/SOXX indices, `MARKET_STATUS` |
-| `daily` | 00:30 UTC daily (CloudWatch) | `OVERVIEW`, `EARNINGS`, `TIME_SERIES_DAILY_ADJUSTED` per ticker |
+| `daily` | 00:30 UTC daily (CloudWatch) | `OVERVIEW` (+ `ROC` and `MOM` momentum, merged into the same item), `EARNINGS`, `TIME_SERIES_DAILY_ADJUSTED` per ticker |
 | `sec_filings` | 12:00 UTC daily (CloudWatch) | SEC EDGAR 8-K/10-Q/10-K metadata + filing link per ticker (see SEC Filings below) |
 
 Run manually: `python __main__.py poll-market --mode quotes`
@@ -111,7 +111,7 @@ DynamoDB access for the poller is granted via an IAM role policy (`aws_iam_role_
 | Endpoint | Returns | 503 if |
 |----------|---------|--------|
 | `GET /market/quote/{ticker}` | price, change, change_percent, volume, previous_close | no data |
-| `GET /market/overview/{ticker}` | market_cap, pe_ratio, 52w high/low, analyst_target, beta, sector | no data |
+| `GET /market/overview/{ticker}` | market_cap, pe_ratio, 52w high/low, analyst_target, beta, sector, revenue_ttm, shares_outstanding, momentum_roc, momentum_mom, moving_avg_50day, moving_avg_200day, eps, forward_pe, price_to_book, ev_to_ebitda, profit_margin, operating_margin_ttm, return_on_equity_ttm, quarterly_earnings_growth_yoy, quarterly_revenue_growth_yoy, dividend_yield, dividend_per_share | no data |
 | `GET /market/price-history/{ticker}` | last 10 days of adjusted_close | no data |
 | `GET /market/earnings/{ticker}` | next_report_date, estimated_eps, last_surprise_pct | no data |
 | `GET /market/indices` | SPY, QQQ, SOXX price + change_percent | no data |
