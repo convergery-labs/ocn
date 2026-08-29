@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from typing import Any
 
 import config
@@ -19,8 +20,10 @@ from models.jobs import (
     create_job,
     get_completed_job_for_run,
     get_existing_taiwan_source_ids,
+    get_taiwan_revenue_rows_for_periods,
     insert_taiwan_signal_classification,
     update_job_status,
+    update_taiwan_revenue_rank,
 )
 from pipeline.classifier import has_usable_body
 from pipeline.dispatch import get_domain_config, known_domains
@@ -71,6 +74,28 @@ async def submit_run(
     return job_id, news_run_id, False
 
 
+def _is_period_in_active_filing_window(period_gregorian: str) -> bool:
+    """A revenue period is only re-ranked against newly-arrived stragglers
+    while it's the current or previous calendar month (UTC) - TWSE/TPEx
+    monthly filings land within roughly the first 2-3 weeks after
+    month-end, so anything older than that is treated as closed: no more
+    re-ranking, no more update_taiwan_revenue_rank calls for it, ever.
+
+    This bounds how long a stored row can change after the fact to a
+    known, short window, rather than every row being mutable forever -
+    the tradeoff decided over rank correctness vs. mutable history: fix
+    the field size while filings are still trickling in for a period, but
+    don't reopen a period that's long since settled.
+    """
+    try:
+        period = datetime.strptime(period_gregorian, "%Y-%m").replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return False
+    today = datetime.now(timezone.utc)
+    months_diff = (today.year - period.year) * 12 + (today.month - period.month)
+    return 0 <= months_diff <= 1
+
+
 async def run_taiwan_signal_classification(job_id: int, from_date: str, to_date: str) -> None:
     """Classify taiwan_market_signal items across ALL of news-retrieval's
     completed runs in [from_date, to_date] - not just the latest run.
@@ -88,6 +113,17 @@ async def run_taiwan_signal_classification(job_id: int, from_date: str, to_date:
     against article id, since the same underlying fact can legitimately
     appear in multiple news-retrieval runs (re-fetched, not yet superseded)
     and must still only be classified once.
+
+    Revenue ranking is period-scoped, not just today's-batch-scoped: for
+    every mops_revenue period present in today's pooled articles, this
+    also pulls the already-stored rows for that period (if it's still in
+    the active filing window - see _is_period_in_active_filing_window) as
+    read-only ranking context, so a late-arriving filing gets ranked
+    against the true known field instead of just itself. Any already-
+    stored row whose rank/signal changes as a result is updated in place
+    via update_taiwan_revenue_rank - see that function and
+    rank_revenue_by_yoy's docstrings for why this is the one place
+    taiwan_market_signal data is allowed to change after insert.
     """
     update_job_status(job_id, "running")
     try:
@@ -113,12 +149,32 @@ async def run_taiwan_signal_classification(job_id: int, from_date: str, to_date:
         update_job_status(job_id, "completed", article_count=0, set_completed_at=True)
         return
 
+    revenue_periods = {
+        a["metadata"]["period_gregorian"]
+        for a in all_articles
+        if (a.get("metadata") or {}).get("source_category") == "mops_revenue"
+        and a["metadata"].get("period_gregorian")
+    }
+    active_periods = [p for p in revenue_periods if _is_period_in_active_filing_window(p)]
+    revenue_context = get_taiwan_revenue_rows_for_periods(active_periods)
+    # get_taiwan_revenue_rows_for_periods returns {id, source_id, metadata}
+    # rows shaped for the DB, not news-retrieval's article shape -
+    # rank_revenue_by_yoy only ever reads/writes article["metadata"], so a
+    # thin wrapper is enough; "id" being present is how it tells a context
+    # row apart from a freshly-fetched article (see its docstring).
+    context_wrapped = [
+        {"id": r["id"], "source_id": r["source_id"], "metadata": r["metadata"]}
+        for r in revenue_context
+    ]
+
     # Rank/classify/translate needs the FULL pooled set together (ranking
     # spans all tickers for a period), so this runs before the
     # already-classified filter below - filtering first would rank against
     # a partial set and produce wrong ranks, same reasoning as
     # news-retrieval's original per-poll ranking gap.
-    classified = classify_taiwan_signal_batch(all_articles)
+    classified, changed_context = classify_taiwan_signal_batch(
+        all_articles, revenue_context=context_wrapped,
+    )
 
     candidate_source_ids = [c["result"]["source_id"] for c in classified]
     already_done = get_existing_taiwan_source_ids(candidate_source_ids)
@@ -138,11 +194,29 @@ async def run_taiwan_signal_classification(job_id: int, from_date: str, to_date:
                 c["result"]["source_id"], job_id,
             )
 
+    revised = 0
+    for row in changed_context:
+        meta = row["metadata"]
+        try:
+            update_taiwan_revenue_rank(
+                row["source_id"],
+                revenue_rank_signal=meta["revenue_rank_signal"],
+                signal_reason=meta["revenue_rank_reason"],
+                metadata=meta,
+            )
+            revised += 1
+        except Exception:
+            logger.exception(
+                "Failed to update revised taiwan_market_signal rank for"
+                " source_id=%s (job %d)",
+                row["source_id"], job_id,
+            )
+
     logger.info(
         "[TAIWAN_SIGNAL] job=%d runs=%d pooled_articles=%d classified=%d"
-        " already_done=%d inserted=%d",
+        " already_done=%d inserted=%d revenue_context=%d revised=%d",
         job_id, len(run_ids), len(all_articles), len(classified),
-        len(already_done), inserted,
+        len(already_done), inserted, len(context_wrapped), revised,
     )
     update_job_status(job_id, "completed", article_count=inserted, set_completed_at=True)
 

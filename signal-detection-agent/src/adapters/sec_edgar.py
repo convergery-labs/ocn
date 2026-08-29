@@ -182,6 +182,90 @@ def fetch_filing_exhibits_text(
     return combined, ("partial" if any_failed else "full")
 
 
+def _fetch_filing_index(cik: str, accession_number: str, last_call: list[float]) -> str | None:
+    """Fetch a filing's human-readable index page. Returns None on failure -
+    shared by fetch_filing_exhibits_text (EX-99*) and
+    fetch_annual_report_exhibit_text (EX-13) below.
+    """
+    if not cik or not accession_number:
+        return None
+    accession_nodash = accession_number.replace("-", "")
+    cik_int = str(int(cik))
+    _rate_sleep(last_call)
+    try:
+        resp = httpx.get(
+            _FILING_INDEX_URL.format(cik_int=cik_int, accession_nodash=accession_nodash, accession=accession_number),
+            headers={"User-Agent": _USER_AGENT},
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        return resp.text
+    except Exception as exc:
+        logger.warning(
+            "[SEC_EDGAR] filing index fetch failed cik=%s accession=%s error=%s",
+            cik, accession_number, exc,
+        )
+        return None
+
+
+def fetch_annual_report_exhibit_text(
+    cik: str, accession_number: str, last_call: list[float], *, max_chars: int = 300_000,
+) -> str:
+    """Some 10-K filers (confirmed empirically this session: IBM) file their
+    primaryDocument as a thin cover-page/XBRL-cover shell with no real MD&A
+    narrative at all - the actual Item 7 discussion is furnished as a
+    separate "EX-13" (Annual Report) exhibit instead, a long-standing SEC
+    convention distinct from the 2.02/7.01/8.01 EX-99* press-release exhibits
+    fetch_filing_exhibits_text handles. Confirmed on a real IBM FY2025 10-K:
+    the primaryDocument (ibm-20251231.htm, EDGAR's own metadata) mentioned
+    "revenue" only 36 times, almost all inside XBRL tag URIs, not prose -
+    the real ~600K-char narrative lived entirely in EX-13
+    (ibm-20251231_d2.htm). Checked against 6 other major filers (AAPL, TSLA,
+    GOOGL, MSFT, Berkshire) which all publish one combined primaryDocument
+    with genuine MD&A content and no EX-13 at all - this is a filer-specific
+    pattern, not the norm, so callers should only reach for this as a
+    fallback (see extract_filing_sections' found=False signal), not fetch it
+    unconditionally for every 10-K/10-Q.
+
+    Returns "" if the index fetch fails, no EX-13 is listed (the common
+    case), or the EX-13 document itself fails to fetch - callers should treat
+    an empty return as "no annual report exhibit available", not an error.
+    """
+    index_html = _fetch_filing_index(cik, accession_number, last_call)
+    if not index_html:
+        return ""
+
+    exhibit_href = None
+    for row_html in _INDEX_ROW_PATTERN.findall(index_html):
+        cells = _INDEX_CELL_PATTERN.findall(row_html)
+        if any(cell.strip().upper().startswith("EX-13") for cell in cells):
+            href_match = _INDEX_HREF_PATTERN.search(row_html)
+            if href_match:
+                exhibit_href = href_match.group(1)
+                break
+    if not exhibit_href:
+        return ""
+
+    # Confirmed empirically this session: the EX-13 row's link (unlike
+    # fetch_filing_exhibits_text's EX-99* rows) points at EDGAR's inline
+    # Inline XBRL viewer wrapper - "/ix?doc=/Archives/edgar/data/..." - a
+    # JS-rendered page, not the document itself. The real path is the
+    # doc= query value; strip the wrapper down to it, same content either
+    # way when the wrapper isn't present.
+    if exhibit_href.startswith("/ix?doc="):
+        exhibit_href = exhibit_href[len("/ix?doc="):]
+
+    _rate_sleep(last_call)
+    doc_url = exhibit_href if exhibit_href.startswith("http") else f"https://www.sec.gov{exhibit_href}"
+    try:
+        resp = httpx.get(doc_url, headers={"User-Agent": _USER_AGENT}, timeout=30.0)
+        resp.raise_for_status()
+        return _strip_html(resp.text)[:max_chars]
+    except Exception as exc:
+        logger.warning("[SEC_EDGAR] EX-13 exhibit fetch failed url=%s error=%s", doc_url, exc)
+        return ""
+
+
 _RESULTS_MARKERS_PRECISE = [
     "net revenues increased",
     "net revenues decreased",

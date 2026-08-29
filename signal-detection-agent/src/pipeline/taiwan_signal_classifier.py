@@ -130,7 +130,10 @@ def _translate_one(
         return None
 
 
-def rank_revenue_by_yoy(articles: list[dict[str, Any]]) -> None:
+def rank_revenue_by_yoy(
+    articles: list[dict[str, Any]],
+    context_articles: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     """Rank revenue articles by YoY% within their reporting period and tag
     each with a HIGH/WEAK classification, in place.
 
@@ -154,21 +157,49 @@ def rank_revenue_by_yoy(articles: list[dict[str, Any]]) -> None:
     classification pass so "top 3 of 20" is meaningful, not "top 3 of
     whatever happened to be in this one batch."
 
+    ``context_articles`` (optional): already-classified revenue rows for
+    the same periods, read back from storage by the caller. A company's
+    filing can land days after the rest of the period's field has already
+    been ranked and inserted - without this, that straggler would be
+    ranked against only itself ("rank 1 of 1") instead of the true field
+    size. Included in the ranking computation but never mutated in place
+    (they're plain dicts built fresh by the caller from DB rows, not the
+    live news-retrieval article objects) - the function instead returns
+    the subset of context_articles whose rank/signal changed as a result
+    of adding today's new articles to the field, so the caller can decide
+    whether/how to persist that (this module has no DB access itself).
+
     Adds to each qualifying article's ``metadata``, in place:
         - ``revenue_rank_signal``: "HIGH" or "WEAK"
         - ``revenue_yoy_rank``: 1-indexed rank by YoY% within its period
         - ``revenue_rank_reason``: e.g. "rank_2_of_20_yoy"
-    """
-    by_period: dict[str, list[dict]] = {}
-    for a in articles:
-        meta = a.get("metadata") or {}
-        if meta.get("source_category") != "mops_revenue":
-            continue
-        if meta.get("yoy_pct") is None:
-            continue
-        by_period.setdefault(meta["period_gregorian"], []).append(a)
 
-    for period, period_articles in by_period.items():
+    Returns:
+        The subset of context_articles whose revenue_rank_signal,
+        revenue_yoy_rank, or revenue_rank_reason changed - empty if no
+        context_articles were passed, or if none of them changed.
+    """
+    def _collect(source: list[dict], into: dict[str, list[dict]]) -> None:
+        for a in source:
+            meta = a.get("metadata") or {}
+            if meta.get("source_category") != "mops_revenue":
+                continue
+            if meta.get("yoy_pct") is None:
+                continue
+            into.setdefault(meta["period_gregorian"], []).append(a)
+
+    by_period: dict[str, list[dict]] = {}
+    _collect(articles, by_period)
+
+    context_by_period: dict[str, list[dict]] = {}
+    if context_articles:
+        _collect(context_articles, context_by_period)
+
+    changed_context: list[dict[str, Any]] = []
+
+    all_periods = set(by_period) | set(context_by_period)
+    for period in all_periods:
+        period_articles = by_period.get(period, []) + context_by_period.get(period, [])
         ranked = sorted(
             period_articles, key=lambda a: a["metadata"]["yoy_pct"], reverse=True,
         )
@@ -179,14 +210,38 @@ def rank_revenue_by_yoy(articles: list[dict[str, Any]]) -> None:
             is_top = rank <= _REVENUE_RANK_TOP_N
             is_shrinking = yoy_pct < 0
             signal = "HIGH" if (is_top or is_shrinking) else "WEAK"
-            article["metadata"]["revenue_rank_signal"] = signal
-            article["metadata"]["revenue_yoy_rank"] = rank
-            article["metadata"]["revenue_rank_reason"] = f"rank_{rank}_of_{n}_yoy"
+            reason = f"rank_{rank}_of_{n}_yoy"
+
+            meta = article["metadata"]
+            is_context_row = "id" in article  # DB-sourced rows carry their row id; fresh articles don't
+            if is_context_row:
+                prev_signal = meta.get("revenue_rank_signal")
+                prev_rank = meta.get("revenue_yoy_rank")
+                if prev_signal != signal or prev_rank != rank:
+                    meta.setdefault("rank_revision_history", []).append({
+                        "previous_rank": prev_rank,
+                        "previous_signal": prev_signal,
+                        "previous_reason": meta.get("revenue_rank_reason"),
+                    })
+                    meta["revenue_rank_signal"] = signal
+                    meta["revenue_yoy_rank"] = rank
+                    meta["revenue_rank_reason"] = reason
+                    changed_context.append(article)
+                # else: rank/signal unchanged - leave the row exactly as
+                # stored, don't touch rank_revision_history for a no-op.
+            else:
+                meta["revenue_rank_signal"] = signal
+                meta["revenue_yoy_rank"] = rank
+                meta["revenue_rank_reason"] = reason
+
         logger.info(
-            "[TAIWAN_RANK] period=%s ranked=%d high=%d",
+            "[TAIWAN_RANK] period=%s ranked=%d high=%d changed_context=%d",
             period, n,
             sum(1 for a in ranked if a["metadata"]["revenue_rank_signal"] == "HIGH"),
+            sum(1 for a in changed_context if a["metadata"]["period_gregorian"] == period),
         )
+
+    return changed_context
 
 
 def classify_material_announcements(articles: list[dict[str, Any]]) -> None:
@@ -416,8 +471,10 @@ def classify_gdelt_articles(
 
 
 def classify_taiwan_signal_batch(
-    articles: list[dict[str, Any]], model: str | None = None,
-) -> list[dict[str, Any]]:
+    articles: list[dict[str, Any]],
+    model: str | None = None,
+    revenue_context: list[dict[str, Any]] | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Run the full taiwan_market_signal classification pass on a batch of
     articles read from news-retrieval: rank revenue, classify material
     announcements, translate whatever needs it - then build one result dict
@@ -430,8 +487,22 @@ def classify_taiwan_signal_batch(
     doesn't fit a one-item-at-a-time interface). GDELT articles don't need
     batch context (each is classified independently, per Stage B), but are
     included here too so one call handles the whole domain's classification.
+
+    ``revenue_context`` (optional): already-stored mops_revenue rows for
+    periods present in ``articles``, passed straight through to
+    rank_revenue_by_yoy so a late-arriving filing is ranked against the
+    true known field, not just today's batch. See that function's
+    docstring for why these are never mutated by INSERT - the second
+    element of the return tuple carries whichever of them changed.
+
+    Returns:
+        (results, changed_context_rows) - results is the usual list of
+        {"article", "result"} dicts for insert_taiwan_signal_classification,
+        same as before this parameter was added. changed_context_rows is
+        the subset of revenue_context whose rank/signal changed - the
+        caller persists these via update_taiwan_revenue_rank, not insert.
     """
-    rank_revenue_by_yoy(articles)
+    changed_context = rank_revenue_by_yoy(articles, revenue_context)
     classify_material_announcements(articles)
     translate_taiwan_articles(articles, model=model)
 
@@ -476,4 +547,4 @@ def classify_taiwan_signal_batch(
         })
 
     results.extend(classify_gdelt_articles(articles, model=model))
-    return results
+    return results, changed_context
