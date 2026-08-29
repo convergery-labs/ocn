@@ -106,6 +106,21 @@ def _fetch_filing_text_and_extract(filing: dict[str, Any], last_call: list[float
         return "", False, "not_applicable"
     if filing["form_type"] in ("10-K", "10-Q"):
         section_text, found = sec_edgar.extract_filing_sections(text)
+        if not found and filing.get("cik"):
+            # Some 10-K filers (confirmed empirically this session: IBM)
+            # file primary_doc_url as a thin cover-page/XBRL-cover shell
+            # with no real MD&A narrative - the actual Item 7 discussion is
+            # furnished as a separate "EX-13" (Annual Report) exhibit
+            # instead. found=False on the primary doc is exactly the signal
+            # that happened, so retry section extraction against the EX-13
+            # text before giving up - most filers have no EX-13 at all, so
+            # this fallback fetch only fires on the rare filing that needs
+            # it (see fetch_annual_report_exhibit_text's docstring).
+            annual_report_text = sec_edgar.fetch_annual_report_exhibit_text(
+                filing.get("cik", ""), filing.get("accession_number", ""), last_call,
+            )
+            if annual_report_text:
+                section_text, found = sec_edgar.extract_filing_sections(annual_report_text)
         return section_text, found, "not_applicable"
 
     item_codes = filing.get("item_codes") or []

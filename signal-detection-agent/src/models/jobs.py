@@ -278,6 +278,73 @@ def get_existing_taiwan_source_ids(source_ids: list[str]) -> set[str]:
     return {r["source_id"] for r in rows}
 
 
+def get_taiwan_revenue_rows_for_periods(periods: list[str]) -> list[dict[str, Any]]:
+    """Return existing mops_revenue rows already stored for the given
+    period_gregorian values, across ALL prior jobs.
+
+    Used to re-rank a period's full known field (already-stored rows +
+    today's newly-fetched ones) rather than ranking today's arrivals in
+    isolation - a straggler filing that arrives after the rest of the
+    period's companies would otherwise get ranked against only itself
+    ("rank 1 of 1") instead of the true field size. These rows are read-only
+    context for the rank computation; only update_taiwan_revenue_rank below
+    writes any of them back.
+    """
+    if not periods:
+        return []
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, source_id, metadata
+            FROM agent_classifications
+            WHERE source_type = 'taiwan_market_signal'
+              AND metadata->>'source_category' = 'mops_revenue'
+              AND metadata->>'period_gregorian' = ANY(%s)
+            """,
+            (periods,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def update_taiwan_revenue_rank(
+    source_id: str,
+    *,
+    revenue_rank_signal: str,
+    signal_reason: str,
+    metadata: dict[str, Any],
+) -> None:
+    """Overwrite an existing mops_revenue row's rank/signal fields after a
+    later arrival in the same period changed the true field size.
+
+    ``revenue_rank_signal`` is HIGH/WEAK (rank_revenue_by_yoy's own
+    vocabulary, same as insert_taiwan_signal_classification's ``signal``
+    param) - mapped to signal_detection's signal/weak_signal vocabulary via
+    _TAIWAN_SIGNAL_MAP here so callers don't need to know about that
+    mapping, same division of responsibility as the insert path.
+
+    Only called when the newly-computed rank actually differs from what's
+    stored (see rank_revenue_by_yoy's changed-row detection) - most re-ranks
+    don't move anyone's position and this is a no-op for those rows. The
+    previous rank/signal are preserved in metadata.rank_revision_history so
+    a caller can see a row was revised rather than treating a changed value
+    as if it had always been that way.
+    """
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE agent_classifications
+            SET signal_detection = %s, signal_reason = %s, metadata = %s
+            WHERE source_type = 'taiwan_market_signal' AND source_id = %s
+            """,
+            (
+                _TAIWAN_SIGNAL_MAP[revenue_rank_signal],
+                signal_reason,
+                json.dumps(metadata, ensure_ascii=False),
+                source_id,
+            ),
+        )
+
+
 def get_existing_filing_source_ids(source_ids: list[str]) -> set[str]:
     """Return the subset of source_ids (accession_numbers) already classified
     as source_type='sec_filing'. One batched query, not one per filing - used

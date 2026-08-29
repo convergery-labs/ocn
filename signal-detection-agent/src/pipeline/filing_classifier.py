@@ -527,6 +527,15 @@ def summarize_filing(
     classify_filing()'s stage 2 prompt by the caller, unchanged.
     """
     user_prompt = build_filing_summary_user_prompt(filing, filing_text)
+    # 1800 was too tight for content-dense filings (confirmed empirically
+    # this session: two real DV 8.01 filings - a ~$2.15B M&A announcement
+    # and its follow-up merger agreement - both hit finish_reason=length
+    # and failed JSON parsing at 1800, succeeded cleanly at 3000 using only
+    # ~1500 of the 3000 tokens available). 10-Q/10-K need more headroom
+    # still - their MD&A section packs many more line-item revenue/expense
+    # comparisons than a typical 8-K exhibit (confirmed on a real TSLA
+    # 10-Q: truncated at 3000, completed cleanly at 4500 using ~2700).
+    max_tokens = 4500 if filing.get('form_type') in ('10-K', '10-Q') else 3000
     errors: list[str] = []
     for model in models:
         for attempt in range(1, max_attempts + 1):
@@ -534,13 +543,7 @@ def summarize_filing(
                 return classify_with_model(
                     system_prompt, user_prompt, model, api_key, base_url, timeout,
                     validator=validate_filing_summary,
-                    # 1800 was too tight for content-dense filings (confirmed
-                    # empirically this session: two real DV 8.01 filings - a
-                    # ~$2.15B M&A announcement and its follow-up merger
-                    # agreement - both hit finish_reason=length and failed
-                    # JSON parsing at 1800, succeeded cleanly at 3000 using
-                    # only ~1500 of the 3000 tokens available).
-                    max_tokens=3000,
+                    max_tokens=max_tokens,
                     cache_system_prompt=cache_system_prompt,
                     stage='sec_filing_summary',
                     article_id=filing.get('accession_number'),
