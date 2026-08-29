@@ -414,6 +414,21 @@ def validate_filing_summary(payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(f'Invalid extraction_quality: {extraction_quality}')
 
     headline = norm(str(payload.get('headline', '')))
+    if not headline and extraction_quality == 'failed':
+        # Confirmed empirically this session (a real JNJ 8-K whose fetched
+        # primary document was XBRL cover-page metadata only, same failure
+        # shape as the IBM 10-K EX-13 case, but no equivalent fallback
+        # exhibit exists for most 8-K item codes): the model correctly
+        # flags extraction_quality="failed" but understandably has nothing
+        # to write a real headline from. Filling a placeholder here, rather
+        # than raising and losing the row entirely, mirrors
+        # EXTRACTION_FAILED_RESULT's reasoning in classify_filing() - "needs
+        # manual review" is a valid, honest answer when the text itself was
+        # unusable, and stage 2 already has its own extraction_quality
+        # check for this exact case (classify_filing's extraction_found
+        # parameter) so nothing downstream is misled into treating this as
+        # a confident real summary.
+        headline = 'Filing text could not be extracted; automated summarization was not attempted.'
 
     guidance = payload.get('guidance')
     if not isinstance(guidance, dict):
@@ -450,7 +465,10 @@ def validate_filing_summary(payload: dict[str, Any]) -> dict[str, Any]:
 
     outlook = norm(str(payload.get('outlook', '')))
     if not outlook:
-        raise ValueError('outlook must be non-empty (use "none stated" when absent)')
+        if extraction_quality == 'failed':
+            outlook = 'none stated'
+        else:
+            raise ValueError('outlook must be non-empty (use "none stated" when absent)')
 
     disclosure_flags = payload.get('disclosure_flags')
     if not isinstance(disclosure_flags, dict):
@@ -535,21 +553,37 @@ def summarize_filing(
     # still - their MD&A section packs many more line-item revenue/expense
     # comparisons than a typical 8-K exhibit (confirmed on a real TSLA
     # 10-Q: truncated at 3000, completed cleanly at 4500 using ~2700).
-    max_tokens = 4500 if filing.get('form_type') in ('10-K', '10-Q') else 3000
+    #
+    # Even 4500 was not a safe ceiling: a live 6,461-filing production run
+    # showed 54 filings still hitting finish_reason=length exactly at their
+    # cap (3000 or 4500) - i.e. ~0.8% of all filings, not a rare fluke. A
+    # real CRWV 10-K in that set needed 4,216 tokens (extract_filing_sections
+    # returned 82K chars for it, vs. ~27-30K for the filings the original
+    # 4500 figure was tuned against) - some filers' MD&A sections are simply
+    # much longer than the samples used to pick any single fixed cap.
+    # Rather than guess a new fixed ceiling that could still be wrong for
+    # the next outlier, escalate max_tokens on each retry instead of reusing
+    # the same value twice (which just fails the same way twice, as
+    # confirmed in that production run - every one of the 54 failed
+    # IDENTICALLY on both attempts). Base caps unchanged (3000 8-K / 4500
+    # 10-K/10-Q, both already cover the large majority of real filings);
+    # a length-truncated retry gets 1.5x more headroom each time.
+    base_max_tokens = 4500 if filing.get('form_type') in ('10-K', '10-Q') else 3000
     errors: list[str] = []
     for model in models:
         for attempt in range(1, max_attempts + 1):
+            attempt_max_tokens = int(base_max_tokens * (1.5 ** (attempt - 1)))
             try:
                 return classify_with_model(
                     system_prompt, user_prompt, model, api_key, base_url, timeout,
                     validator=validate_filing_summary,
-                    max_tokens=max_tokens,
+                    max_tokens=attempt_max_tokens,
                     cache_system_prompt=cache_system_prompt,
                     stage='sec_filing_summary',
                     article_id=filing.get('accession_number'),
                 )
             except Exception as exc:
-                errors.append(f'{model} attempt {attempt}: {exc}')
+                errors.append(f'{model} attempt {attempt} (max_tokens={attempt_max_tokens}): {exc}')
                 time.sleep(0.25)
                 continue
     raise RuntimeError('Filing summarization failed: ' + ' | '.join(errors))

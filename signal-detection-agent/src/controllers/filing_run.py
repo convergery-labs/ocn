@@ -276,3 +276,50 @@ def submit_filing_run() -> int:
     Caller schedules run_filing_classification_job(job_id) as a background task.
     """
     return create_job(domain=config.SEC_FILING_DOMAIN)
+
+
+async def run_ticker_backfill() -> None:
+    """One-time migration: add metadata.ticker to sec_filing rows written
+    before insert_filing_classification() started storing it. Never guesses
+    ticker from the display-only title string - rebuilds the same
+    accession_number -> ticker mapping insert_filing_classification()
+    originally had, straight from news-retrieval's GET
+    /market/sec-filings/{ticker} (the same call classify_filings makes),
+    keyed by the SAME tracked-ticker universe so accession numbers from
+    this run resolve against fresh data rather than a stale local guess.
+
+    Read-only against EDGAR (no fetches at all, just news-retrieval reads)
+    and cheap - only the metadata endpoint is called, no filing text/LLM
+    calls, so this is safe to run independently of the classification job.
+    """
+    from models.jobs import backfill_filing_tickers, get_filing_source_ids_missing_ticker
+
+    missing = get_filing_source_ids_missing_ticker()
+    logger.info("Ticker backfill: %d rows missing metadata.ticker", len(missing))
+    if not missing:
+        return
+    missing_set = set(missing)
+
+    tickers = await get_tracked_tickers()
+    logger.info("Ticker backfill: %d tracked tickers to check", len(tickers))
+
+    semaphore = asyncio.Semaphore(10)
+    accession_to_ticker: dict[str, str] = {}
+
+    async def fetch_one(ticker: str) -> None:
+        async with semaphore:
+            try:
+                filings = await get_sec_filings(ticker)
+            except Exception:
+                logger.exception("Ticker backfill: failed to fetch filings for ticker=%s", ticker)
+                return
+            for f in filings:
+                acc = f.get("accession_number")
+                if acc and acc in missing_set:
+                    accession_to_ticker[acc] = ticker
+
+    await asyncio.gather(*[fetch_one(t) for t in tickers])
+    logger.info("Ticker backfill: matched %d/%d rows", len(accession_to_ticker), len(missing))
+
+    updated = backfill_filing_tickers(accession_to_ticker)
+    logger.info("Ticker backfill: updated %d rows", updated)
