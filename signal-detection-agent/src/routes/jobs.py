@@ -17,10 +17,11 @@ async def get_all_results(
     cursor: str | None = Query(default=None),
     signal_detection: str | None = Query(default=None),
     source_type: str | None = Query(default=None, description="Filter by source_type, e.g. 'news' or 'sec_filing'"),
+    ticker: str | None = Query(default=None, description="Filter by ticker (only populated for source_type='sec_filing' today)"),
     caller: dict[str, Any] = Depends(require_auth),
 ) -> dict[str, Any]:
     """Return paginated classification results across all jobs, newest first."""
-    return list_all_results(limit=limit, cursor=cursor, signal_detection=signal_detection, source_type=source_type)
+    return list_all_results(limit=limit, cursor=cursor, signal_detection=signal_detection, source_type=source_type, ticker=ticker)
 
 
 @router.get("/jobs")
@@ -52,9 +53,10 @@ async def get_job_results(
     cursor: str | None = Query(default=None),
     signal_detection: str | None = Query(default=None),
     source_type: str | None = Query(default=None, description="Filter by source_type, e.g. 'news' or 'sec_filing'"),
+    ticker: str | None = Query(default=None, description="Filter by ticker (only populated for source_type='sec_filing' today)"),
     caller: dict[str, Any] = Depends(require_auth),
 ) -> dict[str, Any]:
     job = get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
-    return list_results(job_id=job_id, limit=limit, cursor=cursor, signal_detection=signal_detection, source_type=source_type)
+    return list_results(job_id=job_id, limit=limit, cursor=cursor, signal_detection=signal_detection, source_type=source_type, ticker=ticker)

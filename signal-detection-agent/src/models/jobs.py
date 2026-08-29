@@ -114,20 +114,24 @@ def insert_filing_classification(job_id: int, filing: dict[str, Any], result: di
     category is left NULL - not computed at this stage for filings.
     materiality matches the base-pass news schema (high/medium/low/none).
 
-    form_type/item_codes/filing_filed_at and result["filing_summary"] (the
-    stage-1 summarizer's structured output - headline, guidance,
+    ticker/form_type/item_codes/filing_filed_at and result["filing_summary"]
+    (the stage-1 summarizer's structured output - headline, guidance,
     stated_figures, positives, negatives, outlook, disclosure_flags,
     citations - set by classify_filing_two_stage(), absent when the
     extraction_found=False short-circuit skipped stage 1 entirely) all go in
     metadata, not dedicated typed columns - they're sec_filing-specific the
     same way Taiwan's rank/clause-reason/translated-text fields are
     taiwan_market_signal-specific, and metadata is the existing JSONB bag for
-    exactly that (see insert_taiwan_signal_classification).
+    exactly that (see insert_taiwan_signal_classification). ticker comes
+    from news-retrieval's filing metadata (the same value already used to
+    build `title` below) - added so callers can filter agent_classifications
+    by ticker without parsing it back out of the title string.
     """
     entity_names_normalized = [
         e["name"].lower() for e in (result.get("entities") or []) if e.get("name")
     ]
     metadata: dict[str, Any] = {
+        "ticker": result.get("ticker"),
         "form_type": result.get("form_type"),
         "item_codes": result.get("item_codes") or [],
         "filing_filed_at": result.get("filed_at"),
@@ -364,6 +368,49 @@ def get_existing_filing_source_ids(source_ids: list[str]) -> set[str]:
     return {r["source_id"] for r in rows}
 
 
+def get_filing_source_ids_missing_ticker() -> list[str]:
+    """Return source_ids (accession_numbers) for sec_filing rows whose
+    metadata has no 'ticker' key yet - the backfill target set for
+    backfill_filing_tickers(). One-time migration: rows written before
+    insert_filing_classification() started storing ticker in metadata.
+    """
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT source_id FROM agent_classifications
+            WHERE source_type = 'sec_filing'
+              AND (metadata IS NULL OR NOT (metadata ? 'ticker'))
+        """).fetchall()
+    return [r["source_id"] for r in rows if r["source_id"]]
+
+
+def backfill_filing_tickers(accession_to_ticker: dict[str, str]) -> int:
+    """Merge 'ticker' into metadata for existing sec_filing rows, keyed by
+    accession_number (source_id). accession_to_ticker is built by the caller
+    from news-retrieval's own GET /market/sec-filings/{ticker} - the same
+    source insert_filing_classification() originally used - never guessed
+    from the title string, which is display-only and not guaranteed to
+    parse back into a valid ticker for every filer. Returns the number of
+    rows updated; a source_id with no entry in the map is left untouched
+    (news-retrieval's DynamoDB has a 180-day TTL, so a very old filing's
+    ticker may no longer be resolvable this way).
+    """
+    if not accession_to_ticker:
+        return 0
+    with get_db() as conn:
+        updated = 0
+        for source_id, ticker in accession_to_ticker.items():
+            result = conn.execute(
+                """
+                UPDATE agent_classifications
+                SET metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('ticker', %s)
+                WHERE source_type = 'sec_filing' AND source_id = %s
+                """,
+                (ticker, source_id),
+            )
+            updated += result.rowcount
+    return updated
+
+
 def get_recent_entity_classifications(
     entity_names: list[str],
     *,
@@ -478,8 +525,20 @@ def list_all_results(
     cursor: str | None = None,
     signal_detection: str | None = None,
     source_type: str | None = None,
+    ticker: str | None = None,
 ) -> dict[str, Any]:
-    """Return cursor-paginated agent_classifications across all jobs, newest first."""
+    """Return cursor-paginated agent_classifications across all jobs, newest first.
+
+    ticker matches metadata->>'ticker' (JSONB) - the only place ticker is
+    stored today (see insert_filing_classification). Only sec_filing rows
+    populate this field currently, so combining ticker with another
+    source_type filter returns no rows, same as querying a mismatched
+    source_type/signal_detection pair would. Matched case-insensitively
+    (UPPER() both sides) since callers may pass a lowercase ticker; this
+    also matches the expression index on UPPER(metadata->>'ticker') in
+    db.py, so the comparison stays index-friendly rather than falling back
+    to a sequential scan.
+    """
     params: list[Any] = []
     conditions = []
     if signal_detection:
@@ -488,6 +547,9 @@ def list_all_results(
     if source_type:
         conditions.append("source_type = %s")
         params.append(source_type)
+    if ticker:
+        conditions.append("UPPER(metadata->>'ticker') = UPPER(%s)")
+        params.append(ticker)
     if cursor:
         after_id = decode_cursor(cursor)
         conditions.append("id < %s")
@@ -521,8 +583,12 @@ def list_results(
     cursor: str | None = None,
     signal_detection: str | None = None,
     source_type: str | None = None,
+    ticker: str | None = None,
 ) -> dict[str, Any]:
-    """Return cursor-paginated agent_classifications for a job."""
+    """Return cursor-paginated agent_classifications for a job.
+
+    ticker matches metadata->>'ticker' - see list_all_results for details.
+    """
     params: list[Any] = [job_id]
     extra_conditions = ""
     if signal_detection:
@@ -531,6 +597,9 @@ def list_results(
     if source_type:
         extra_conditions += " AND source_type = %s"
         params.append(source_type)
+    if ticker:
+        extra_conditions += " AND UPPER(metadata->>'ticker') = UPPER(%s)"
+        params.append(ticker)
     if cursor:
         after_id = decode_cursor(cursor)
         extra_conditions += " AND id > %s"

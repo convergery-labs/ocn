@@ -184,3 +184,15 @@ def init_db() -> None:
                 ON agent_classifications (source_type, source_id)
                 WHERE source_type = 'taiwan_market_signal'
         """)
+        # metadata->>'ticker' filtering (list_all_results/list_results) would
+        # otherwise sequential-scan the whole table on every ticker-filtered
+        # call - a partial index scoped to sec_filing (the only source_type
+        # that populates ticker today) matches the UPPER()-wrapped comparison
+        # those queries actually run, so it's usable by the planner rather
+        # than requiring a separate un-wrapped index that the query can't hit.
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS
+                idx_agent_classifications_sec_filing_ticker
+                ON agent_classifications (UPPER(metadata->>'ticker'))
+                WHERE source_type = 'sec_filing'
+        """)

@@ -61,6 +61,24 @@ def classify_filings(tickers: str | None) -> None:
     logger.info("SEC filing job_id=%s finished", job_id)
 
 
+@cli.command("backfill-filing-tickers")
+def backfill_filing_tickers_cmd() -> None:
+    """One-time migration: add metadata.ticker to sec_filing rows written
+    before this field existed. Read-only against news-retrieval and EDGAR
+    (no filing text/LLM calls) - safe to run independently of classify-filings.
+    """
+    import asyncio
+
+    from controllers.filing_run import run_ticker_backfill
+
+    logger.info("Initialising database...")
+    init_db()
+    seed()
+
+    asyncio.run(run_ticker_backfill())
+    logger.info("Ticker backfill finished")
+
+
 @cli.command("classify-taiwan-signals")
 @click.option(
     "--from-date",
