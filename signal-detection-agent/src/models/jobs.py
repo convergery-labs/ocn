@@ -375,10 +375,18 @@ def get_filing_source_ids_missing_ticker() -> list[str]:
     insert_filing_classification() started storing ticker in metadata.
     """
     with get_db() as conn:
+        # jsonb_exists(), not the `?` operator - get_db()'s execute()
+        # wrapper does a blind sql.replace("?", "%s") for non-dict params
+        # (to support sqlite-style positional placeholders), which mangles
+        # a literal `?` in the query text itself, not just placeholders.
+        # Confirmed empirically this session: `metadata ? 'ticker'` was
+        # silently rewritten to `metadata %s 'ticker'` and errored with
+        # "type "s" does not exist" - jsonb_exists(metadata, 'ticker') is
+        # the function-call equivalent and has no `?` character to collide.
         rows = conn.execute("""
             SELECT source_id FROM agent_classifications
             WHERE source_type = 'sec_filing'
-              AND (metadata IS NULL OR NOT (metadata ? 'ticker'))
+              AND (metadata IS NULL OR NOT jsonb_exists(metadata, 'ticker'))
         """).fetchall()
     return [r["source_id"] for r in rows if r["source_id"]]
 
