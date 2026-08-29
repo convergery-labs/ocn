@@ -528,6 +528,22 @@ def list_jobs(
     return {"jobs": jobs, "next_cursor": next_cursor}
 
 
+# Effective "when did this actually happen" date, used for display/sort
+# order instead of id (insertion order). Confirmed empirically this
+# session: after a large batch reprocessing run, id order badly
+# mismatched real filing dates (e.g. a 2018-07-31 filing sorted ahead of
+# several 2017 filings, since batch insertion order has no relationship
+# to the filing's own date). Falls back per source_type: sec_filing rows
+# carry their real date in metadata.filing_filed_at (not all rows have a
+# usable `published`); news/other rows use `published` when set - a real
+# gap, confirmed live, only ~61% of `news` rows have it - falling back
+# again to stored_at (never null) so every row always sorts by SOME real
+# timestamp, never silently by id.
+_EFFECTIVE_DATE_EXPR = (
+    "COALESCE((metadata->>'filing_filed_at')::timestamptz, published, stored_at)"
+)
+
+
 def list_all_results(
     limit: int = 100,
     cursor: str | None = None,
@@ -535,7 +551,13 @@ def list_all_results(
     source_type: str | None = None,
     ticker: str | None = None,
 ) -> dict[str, Any]:
-    """Return cursor-paginated agent_classifications across all jobs, newest first.
+    """Return cursor-paginated agent_classifications across all jobs, ordered
+    by effective date (see _EFFECTIVE_DATE_EXPR), newest first - NOT by id,
+    which only reflects insertion order (see that constant's comment for why
+    this matters). Cursor is a composite {date, id} keyset, not a bare id -
+    id alone is needed as a tiebreaker for same-timestamp rows (e.g. many
+    filings sharing a stored_at fallback from the same batch job), so a
+    single date value cannot uniquely resume a paginated position.
 
     ticker matches metadata->>'ticker' (JSONB) - the only place ticker is
     stored today (see insert_filing_classification). Only sec_filing rows
@@ -559,17 +581,21 @@ def list_all_results(
         conditions.append("UPPER(metadata->>'ticker') = UPPER(%s)")
         params.append(ticker)
     if cursor:
-        after_id = decode_cursor(cursor)
-        conditions.append("id < %s")
-        params.append(after_id)
+        after = decode_cursor(cursor)
+        # Composite keyset predicate: rows strictly after (date, id) in
+        # DESC order - same date, lower id; or an earlier date outright.
+        conditions.append(f"({_EFFECTIVE_DATE_EXPR}, id) < (%s, %s)")
+        params.append(after["date"])
+        params.append(after["id"])
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
     params.append(limit + 1)
     with get_db() as conn:
         rows = conn.execute(
             f"""
-            SELECT * FROM agent_classifications
+            SELECT *, {_EFFECTIVE_DATE_EXPR} AS effective_date
+            FROM agent_classifications
             {where}
-            ORDER BY id DESC LIMIT %s
+            ORDER BY effective_date DESC, id DESC LIMIT %s
             """,
             params,
         ).fetchall()
@@ -577,11 +603,16 @@ def list_all_results(
     for r in rows:
         rec = dict(r)
         rec["entities"] = json.loads(rec.pop("entities_json", "[]") or "[]")
+        rec.pop("effective_date", None)
         results.append(rec)
     next_cursor = None
     if len(results) > limit:
         results = results[:limit]
-        next_cursor = encode_cursor(results[-1]["id"])
+        last_row = rows[limit - 1]
+        next_cursor = encode_cursor({
+            "date": last_row["effective_date"].isoformat(),
+            "id": last_row["id"],
+        })
     return {"results": results, "next_cursor": next_cursor}
 
 
