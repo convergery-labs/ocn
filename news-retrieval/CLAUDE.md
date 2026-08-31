@@ -86,7 +86,7 @@ AV (Alpha Vantage) data is never fetched on the request path. A background polle
 | Mode | Schedule | What it fetches |
 |------|----------|----------------|
 | `quotes` | Hourly, 14:00-20:00 UTC, Mon-Fri (CloudWatch) | `GLOBAL_QUOTE` per ticker, SPY/QQQ/SOXX indices, `MARKET_STATUS` |
-| `daily` | 00:30 UTC daily (CloudWatch) | `OVERVIEW` (+ `ROC` and `MOM` momentum, merged into the same item), `EARNINGS`, `TIME_SERIES_DAILY_ADJUSTED` per ticker |
+| `daily` | 00:30 UTC daily (CloudWatch) | Macro indicators once per run, not per ticker: `FEDERAL_FUNDS_RATE`, `CPI`, `TREASURY_YIELD`, `UNEMPLOYMENT`, `NONFARM_PAYROLL`, `REAL_GDP`, `RETAIL_SALES`, `DURABLES`, `TOP_GAINERS_LOSERS`; then per ticker: `OVERVIEW` (+ `ROC` and `MOM` momentum, merged into the same item), `EARNINGS`, `TIME_SERIES_DAILY_ADJUSTED` |
 | `sec_filings` | 12:00 UTC daily (CloudWatch) | SEC EDGAR 8-K/10-Q/10-K metadata + filing link per ticker (see SEC Filings below) |
 
 Run manually: `python __main__.py poll-market --mode quotes`
@@ -105,6 +105,7 @@ DynamoDB access for the poller is granted via an IAM role policy (`aws_iam_role_
 | `ocn-market-earnings` | `ticker` | `recorded_at` | 30 days | daily |
 | `ocn-market-lock` | `lock_key` | — | 20 min | both |
 | `ocn-sec-filings` | `ticker` | `accession_number` | 180 days | sec_filings |
+| `ocn-market-macro` | `indicator` | `recorded_at` | 90 days | daily |
 
 ### Market data HTTP endpoints (proxied via api-gateway at `/news/market/*`)
 
@@ -116,6 +117,7 @@ DynamoDB access for the poller is granted via an IAM role policy (`aws_iam_role_
 | `GET /market/earnings/{ticker}` | next_report_date, estimated_eps, last_surprise_pct | no data |
 | `GET /market/indices` | SPY, QQQ, SOXX price + change_percent | no data |
 | `GET /market/status` | current_status, local_open, local_close | no data |
+| `GET /market/macro` | fed_funds_rate, cpi, treasury_yield_10y, unemployment, nonfarm_payroll, real_gdp, retail_sales, durables — each with date, value, unit; plus top_movers (top_gainers/top_losers/most_actively_traded lists) | no data |
 | `GET /market/sec-filings/{ticker}` | recent 8-K/10-Q/10-K filings: form_type, filed_at, accession_number, primary_doc_url, cik, accepted_at, period_of_report, item_codes, filer_category | no data |
 
 ### SEC Filings
