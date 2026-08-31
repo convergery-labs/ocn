@@ -168,6 +168,29 @@ resource "aws_dynamodb_table" "sec_filings" {
   tags = { env = var.env }
 }
 
+resource "aws_dynamodb_table" "market_macro" {
+  name         = "ocn-market-macro"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "indicator"
+  range_key    = "recorded_at"
+
+  attribute {
+    name = "indicator"
+    type = "S"
+  }
+  attribute {
+    name = "recorded_at"
+    type = "S"
+  }
+
+  ttl {
+    attribute_name = "ttl"
+    enabled        = true
+  }
+
+  tags = { env = var.env }
+}
+
 resource "aws_dynamodb_table" "market_lock" {
   name         = "ocn-market-lock"
   billing_mode = "PAY_PER_REQUEST"
@@ -216,6 +239,7 @@ resource "aws_iam_role_policy" "news_retrieval_dynamodb_market" {
           aws_dynamodb_table.market_earnings.arn,
           aws_dynamodb_table.market_lock.arn,
           aws_dynamodb_table.sec_filings.arn,
+          aws_dynamodb_table.market_macro.arn,
         ]
       }
     ]

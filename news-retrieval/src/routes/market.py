@@ -20,7 +20,13 @@ _TABLES = {
     "indices": os.environ.get("DYNAMODB_TABLE_INDICES", "ocn-market-indices"),
     "market_status": os.environ.get("DYNAMODB_TABLE_MARKET_STATUS", "ocn-market-status"),
     "sec_filings": os.environ.get("DYNAMODB_TABLE_SEC_FILINGS", "ocn-sec-filings"),
+    "macro": os.environ.get("DYNAMODB_TABLE_MACRO", "ocn-market-macro"),
 }
+
+_MACRO_INDICATORS = [
+    "fed_funds_rate", "cpi", "treasury_yield_10y", "unemployment",
+    "nonfarm_payroll", "real_gdp", "retail_sales", "durables", "top_movers",
+]
 
 
 def _table(name: str):
@@ -117,6 +123,20 @@ def get_market_status() -> dict:
     if not item:
         raise HTTPException(status_code=503, detail="No market status data available yet.")
     return item
+
+
+@router.get("/market/macro")
+def get_macro() -> dict:
+    """Latest Fed funds rate, CPI, and 10-year Treasury yield. Not ticker-keyed —
+    one shared reading per indicator, updated once per daily poll."""
+    macro = {}
+    for indicator in _MACRO_INDICATORS:
+        item = _latest("macro", "indicator", indicator)
+        if item:
+            macro[indicator] = item
+    if not macro:
+        raise HTTPException(status_code=503, detail="No macro data available yet.")
+    return {"macro": macro}
 
 
 @router.get("/market/sec-filings/{ticker}")

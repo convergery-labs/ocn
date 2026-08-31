@@ -45,6 +45,7 @@ _TABLES = {
     "indices": os.environ.get("DYNAMODB_TABLE_INDICES", "ocn-market-indices"),
     "market_status": os.environ.get("DYNAMODB_TABLE_MARKET_STATUS", "ocn-market-status"),
     "sec_filings": os.environ.get("DYNAMODB_TABLE_SEC_FILINGS", "ocn-sec-filings"),
+    "macro": os.environ.get("DYNAMODB_TABLE_MACRO", "ocn-market-macro"),
 }
 
 
@@ -321,8 +322,85 @@ def _poll_price_history(ticker: str, av_key: str, last_call: list[float]) -> Non
     logger.info("[DYNAMODB] price_history written ticker=%s days=%d", ticker, len(dates))
 
 
+# ---------------------------------------------------------------------------
+# Macro indicators — not ticker-keyed, fetched once per daily run
+# ---------------------------------------------------------------------------
+
+_MACRO_INDICATORS = [
+    ("fed_funds_rate", "FEDERAL_FUNDS_RATE", {"interval": "monthly"}),
+    ("cpi", "CPI", {"interval": "monthly"}),
+    ("treasury_yield_10y", "TREASURY_YIELD", {"interval": "monthly", "maturity": "10year"}),
+    ("unemployment", "UNEMPLOYMENT", {}),
+    ("nonfarm_payroll", "NONFARM_PAYROLL", {}),
+    ("real_gdp", "REAL_GDP", {"interval": "quarterly"}),
+    ("retail_sales", "RETAIL_SALES", {}),
+    ("durables", "DURABLES", {}),
+]
+
+
+def _poll_macro(av_key: str, last_call: list[float]) -> None:
+    """Fetch economic indicators — one call each, written under their own
+    `indicator` partition in ocn-market-macro. These update monthly/quarterly/
+    at FOMC meetings, not per-ticker, so this runs once per daily poll, not
+    once per ticker."""
+    for indicator, function, params in _MACRO_INDICATORS:
+        _rate_sleep(last_call)
+        data = _av_get({"function": function, **params}, av_key)
+        points = data.get("data", [])
+        if not points:
+            logger.warning("[AV] %s empty", function)
+            continue
+        latest = points[0]
+        _table("macro").put_item(Item={
+            "indicator": indicator,
+            "recorded_at": _now_iso(),
+            "date": latest.get("date", ""),
+            "value": _to_decimal(latest.get("value", "0")),
+            "unit": data.get("unit", ""),
+            "ttl": _ttl(90),
+        })
+        logger.info("[DYNAMODB] macro written indicator=%s value=%s", indicator, latest.get("value"))
+
+    _poll_top_movers(av_key, last_call)
+
+
+def _poll_top_movers(av_key: str, last_call: list[float]) -> None:
+    """Fetch top gainers/losers/most-actively-traded US tickers — one call,
+    written as a single item (indicator=top_movers) since it's a snapshot
+    list, not a single scalar reading like the other macro indicators."""
+    _rate_sleep(last_call)
+    data = _av_get({"function": "TOP_GAINERS_LOSERS"}, av_key)
+    gainers = data.get("top_gainers", [])
+    if not gainers:
+        logger.warning("[AV] TOP_GAINERS_LOSERS empty")
+        return
+
+    def _shape(rows: list[dict]) -> list[dict]:
+        return [
+            {
+                "ticker": row.get("ticker", ""),
+                "price": _to_decimal(row.get("price", "0")),
+                "change_amount": _to_decimal(row.get("change_amount", "0")),
+                "change_percentage": _to_decimal(row.get("change_percentage", "0%")),
+                "volume": _to_decimal(row.get("volume", "0")),
+            }
+            for row in rows
+        ]
+
+    _table("macro").put_item(Item={
+        "indicator": "top_movers",
+        "recorded_at": _now_iso(),
+        "date": data.get("last_updated", ""),
+        "top_gainers": _shape(gainers),
+        "top_losers": _shape(data.get("top_losers", [])),
+        "most_actively_traded": _shape(data.get("most_actively_traded", [])),
+        "ttl": _ttl(90),
+    })
+    logger.info("[DYNAMODB] macro written indicator=top_movers")
+
+
 def run_daily(tickers: list[str], av_key: str) -> None:
-    """Poll OVERVIEW, EARNINGS, TIME_SERIES_DAILY_ADJUSTED for each ticker."""
+    """Poll macro indicators once, then OVERVIEW, EARNINGS, TIME_SERIES_DAILY_ADJUSTED per ticker."""
     if _company_news_running():
         return
     if not _acquire_lock("daily"):
@@ -331,6 +409,7 @@ def run_daily(tickers: list[str], av_key: str) -> None:
     try:
         logger.info("[POLLER] daily mode tickers=%d", len(tickers))
         last_call: list[float] = [0.0]
+        _poll_macro(av_key, last_call)
         for ticker in tickers:
             logger.info("[POLLER] daily ticker=%s", ticker)
             try:
