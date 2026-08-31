@@ -14,7 +14,18 @@ _ARCHIVES_URL = "https://www.sec.gov/Archives/edgar/data/{cik_int}/{accession_no
 _USER_AGENT = "OCN SignalDetection kajal.nain@opengrowth.com"
 _MIN_INTERVAL = 0.15  # ~6-7 req/sec, under SEC's 10 req/sec guidance
 
-_FORM_TYPES = {"8-K", "10-Q", "10-K"}
+# 6-K/40-F/20-F are foreign private issuers' equivalents of 8-K/10-K
+# (40-F: Canadian MJDS annual report, 20-F: other-foreign-issuer annual
+# report, 6-K: current report) - added after confirming ~12% of the
+# tracked ticker universe (81/662, including TSM, BABA, ARM, SAP) files
+# ONLY these forms and never 8-K/10-Q/10-K, so was previously getting zero
+# SEC filing coverage. Deliberately NOT widened further (e.g. to remove
+# the filter entirely) - EDGAR returns many purely administrative forms
+# per company (SC 13G, CORRESP, F-X, UPLOAD, S-8 POS, ...) with no
+# narrative content to summarize; this allowlist stays scoped to forms
+# confirmed (empirically, on real AEM/TSM filings) to carry real
+# financial/business narrative.
+_FORM_TYPES = {"8-K", "10-Q", "10-K", "6-K", "40-F", "20-F"}
 
 _cik_map_cache: dict[str, str] | None = None
 

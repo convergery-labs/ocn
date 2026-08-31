@@ -104,24 +104,76 @@ def _fetch_filing_text_and_extract(filing: dict[str, Any], last_call: list[float
     text = sec_edgar.fetch_filing_text(filing["primary_doc_url"], last_call)
     if not text:
         return "", False, "not_applicable"
-    if filing["form_type"] in ("10-K", "10-Q"):
+    if filing["form_type"] in ("10-K", "10-Q", "40-F", "20-F"):
+        # 40-F (Canadian MJDS annual report) / 20-F (other foreign private
+        # issuer annual report) are the foreign-issuer equivalents of 10-K -
+        # same "periodic annual/interim report" shape, same risk that the
+        # primary document is a thin cover-page/XBRL shell with the real
+        # content furnished as a separate exhibit (confirmed empirically:
+        # AEM's 40-F primary doc uses IFRS XBRL tags almost exclusively,
+        # with the actual annual report living in EX-99.1/EX-99.2 - a
+        # different exhibit-numbering convention than a domestic 10-K's
+        # EX-13, but the same underlying pattern). 20-F, by contrast, was
+        # confirmed to carry its real narrative directly in the primary
+        # document on a real TSM filing (131 genuine "revenue" mentions,
+        # not XBRL-tag noise) - so the EX-13/EX-99 fallback below is a
+        # no-op for filers like TSM (extract_filing_sections finds real
+        # content on the first attempt) and only actually fires for
+        # filers structured like AEM.
         section_text, found = sec_edgar.extract_filing_sections(text)
         if not found and filing.get("cik"):
-            # Some 10-K filers (confirmed empirically this session: IBM)
-            # file primary_doc_url as a thin cover-page/XBRL-cover shell
-            # with no real MD&A narrative - the actual Item 7 discussion is
-            # furnished as a separate "EX-13" (Annual Report) exhibit
-            # instead. found=False on the primary doc is exactly the signal
-            # that happened, so retry section extraction against the EX-13
-            # text before giving up - most filers have no EX-13 at all, so
-            # this fallback fetch only fires on the rare filing that needs
-            # it (see fetch_annual_report_exhibit_text's docstring).
+            # Some 10-K/40-F filers (confirmed empirically this session:
+            # IBM's 10-K via EX-13, AEM's 40-F via EX-99.1/EX-99.2) file
+            # primary_doc_url as a thin cover-page/XBRL-cover shell with no
+            # real MD&A narrative - the actual annual report is furnished
+            # as a separate exhibit instead. found=False on the primary doc
+            # is exactly the signal that happened, so retry section
+            # extraction against whichever fallback exhibit is actually
+            # present before giving up - most filers have neither, so this
+            # fallback fetch only fires on the rare filing that needs it
+            # (see fetch_annual_report_exhibit_text's docstring).
             annual_report_text = sec_edgar.fetch_annual_report_exhibit_text(
                 filing.get("cik", ""), filing.get("accession_number", ""), last_call,
             )
+            if not annual_report_text:
+                # EX-13 (domestic 10-K convention) came back empty - try
+                # the EX-99* fallback (40-F/20-F convention, confirmed on
+                # AEM) before giving up entirely. Needs a much higher
+                # max_chars than fetch_filing_exhibits_text's 13K default
+                # (tuned for a single small 8-K press release) - confirmed
+                # empirically on a real AEM 40-F: EX-99.1 alone is a
+                # 3.3MB Annual Information Form, so a 13K combined cap
+                # across ALL EX-99* exhibits never reaches past its front
+                # matter/table of contents into either its own financial
+                # content or EX-99.2's, silently returning the wrong
+                # section instead of failing loudly. 300K matches
+                # fetch_annual_report_exhibit_text's own default for the
+                # same "large annual report exhibit" case.
+                annual_report_text, _ = sec_edgar.fetch_filing_exhibits_text(
+                    filing.get("cik", ""), filing.get("accession_number", ""), [], last_call,
+                    max_chars=300_000,
+                )
             if annual_report_text:
                 section_text, found = sec_edgar.extract_filing_sections(annual_report_text)
         return section_text, found, "not_applicable"
+
+    if filing["form_type"] == "6-K":
+        # 6-K (foreign private issuer current report) is the closest
+        # analog to an 8-K, but never carries item_codes (that's an
+        # 8-K-only SEC concept) - the item-code-based exhibit-fetch gate
+        # below would never fire for one, even though a 6-K's primary
+        # document is confirmed (on a real AEM 6-K) to be JUST a cover
+        # page, with the actual press-release content living in an
+        # EX-99.1 exhibit every time, the same way a 2.02/7.01/8.01 8-K's
+        # substance lives in its exhibit. Always attempt the exhibit
+        # fetch unconditionally rather than gating on item_codes, which a
+        # 6-K will never have.
+        exhibit_text, quality = sec_edgar.fetch_filing_exhibits_text(
+            filing.get("cik", ""), filing.get("accession_number", ""), [], last_call,
+        )
+        if exhibit_text:
+            text = text + "\n\n--- Attached exhibit(s) ---\n\n" + exhibit_text
+        return text, True, ("full" if quality == "full" else "partial")
 
     item_codes = filing.get("item_codes") or []
     if any(code in sec_edgar._EXHIBIT_FETCH_ITEM_CODES for code in item_codes):
