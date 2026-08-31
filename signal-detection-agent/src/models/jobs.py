@@ -419,6 +419,26 @@ def backfill_filing_tickers(accession_to_ticker: dict[str, str]) -> int:
     return updated
 
 
+def expire_classifications_for_source_type(source_type: str, days: int) -> int:
+    """Delete agent_classifications rows for one source_type published more
+    than `days` days ago. Rows with a NULL `published` are never deleted
+    (fail-open) - there is no reliable age to judge them by, matching
+    news-retrieval's own expire_articles_for_domain. Returns the number of
+    rows deleted.
+    """
+    with get_db() as conn:
+        cur = conn.execute(
+            """
+            DELETE FROM agent_classifications
+            WHERE source_type = %s
+              AND published IS NOT NULL
+              AND published < NOW() - (%s || ' days')::INTERVAL
+            """,
+            (source_type, days),
+        )
+        return cur.rowcount
+
+
 def get_recent_entity_classifications(
     entity_names: list[str],
     *,

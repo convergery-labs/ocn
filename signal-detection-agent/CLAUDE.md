@@ -95,6 +95,31 @@ column. Dedup across the two daily runs (and across news-retrieval's ~4-6 polls 
 a deterministic `source_id` (ticker+period or ticker+timestamp), not article row id, enforced
 by a partial unique index - a run never re-classifies or re-inserts something already done.
 
+## Classification Retention (Postgres)
+
+`agent_classifications` has no built-in expiry - rows persist indefinitely by default,
+same as news-retrieval's `articles` table. Two `source_type` values have an explicit
+weekly cleanup job; every other `source_type` is retained forever.
+
+Manual run: `python -m src expire-classifications --source-type <type> --days <n>` -
+deletes `agent_classifications` rows for one `source_type` published more than `--days`
+days ago (default 30); rows with a NULL `published` date are never deleted (fail-open,
+no reliable age to judge them by) - same rule news-retrieval's `expire-articles` uses.
+
+| `source_type` | Domain classified | Retention | Schedule (CloudWatch) | Rationale |
+|---|---|-----------|------------------------|-----------|
+| `geopolitical` | `geopolitical_news` | 14 days | Sunday 05:00 UTC | Deliberately longer than news-retrieval's 7-day `geopolitical_news` article retention - classification is allowed to outlive its source article |
+| `news` | `ai_news` (`NEWS_DOMAIN`) | 30 days | Sunday 07:30 UTC | Matches news-retrieval's `ai_news` article retention |
+
+Both schedules run 1 hour after their corresponding `news_retrieval_*_expire_weekly`
+job (04:00 UTC and 06:30 UTC respectively - see `news-retrieval/CLAUDE.md`), so a
+classification is only ever expired after its source article has already been
+deleted in news-retrieval, never the other way around - `geopolitical`'s longer
+window just means the classification then survives another 7 days on its own before
+its own expiry catches up. `sec_filing` and `taiwan_market_signal` are intentionally
+excluded - neither is driven by a news-retrieval article with an expiry (SEC filing
+metadata is a permanent record; `taiwan_market_signal` has no source-side expiry today).
+
 ## Guidance
 
 - Use the Jira board (project key `CON`) to track and reference cards
