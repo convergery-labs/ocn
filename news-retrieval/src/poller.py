@@ -538,7 +538,7 @@ def run_quotes(tickers: list[str], av_key: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# SEC filings mode: 8-K/10-Q/10-K per ticker, link + metadata only
+# SEC filings mode: 8-K/10-Q/10-K/6-K/40-F/20-F per ticker, link + metadata only
 # ---------------------------------------------------------------------------
 
 _SEC_FILING_TTL_DAYS = 180
@@ -558,7 +558,7 @@ def _existing_accessions(ticker: str) -> set[str]:
 
 
 def run_sec_filings(tickers: list[str]) -> None:
-    """Fetch new 8-K/10-Q/10-K filings per ticker and write metadata to DynamoDB.
+    """Fetch new 8-K/10-Q/10-K/6-K/40-F/20-F filings per ticker and write metadata to DynamoDB.
 
     Only filings whose filed_at falls in the current calendar year are
     written - fetch_recent_filings() returns EDGAR's full recent-filings
