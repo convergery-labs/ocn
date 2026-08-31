@@ -123,5 +123,17 @@ def classify_taiwan_signals(from_date: str | None, to_date: str | None) -> None:
     logger.info("taiwan_market_signal job_id=%s finished", job_id)
 
 
+@cli.command("expire-classifications")
+@click.option("--source-type", required=True, help="source_type to expire, e.g. geopolitical or news.")
+@click.option("--days", default=30, show_default=True, help="Delete classifications published more than this many days ago.")
+def expire_classifications(source_type: str, days: int) -> None:
+    """Delete old classifications for one source_type. Runs to completion and exits."""
+    from models.jobs import expire_classifications_for_source_type
+
+    init_db()
+    deleted = expire_classifications_for_source_type(source_type, days)
+    logger.info("[EXPIRE] source_type=%s days=%d deleted=%d", source_type, days, deleted)
+
+
 if __name__ == "__main__":
     cli()

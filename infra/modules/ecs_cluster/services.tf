@@ -900,6 +900,72 @@ resource "aws_cloudwatch_event_target" "signal_detection_agent_taiwan_signals" {
   })
 }
 
+# Weekly classification retention for the two domains signal-detection-agent
+# actually consumes (geopolitical_news -> source_type='geopolitical', ai_news
+# -> source_type='news'). sec_filing and taiwan_market_signal are
+# intentionally excluded - neither has a source-side expiry in
+# news-retrieval today. Each rule runs 1 hour after its corresponding
+# news_retrieval_*_expire_weekly rule, so classifications are only ever
+# expired after their source article has already been deleted, never the
+# other way around. geopolitical is deliberately kept longer (14 days) than
+# news-retrieval's own geopolitical_news article retention (7 days) - a
+# classification is allowed to outlive its source article here.
+resource "aws_cloudwatch_event_rule" "signal_detection_agent_geopolitical_expire_weekly" {
+  name                = "${var.env}-signal-detection-agent-geopolitical-expire-weekly"
+  description         = "Delete geopolitical classifications older than 14 days (longer than news-retrieval's 7-day geopolitical_news article retention, by design)"
+  schedule_expression = "cron(0 5 ? * SUN *)"
+}
+
+resource "aws_cloudwatch_event_target" "signal_detection_agent_geopolitical_expire_weekly" {
+  rule     = aws_cloudwatch_event_rule.signal_detection_agent_geopolitical_expire_weekly.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+  ecs_target {
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.signal_detection_agent.family}"
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets         = var.private_subnet_ids
+      security_groups = [var.signal_detection_agent_sg_id]
+    }
+  }
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "signal-detection-agent"
+        command = ["python", "-m", "src", "expire-classifications", "--source-type", "geopolitical", "--days", "14"]
+      }
+    ]
+  })
+}
+
+resource "aws_cloudwatch_event_rule" "signal_detection_agent_news_expire_weekly" {
+  name                = "${var.env}-signal-detection-agent-news-expire-weekly"
+  description         = "Delete news classifications older than 30 days, matching news-retrieval's ai_news article retention"
+  schedule_expression = "cron(30 7 ? * SUN *)"
+}
+
+resource "aws_cloudwatch_event_target" "signal_detection_agent_news_expire_weekly" {
+  rule     = aws_cloudwatch_event_rule.signal_detection_agent_news_expire_weekly.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+  ecs_target {
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.signal_detection_agent.family}"
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets         = var.private_subnet_ids
+      security_groups = [var.signal_detection_agent_sg_id]
+    }
+  }
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "signal-detection-agent"
+        command = ["python", "-m", "src", "expire-classifications", "--source-type", "news", "--days", "30"]
+      }
+    ]
+  })
+}
+
 
 resource "aws_ecs_service" "signal_detection_agent" {
   name            = "${var.env}-signal-detection-agent"
