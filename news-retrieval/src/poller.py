@@ -344,24 +344,30 @@ def _poll_macro(av_key: str, last_call: list[float]) -> None:
     at FOMC meetings, not per-ticker, so this runs once per daily poll, not
     once per ticker."""
     for indicator, function, params in _MACRO_INDICATORS:
-        _rate_sleep(last_call)
-        data = _av_get({"function": function, **params}, av_key)
-        points = data.get("data", [])
-        if not points:
-            logger.warning("[AV] %s empty", function)
-            continue
-        latest = points[0]
-        _table("macro").put_item(Item={
-            "indicator": indicator,
-            "recorded_at": _now_iso(),
-            "date": latest.get("date", ""),
-            "value": _to_decimal(latest.get("value", "0")),
-            "unit": data.get("unit", ""),
-            "ttl": _ttl(90),
-        })
-        logger.info("[DYNAMODB] macro written indicator=%s value=%s", indicator, latest.get("value"))
+        try:
+            _rate_sleep(last_call)
+            data = _av_get({"function": function, **params}, av_key)
+            points = data.get("data", [])
+            if not points:
+                logger.warning("[AV] %s empty", function)
+                continue
+            latest = points[0]
+            _table("macro").put_item(Item={
+                "indicator": indicator,
+                "recorded_at": _now_iso(),
+                "date": latest.get("date", ""),
+                "value": _to_decimal(latest.get("value", "0")),
+                "unit": data.get("unit", ""),
+                "ttl": _ttl(90),
+            })
+            logger.info("[DYNAMODB] macro written indicator=%s value=%s", indicator, latest.get("value"))
+        except Exception as exc:
+            logger.error("[POLLER] macro indicator=%s failed, skipping: %s", indicator, exc)
 
-    _poll_top_movers(av_key, last_call)
+    try:
+        _poll_top_movers(av_key, last_call)
+    except Exception as exc:
+        logger.error("[POLLER] top_movers failed, skipping: %s", exc)
 
 
 def _poll_top_movers(av_key: str, last_call: list[float]) -> None:
@@ -409,15 +415,24 @@ def run_daily(tickers: list[str], av_key: str) -> None:
     try:
         logger.info("[POLLER] daily mode tickers=%d", len(tickers))
         last_call: list[float] = [0.0]
-        _poll_macro(av_key, last_call)
+        try:
+            _poll_macro(av_key, last_call)
+        except Exception as exc:
+            logger.error("[POLLER] macro poll failed, continuing to tickers: %s", exc)
         for ticker in tickers:
             logger.info("[POLLER] daily ticker=%s", ticker)
             try:
                 _poll_overview(ticker, av_key, last_call)
+            except Exception as exc:
+                logger.error("[POLLER] daily ticker=%s overview failed, skipping: %s", ticker, exc)
+            try:
                 _poll_earnings(ticker, av_key, last_call)
+            except Exception as exc:
+                logger.error("[POLLER] daily ticker=%s earnings failed, skipping: %s", ticker, exc)
+            try:
                 _poll_price_history(ticker, av_key, last_call)
             except Exception as exc:
-                logger.error("[POLLER] daily ticker=%s failed, skipping: %s", ticker, exc)
+                logger.error("[POLLER] daily ticker=%s price_history failed, skipping: %s", ticker, exc)
         logger.info("[POLLER] daily complete")
     finally:
         _release_lock("daily")
@@ -460,24 +475,27 @@ def _poll_quote(ticker: str, av_key: str, last_call: list[float]) -> None:
 
 def _poll_indices(av_key: str, last_call: list[float]) -> None:
     for ticker in _INDEX_TICKERS:
-        _rate_sleep(last_call)
-        data = _av_get({"function": "GLOBAL_QUOTE", "symbol": ticker}, av_key)
-        quote = data.get("Global Quote", {})
-        if not quote:
-            logger.warning("[AV] GLOBAL_QUOTE empty for index %s", ticker)
-            continue
-        trading_day = quote.get("07. latest trading day", "")
-        stale = trading_day < _last_trading_day() if trading_day else False
-        _table("indices").put_item(Item={
-            "ticker": ticker,
-            "recorded_at": _now_iso(),
-            "price": _to_decimal(quote.get("05. price", "0")),
-            "change_percent": _to_decimal(quote.get("10. change percent", "0%")),
-            "latest_trading_day": trading_day,
-            "stale": stale,
-            "ttl": _ttl(4),
-        })
-        logger.info("[DYNAMODB] indices written ticker=%s stale=%s", ticker, stale)
+        try:
+            _rate_sleep(last_call)
+            data = _av_get({"function": "GLOBAL_QUOTE", "symbol": ticker}, av_key)
+            quote = data.get("Global Quote", {})
+            if not quote:
+                logger.warning("[AV] GLOBAL_QUOTE empty for index %s", ticker)
+                continue
+            trading_day = quote.get("07. latest trading day", "")
+            stale = trading_day < _last_trading_day() if trading_day else False
+            _table("indices").put_item(Item={
+                "ticker": ticker,
+                "recorded_at": _now_iso(),
+                "price": _to_decimal(quote.get("05. price", "0")),
+                "change_percent": _to_decimal(quote.get("10. change percent", "0%")),
+                "latest_trading_day": trading_day,
+                "stale": stale,
+                "ttl": _ttl(4),
+            })
+            logger.info("[DYNAMODB] indices written ticker=%s stale=%s", ticker, stale)
+        except Exception as exc:
+            logger.error("[POLLER] indices ticker=%s failed, skipping: %s", ticker, exc)
 
 
 def _poll_market_status(av_key: str, last_call: list[float]) -> None:
@@ -520,10 +538,20 @@ def run_quotes(tickers: list[str], av_key: str) -> None:
         last_call: list[float] = [0.0]
 
         for ticker in tickers:
-            _poll_quote(ticker, av_key, last_call)
+            try:
+                _poll_quote(ticker, av_key, last_call)
+            except Exception as exc:
+                logger.error("[POLLER] quotes ticker=%s failed, skipping: %s", ticker, exc)
 
-        _poll_indices(av_key, last_call)
-        _poll_market_status(av_key, last_call)
+        try:
+            _poll_indices(av_key, last_call)
+        except Exception as exc:
+            logger.error("[POLLER] indices poll failed, continuing: %s", exc)
+
+        try:
+            _poll_market_status(av_key, last_call)
+        except Exception as exc:
+            logger.error("[POLLER] market_status poll failed: %s", exc)
 
         elapsed = time.perf_counter() - t0
         logger.info("[POLLER] quotes complete elapsed=%.1fs", elapsed)

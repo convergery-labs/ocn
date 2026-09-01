@@ -820,15 +820,16 @@ resource "aws_service_discovery_service" "signal_detection_agent" {
 # filing's body text directly (adapters/sec_edgar.py, text-fetch only).
 # Scheduled for 13:00 UTC, one hour after news-retrieval's own sec_filings
 # poller (12:00 UTC, see news-retrieval's CloudWatch rule) so this job always
-# reads that day's freshly-fetched filings, not yesterday's. Note this job
-# is currently DISABLED, but if re-enabled it now runs AFTER signal-herald's
-# unrelated 12:30 UTC digest run, so that day's filings won't appear in that
-# day's digest.
+# reads that day's freshly-fetched filings, not yesterday's. This runs AFTER
+# signal-herald's unrelated 12:30 UTC digest run, so that day's filings won't
+# appear in that day's digest. Note stage 2 (real classification) is
+# currently commented out in filing_classifier.py, so this job only produces
+# stage-1 narrative summaries for now.
 resource "aws_cloudwatch_event_rule" "signal_detection_agent_filings_daily" {
   name                = "${var.env}-signal-detection-agent-filings-daily"
   description         = "Classify new SEC 8-K/10-Q/10-K filings (fetched by news-retrieval's poller) for the tracked ticker universe once daily"
   schedule_expression = "cron(0 13 * * ? *)"
-  state               = "DISABLED"
+  state               = "ENABLED"
 }
 
 
@@ -907,9 +908,10 @@ resource "aws_cloudwatch_event_target" "signal_detection_agent_taiwan_signals" {
 # news-retrieval today. Each rule runs 1 hour after its corresponding
 # news_retrieval_*_expire_weekly rule, so classifications are only ever
 # expired after their source article has already been deleted, never the
-# other way around. geopolitical is deliberately kept longer (14 days) than
-# news-retrieval's own geopolitical_news article retention (7 days) - a
-# classification is allowed to outlive its source article here.
+# other way around. Both are deliberately kept longer than their
+# news-retrieval source's own article retention - geopolitical: 14 days here
+# vs 7 days for geopolitical_news; news: 180 days here vs 30 days for
+# ai_news - a classification is allowed to outlive its source article.
 resource "aws_cloudwatch_event_rule" "signal_detection_agent_geopolitical_expire_weekly" {
   name                = "${var.env}-signal-detection-agent-geopolitical-expire-weekly"
   description         = "Delete geopolitical classifications older than 14 days (longer than news-retrieval's 7-day geopolitical_news article retention, by design)"
@@ -940,7 +942,7 @@ resource "aws_cloudwatch_event_target" "signal_detection_agent_geopolitical_expi
 
 resource "aws_cloudwatch_event_rule" "signal_detection_agent_news_expire_weekly" {
   name                = "${var.env}-signal-detection-agent-news-expire-weekly"
-  description         = "Delete news classifications older than 30 days, matching news-retrieval's ai_news article retention"
+  description         = "Delete news classifications older than 180 days (longer than news-retrieval's 30-day ai_news article retention, by design)"
   schedule_expression = "cron(30 7 ? * SUN *)"
 }
 
@@ -960,7 +962,7 @@ resource "aws_cloudwatch_event_target" "signal_detection_agent_news_expire_weekl
     containerOverrides = [
       {
         name    = "signal-detection-agent"
-        command = ["python", "-m", "src", "expire-classifications", "--source-type", "news", "--days", "30"]
+        command = ["python", "-m", "src", "expire-classifications", "--source-type", "news", "--days", "180"]
       }
     ]
   })

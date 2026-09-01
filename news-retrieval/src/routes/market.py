@@ -7,6 +7,8 @@ import boto3
 from boto3.dynamodb.conditions import Key
 from fastapi import APIRouter, HTTPException
 
+from pipeline import _normalize_av_ticker
+
 router = APIRouter()
 
 _AWS_REGION = os.environ.get("AWS_REGION", "eu-north-1")
@@ -60,10 +62,18 @@ def _not_found(ticker: str) -> HTTPException:
     )
 
 
+def _dynamo_key(ticker: str) -> str:
+    """Normalize a ticker to the same form the poller stores it under
+    (e.g. BRK.B -> BRK-B), so share-class tickers can be looked up in
+    whichever form the caller passes. Falls back to a plain upper() if
+    normalization doesn't apply (e.g. an already-dashed or plain ticker)."""
+    return _normalize_av_ticker(ticker) or ticker.strip().upper()
+
+
 @router.get("/market/quote/{ticker}")
 def get_quote(ticker: str) -> dict:
     """Current price, change, volume, previous close for a ticker."""
-    item = _latest("quote", "ticker", ticker.upper())
+    item = _latest("quote", "ticker", _dynamo_key(ticker))
     if not item:
         raise _not_found(ticker)
     return item
@@ -74,7 +84,7 @@ def get_overview(ticker: str) -> dict:
     """Fundamentals strip: market cap, P/E, 52-week range, analyst target, beta, sector,
     momentum_roc, momentum_mom, 50/200-day moving averages, EPS/forward PE/price-to-book/
     EV-to-EBITDA, margins, YoY earnings/revenue growth, dividend yield/per-share."""
-    item = _latest("overview", "ticker", ticker.upper())
+    item = _latest("overview", "ticker", _dynamo_key(ticker))
     if not item:
         raise _not_found(ticker)
     return item
@@ -83,21 +93,22 @@ def get_overview(ticker: str) -> dict:
 @router.get("/market/price-history/{ticker}")
 def get_price_history(ticker: str) -> dict:
     """Last 10 trading days of adjusted close prices."""
+    key = _dynamo_key(ticker)
     result = _table("price_history").query(
-        KeyConditionExpression=Key("ticker").eq(ticker.upper()),
+        KeyConditionExpression=Key("ticker").eq(key),
         ScanIndexForward=False,
         Limit=10,
     )
     items = result.get("Items", [])
     if not items:
         raise _not_found(ticker)
-    return {"ticker": ticker.upper(), "history": [_deserialize(i) for i in items]}
+    return {"ticker": key, "history": [_deserialize(i) for i in items]}
 
 
 @router.get("/market/earnings/{ticker}")
 def get_earnings(ticker: str) -> dict:
     """Next earnings date, estimated EPS, last quarter surprise %."""
-    item = _latest("earnings", "ticker", ticker.upper())
+    item = _latest("earnings", "ticker", _dynamo_key(ticker))
     if not item:
         raise _not_found(ticker)
     return item
@@ -146,14 +157,15 @@ def get_sec_filings(ticker: str) -> dict:
     item_codes, filer_category. Metadata + link only - filing body text is
     fetched live by consumers (e.g. signal-detection-agent), never stored here.
     """
+    key = _dynamo_key(ticker)
     result = _table("sec_filings").query(
-        KeyConditionExpression=Key("ticker").eq(ticker.upper()),
+        KeyConditionExpression=Key("ticker").eq(key),
         ScanIndexForward=False,
     )
     items = result.get("Items", [])
     if not items:
         raise _not_found(ticker)
-    return {"ticker": ticker.upper(), "filings": [_deserialize(i) for i in items]}
+    return {"ticker": key, "filings": [_deserialize(i) for i in items]}
 
 
 @router.get("/market/tracked-tickers")
