@@ -109,16 +109,17 @@ no reliable age to judge them by) - same rule news-retrieval's `expire-articles`
 | `source_type` | Domain classified | Retention | Schedule (CloudWatch) | Rationale |
 |---|---|-----------|------------------------|-----------|
 | `geopolitical` | `geopolitical_news` | 14 days | Sunday 05:00 UTC | Deliberately longer than news-retrieval's 7-day `geopolitical_news` article retention - classification is allowed to outlive its source article |
-| `news` | `ai_news` (`NEWS_DOMAIN`) | 30 days | Sunday 07:30 UTC | Matches news-retrieval's `ai_news` article retention |
+| `news` | `ai_news` (`NEWS_DOMAIN`) | 180 days | Sunday 07:30 UTC | Deliberately longer than news-retrieval's 30-day `ai_news` article retention - classification is allowed to outlive its source article |
 
 Both schedules run 1 hour after their corresponding `news_retrieval_*_expire_weekly`
 job (04:00 UTC and 06:30 UTC respectively - see `news-retrieval/CLAUDE.md`), so a
 classification is only ever expired after its source article has already been
-deleted in news-retrieval, never the other way around - `geopolitical`'s longer
-window just means the classification then survives another 7 days on its own before
-its own expiry catches up. `sec_filing` and `taiwan_market_signal` are intentionally
-excluded - neither is driven by a news-retrieval article with an expiry (SEC filing
-metadata is a permanent record; `taiwan_market_signal` has no source-side expiry today).
+deleted in news-retrieval, never the other way around - each domain's longer window
+just means the classification survives on its own for a while after its source
+article is gone, before its own expiry catches up. `sec_filing` and
+`taiwan_market_signal` are intentionally excluded - neither is driven by a
+news-retrieval article with an expiry (SEC filing metadata is a permanent record;
+`taiwan_market_signal` has no source-side expiry today).
 
 ## Guidance
 
