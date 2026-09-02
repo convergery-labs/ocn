@@ -18,10 +18,12 @@ async def get_all_results(
     signal_detection: str | None = Query(default=None),
     source_type: str | None = Query(default=None, description="Filter by source_type, e.g. 'news' or 'sec_filing'"),
     ticker: str | None = Query(default=None, description="Filter by ticker (only populated for source_type='sec_filing' today)"),
+    period: str | None = Query(default=None, description="Filter by metadata.period_gregorian, e.g. '2026-07' (only populated for taiwan_market_signal mops_revenue rows)"),
+    source_category: str | None = Query(default=None, description="Filter by metadata.source_category, e.g. 'mops_revenue', 'mops_material', 'gdelt' (only populated for taiwan_market_signal rows)"),
     caller: dict[str, Any] = Depends(require_auth),
 ) -> dict[str, Any]:
     """Return paginated classification results across all jobs, newest first."""
-    return list_all_results(limit=limit, cursor=cursor, signal_detection=signal_detection, source_type=source_type, ticker=ticker)
+    return list_all_results(limit=limit, cursor=cursor, signal_detection=signal_detection, source_type=source_type, ticker=ticker, period=period, source_category=source_category)
 
 
 @router.get("/jobs")
@@ -54,9 +56,11 @@ async def get_job_results(
     signal_detection: str | None = Query(default=None),
     source_type: str | None = Query(default=None, description="Filter by source_type, e.g. 'news' or 'sec_filing'"),
     ticker: str | None = Query(default=None, description="Filter by ticker (only populated for source_type='sec_filing' today)"),
+    period: str | None = Query(default=None, description="Filter by metadata.period_gregorian, e.g. '2026-07' (only populated for taiwan_market_signal mops_revenue rows)"),
+    source_category: str | None = Query(default=None, description="Filter by metadata.source_category, e.g. 'mops_revenue', 'mops_material', 'gdelt' (only populated for taiwan_market_signal rows)"),
     caller: dict[str, Any] = Depends(require_auth),
 ) -> dict[str, Any]:
     job = get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
-    return list_results(job_id=job_id, limit=limit, cursor=cursor, signal_detection=signal_detection, source_type=source_type, ticker=ticker)
+    return list_results(job_id=job_id, limit=limit, cursor=cursor, signal_detection=signal_detection, source_type=source_type, ticker=ticker, period=period, source_category=source_category)
