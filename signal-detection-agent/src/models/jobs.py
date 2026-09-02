@@ -570,6 +570,8 @@ def list_all_results(
     signal_detection: str | None = None,
     source_type: str | None = None,
     ticker: str | None = None,
+    period: str | None = None,
+    source_category: str | None = None,
 ) -> dict[str, Any]:
     """Return cursor-paginated agent_classifications across all jobs, ordered
     by effective date (see _EFFECTIVE_DATE_EXPR), newest first - NOT by id,
@@ -588,6 +590,26 @@ def list_all_results(
     also matches the expression index on UPPER(metadata->>'ticker') in
     db.py, so the comparison stays index-friendly rather than falling back
     to a sequential scan.
+
+    period matches metadata->>'period_gregorian' (e.g. "2026-07") - only
+    taiwan_market_signal mops_revenue rows populate this field, same
+    only-some-rows-have-it shape as ticker above. Exact string match, not
+    case-insensitive (period_gregorian is always digits/hyphen, no case to
+    normalize). Without this, every period ever classified for a ticker
+    comes back mixed in one list - callers that want "just this month's
+    revenue" (e.g. the frontend showing July only, not July+August once
+    both exist) need to filter client-side otherwise.
+
+    source_category matches metadata->>'source_category' (e.g.
+    'mops_revenue', 'mops_material', 'gdelt') - only taiwan_market_signal
+    rows populate this field; distinguishes revenue rows from material
+    announcements within that one source_type, since both share
+    source_type='taiwan_market_signal' with no other way to tell them apart
+    server-side. Needed alongside period/limit for callers that want ONLY
+    revenue rows (e.g. to reliably compute the latest period from a small
+    page, without a page of material-announcement rows - which have no
+    period_gregorian at all - crowding out the revenue rows a small limit
+    would otherwise return).
     """
     params: list[Any] = []
     conditions = []
@@ -600,6 +622,12 @@ def list_all_results(
     if ticker:
         conditions.append("UPPER(metadata->>'ticker') = UPPER(%s)")
         params.append(ticker)
+    if period:
+        conditions.append("metadata->>'period_gregorian' = %s")
+        params.append(period)
+    if source_category:
+        conditions.append("metadata->>'source_category' = %s")
+        params.append(source_category)
     if cursor:
         after = decode_cursor(cursor)
         # Composite keyset predicate: rows strictly after (date, id) in
@@ -643,10 +671,16 @@ def list_results(
     signal_detection: str | None = None,
     source_type: str | None = None,
     ticker: str | None = None,
+    period: str | None = None,
+    source_category: str | None = None,
 ) -> dict[str, Any]:
     """Return cursor-paginated agent_classifications for a job.
 
     ticker matches metadata->>'ticker' - see list_all_results for details.
+    period matches metadata->>'period_gregorian' - see list_all_results for
+    details; only taiwan_market_signal mops_revenue rows populate it.
+    source_category matches metadata->>'source_category' - see
+    list_all_results for details.
     """
     params: list[Any] = [job_id]
     extra_conditions = ""
@@ -659,6 +693,12 @@ def list_results(
     if ticker:
         extra_conditions += " AND UPPER(metadata->>'ticker') = UPPER(%s)"
         params.append(ticker)
+    if period:
+        extra_conditions += " AND metadata->>'period_gregorian' = %s"
+        params.append(period)
+    if source_category:
+        extra_conditions += " AND metadata->>'source_category' = %s"
+        params.append(source_category)
     if cursor:
         after_id = decode_cursor(cursor)
         extra_conditions += " AND id > %s"
