@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from auth import require_auth
-from models.jobs import get_job, list_all_results, list_jobs, list_results
+from models.jobs import get_job, list_all_results, list_jobs, list_results, list_taiwan_periods
 
 router = APIRouter()
 
@@ -24,6 +24,20 @@ async def get_all_results(
 ) -> dict[str, Any]:
     """Return paginated classification results across all jobs, newest first."""
     return list_all_results(limit=limit, cursor=cursor, signal_detection=signal_detection, source_type=source_type, ticker=ticker, period=period, source_category=source_category)
+
+
+@router.get("/results/periods")
+async def get_taiwan_periods(
+    source_category: str | None = Query(default=None, description="Scope to one source_category, e.g. 'mops_revenue' or 'mops_material'. Omit for periods across both."),
+    caller: dict[str, Any] = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return every distinct period (metadata.period_gregorian) that exists
+    for taiwan_market_signal, newest first - backs a period filter/picker
+    without a client-side scan over a fetched page. Always scoped to
+    source_type='taiwan_market_signal'; that's the only source_type with
+    period_gregorian populated today.
+    """
+    return {"periods": list_taiwan_periods(source_category=source_category)}
 
 
 @router.get("/jobs")

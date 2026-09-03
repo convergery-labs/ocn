@@ -248,7 +248,19 @@ def classify_material_announcements(articles: list[dict[str, Any]]) -> None:
     """Classify material-announcement articles by disclosure clause code, in
     place. Only touches articles with metadata.source_category ==
     "mops_material". Adds ``announcement_materiality_signal`` (HIGH/WEAK/
-    NOISE) and ``announcement_materiality_reason`` to metadata.
+    NOISE), ``announcement_materiality_reason``, and ``period_gregorian``
+    to metadata.
+
+    period_gregorian is derived from statement_date (e.g. "2026-08-24" ->
+    "2026-08") so material announcements can be filtered by the same
+    period= query param revenue rows already use - one filtering concept
+    across both source_category values instead of a second, date-range-
+    shaped mechanism just for announcements. Distinct from mops_revenue's
+    period_gregorian, which is the reporting period a filing is ABOUT
+    (e.g. July's revenue, filed in August) - here it's simply the calendar
+    month the announcement was filed, since material announcements don't
+    have a separate "reporting period" concept the way monthly revenue
+    does.
     """
     counts = {"HIGH": 0, "WEAK": 0, "NOISE": 0}
     for a in articles:
@@ -261,6 +273,9 @@ def classify_material_announcements(articles: list[dict[str, Any]]) -> None:
         a["metadata"]["announcement_materiality_reason"] = (
             f"clause_{code}" if code in _CLAUSE_CODE_TABLE else "unrecognized_clause"
         )
+        statement_date = meta.get("statement_date")
+        if statement_date and len(statement_date) >= 7:
+            a["metadata"]["period_gregorian"] = statement_date[:7]
         counts[signal] += 1
     if any(counts.values()):
         logger.info(
