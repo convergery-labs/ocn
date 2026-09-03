@@ -282,6 +282,42 @@ def get_existing_taiwan_source_ids(source_ids: list[str]) -> set[str]:
     return {r["source_id"] for r in rows}
 
 
+def list_taiwan_periods(source_category: str | None = None) -> list[str]:
+    """Return every distinct metadata.period_gregorian value stored for
+    source_type='taiwan_market_signal', newest first.
+
+    Backs the "which reporting periods have data" question a period=
+    filter/dropdown needs to answer without a client-side scan capped by
+    some fetch limit - the frontend calls this once to populate the
+    default period (periods[0]) and the rest of a picker, instead of
+    guessing from a fixed-size unfiltered page. The result set is
+    inherently small (one row per calendar month this domain has ever
+    classified anything for - low tens at most, growing by one a month),
+    so no pagination here.
+
+    source_category optional - omit for periods across both mops_revenue
+    (reporting period the filing is about) and mops_material (calendar
+    month filed - see classify_material_announcements), or pass one to
+    scope to just that category's periods.
+    """
+    params: list[Any] = ["taiwan_market_signal"]
+    where = "source_type = %s AND metadata->>'period_gregorian' IS NOT NULL"
+    if source_category:
+        where += " AND metadata->>'source_category' = %s"
+        params.append(source_category)
+    with get_db() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT DISTINCT metadata->>'period_gregorian' AS period
+            FROM agent_classifications
+            WHERE {where}
+            ORDER BY period DESC
+            """,
+            params,
+        ).fetchall()
+    return [r["period"] for r in rows]
+
+
 def get_taiwan_revenue_rows_for_periods(periods: list[str]) -> list[dict[str, Any]]:
     """Return existing mops_revenue rows already stored for the given
     period_gregorian values, across ALL prior jobs.
