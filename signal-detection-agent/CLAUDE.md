@@ -75,7 +75,8 @@ signal-detection-agent/
 | `PIPELINE_POLL_TIMEOUT_SECS` | Max seconds to wait for a news-retrieval run (default: 600) |
 | `WEB_SEARCH_PROVIDER` | Web search backend: `duckduckgo` (default), `tavily`, `brave` |
 | `WEB_SEARCH_API_KEY` | API key for Tavily or Brave (not required for DuckDuckGo) |
-| `CLASSIFY_CONCURRENCY` | Max concurrent article classifiers (default: 5) |
+| `CLASSIFY_CONCURRENCY` | Max concurrent article classifiers (default: 8) — shared by the `news` domain and geopolitical_signal Stage B/C |
+| `TAIWAN_CLASSIFY_CONCURRENCY` | Max concurrent Taiwan translate/GDELT-relevance calls (default: 5) |
 | `TAIWAN_SIGNAL_DOMAIN` | news-retrieval domain slug for the Taiwan pipeline (default: `taiwan_market_signal`) |
 
 ## Taiwan Signal Pipeline
@@ -98,7 +99,7 @@ by a partial unique index - a run never re-classifies or re-inserts something al
 ## Classification Retention (Postgres)
 
 `agent_classifications` has no built-in expiry - rows persist indefinitely by default,
-same as news-retrieval's `articles` table. Two `source_type` values have an explicit
+same as news-retrieval's `articles` table. One `source_type` value has an explicit
 weekly cleanup job; every other `source_type` is retained forever.
 
 Manual run: `python -m src expire-classifications --source-type <type> --days <n>` -
@@ -108,15 +109,13 @@ no reliable age to judge them by) - same rule news-retrieval's `expire-articles`
 
 | `source_type` | Domain classified | Retention | Schedule (CloudWatch) | Rationale |
 |---|---|-----------|------------------------|-----------|
-| `geopolitical` | `geopolitical_news` | 14 days | Sunday 05:00 UTC | Deliberately longer than news-retrieval's 7-day `geopolitical_news` article retention - classification is allowed to outlive its source article |
 | `news` | `ai_news` (`NEWS_DOMAIN`) | 180 days | Sunday 07:30 UTC | Deliberately longer than news-retrieval's 30-day `ai_news` article retention - classification is allowed to outlive its source article |
 
-Both schedules run 1 hour after their corresponding `news_retrieval_*_expire_weekly`
-job (04:00 UTC and 06:30 UTC respectively - see `news-retrieval/CLAUDE.md`), so a
-classification is only ever expired after its source article has already been
-deleted in news-retrieval, never the other way around - each domain's longer window
-just means the classification survives on its own for a while after its source
-article is gone, before its own expiry catches up. `sec_filing` and
+This schedule runs 1 hour after its corresponding `news_retrieval_ai_news_expire_weekly`
+job (06:30 UTC - see `news-retrieval/CLAUDE.md`), so a classification is only ever expired
+after its source article has already been deleted in news-retrieval, never the other way
+around - the longer window just means the classification survives on its own for a while
+after its source article is gone, before its own expiry catches up. `sec_filing` and
 `taiwan_market_signal` are intentionally excluded - neither is driven by a
 news-retrieval article with an expiry (SEC filing metadata is a permanent record;
 `taiwan_market_signal` has no source-side expiry today).

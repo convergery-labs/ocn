@@ -38,14 +38,23 @@ def serve(host: str, port: int) -> None:
 @cli.command()
 @click.option("--domain", default="company_news", show_default=True)
 @click.option("--days-back", default=1, show_default=True)
-def trigger(domain: str, days_back: int) -> None:
+@click.option(
+    "--callback-url",
+    default=None,
+    help="If set, POST {run_id, status, domain, summary} to this URL when the "
+    "run completes or fails (see controllers/run.py's _fire_webhook - "
+    "fire-and-forget, no retry, no auth header). Lets a scheduled trigger "
+    "notify a downstream consumer the moment the fetch is actually done, "
+    "instead of the consumer guessing a fixed delay on its own schedule.",
+)
+def trigger(domain: str, days_back: int, callback_url: str | None) -> None:
     """Run the fetch pipeline for a domain and exit."""
     from controllers.run import RunRequest, create_run_record, run_pipeline
 
     init_db()
     seed()
 
-    request = RunRequest(domain=domain, days_back=days_back, force=True)
+    request = RunRequest(domain=domain, days_back=days_back, force=True, callback_url=callback_url)
     caller = {"role": "admin", "id": None}
 
     try:

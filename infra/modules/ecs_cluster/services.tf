@@ -294,8 +294,19 @@ resource "aws_cloudwatch_event_target" "news_retrieval_geopolitical_news_daily" 
   input = jsonencode({
     containerOverrides = [
       {
-        name    = "news-retrieval"
-        command = ["python", "__main__.py", "trigger", "--domain", "geopolitical_news", "--days-back", "1"]
+        name = "news-retrieval"
+        # --callback-url: notify signal-detection-agent the moment this
+        # fetch actually finishes, so its geopolitical_signal pipeline
+        # starts immediately rather than waiting on a fixed-offset guess
+        # (signal_detection_agent_geopolitical_signal_pipeline_daily below
+        # still runs on its own 05:00 UTC schedule too, as a fallback for
+        # if this webhook delivery is ever missed - see that rule's own
+        # comment and routes/webhooks.py in signal-detection-agent).
+        command = [
+          "python", "__main__.py", "trigger",
+          "--domain", "geopolitical_news", "--days-back", "1",
+          "--callback-url", "http://signal-detection-agent.${var.env}.ocn.internal:8003/webhooks/news-retrieval-run-completed",
+        ]
       }
     ]
   })
@@ -901,45 +912,16 @@ resource "aws_cloudwatch_event_target" "signal_detection_agent_taiwan_signals" {
   })
 }
 
-# Weekly classification retention for the two domains signal-detection-agent
-# actually consumes (geopolitical_news -> source_type='geopolitical', ai_news
-# -> source_type='news'). sec_filing and taiwan_market_signal are
-# intentionally excluded - neither has a source-side expiry in
-# news-retrieval today. Each rule runs 1 hour after its corresponding
-# news_retrieval_*_expire_weekly rule, so classifications are only ever
-# expired after their source article has already been deleted, never the
-# other way around. Both are deliberately kept longer than their
-# news-retrieval source's own article retention - geopolitical: 14 days here
-# vs 7 days for geopolitical_news; news: 180 days here vs 30 days for
-# ai_news - a classification is allowed to outlive its source article.
-resource "aws_cloudwatch_event_rule" "signal_detection_agent_geopolitical_expire_weekly" {
-  name                = "${var.env}-signal-detection-agent-geopolitical-expire-weekly"
-  description         = "Delete geopolitical classifications older than 14 days (longer than news-retrieval's 7-day geopolitical_news article retention, by design)"
-  schedule_expression = "cron(0 5 ? * SUN *)"
-}
-
-resource "aws_cloudwatch_event_target" "signal_detection_agent_geopolitical_expire_weekly" {
-  rule     = aws_cloudwatch_event_rule.signal_detection_agent_geopolitical_expire_weekly.name
-  arn      = aws_ecs_cluster.main.arn
-  role_arn = aws_iam_role.ecs_events.arn
-  ecs_target {
-    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.signal_detection_agent.family}"
-    launch_type         = "FARGATE"
-    network_configuration {
-      subnets         = var.private_subnet_ids
-      security_groups = [var.signal_detection_agent_sg_id]
-    }
-  }
-  input = jsonencode({
-    containerOverrides = [
-      {
-        name    = "signal-detection-agent"
-        command = ["python", "-m", "src", "expire-classifications", "--source-type", "geopolitical", "--days", "14"]
-      }
-    ]
-  })
-}
-
+# Weekly classification retention for the domain signal-detection-agent
+# actually consumes this way (ai_news -> source_type='news'). sec_filing and
+# taiwan_market_signal are intentionally excluded - neither has a
+# source-side expiry in news-retrieval today. Runs 1 hour after its
+# corresponding news_retrieval_*_expire_weekly rule, so classifications are
+# only ever expired after their source article has already been deleted,
+# never the other way around. Deliberately kept longer than its
+# news-retrieval source's own article retention - news: 180 days here vs 30
+# days for ai_news - a classification is allowed to outlive its source
+# article.
 resource "aws_cloudwatch_event_rule" "signal_detection_agent_news_expire_weekly" {
   name                = "${var.env}-signal-detection-agent-news-expire-weekly"
   description         = "Delete news classifications older than 180 days (longer than news-retrieval's 30-day ai_news article retention, by design)"
@@ -963,6 +945,97 @@ resource "aws_cloudwatch_event_target" "signal_detection_agent_news_expire_weekl
       {
         name    = "signal-detection-agent"
         command = ["python", "-m", "src", "expire-classifications", "--source-type", "news", "--days", "180"]
+      }
+    ]
+  })
+}
+
+# geopolitical_signal funnel: Stage A (rule-based) -> Stage B (talk vs
+# action LLM call) -> Stage C (company/category tagging, reads the
+# geopolitical_signal_companies cache). Stages A/B/C are NOT independent
+# jobs - B only acts on rows A just wrote ('waiting'), and C only acts on
+# rows B just wrote ('signal'/HIGH) - so they run as one CLI command
+# (run-geopolitical-signal-pipeline) inside a single scheduled task rather
+# than three separately-scheduled triggers. Three separate cron rules
+# risked B or C firing before the prior stage's run had actually finished
+# (e.g. Stage A running long on a heavy news day); a single sequential
+# command removes that race entirely.
+#   03:00 - company/category cache refresh (research-universe -> cache
+#            table). Kept on its own schedule, independent of the news
+#            cycle - company/ticker/category data changes rarely, so it
+#            doesn't need to run every time the pipeline does. Runs
+#            before the 05:00 UTC pipeline slot so Stage C's cache read
+#            is never more than ~2 hours stale, and before a first-ever
+#            deploy's first pipeline run so the cache starts populated.
+#   05:00 - Stage A -> Stage B -> Stage C -> Stage D, in sequence, in one
+#            task. This is a FALLBACK, not the primary trigger: the
+#            primary path is news-retrieval's own --callback-url webhook
+#            (news_retrieval_geopolitical_news_daily above passes
+#            /webhooks/news-retrieval-run-completed as its callback),
+#            which kicks off this same pipeline in signal-detection-
+#            agent's running server process the moment that day's fetch
+#            actually completes - correct regardless of how long the
+#            fetch takes, unlike a fixed offset from news-retrieval's own
+#            02:00 UTC schedule. This 05:00 UTC rule stays as a safety
+#            net for if that webhook delivery is ever lost (it's
+#            fire-and-forget on news-retrieval's side - no retry, see
+#            _fire_webhook in news-retrieval/src/controllers/run.py) -
+#            running the pipeline twice in one day is harmless, since
+#            every stage's worklist query only selects rows the previous
+#            stage hasn't processed yet.
+resource "aws_cloudwatch_event_rule" "signal_detection_agent_geopolitical_signal_cache_refresh_daily" {
+  name                = "${var.env}-signal-detection-agent-geo-signal-cache-refresh-daily"
+  description         = "Refresh geopolitical_signal_companies cache (ticker/name/category) from research-universe"
+  schedule_expression = "cron(0 3 * * ? *)"
+  state               = "ENABLED"
+}
+
+resource "aws_cloudwatch_event_target" "signal_detection_agent_geopolitical_signal_cache_refresh_daily" {
+  rule     = aws_cloudwatch_event_rule.signal_detection_agent_geopolitical_signal_cache_refresh_daily.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+  ecs_target {
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.signal_detection_agent.family}"
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets         = var.private_subnet_ids
+      security_groups = [var.signal_detection_agent_sg_id]
+    }
+  }
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "signal-detection-agent"
+        command = ["python", "-m", "src", "refresh-geopolitical-category-map"]
+      }
+    ]
+  })
+}
+
+resource "aws_cloudwatch_event_rule" "signal_detection_agent_geopolitical_signal_pipeline_daily" {
+  name                = "${var.env}-signal-detection-agent-geo-signal-pipeline-daily"
+  description         = "geopolitical_signal Stage A -> Stage B -> Stage C, run sequentially in one task"
+  schedule_expression = "cron(0 5 * * ? *)"
+  state               = "ENABLED"
+}
+
+resource "aws_cloudwatch_event_target" "signal_detection_agent_geopolitical_signal_pipeline_daily" {
+  rule     = aws_cloudwatch_event_rule.signal_detection_agent_geopolitical_signal_pipeline_daily.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+  ecs_target {
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.signal_detection_agent.family}"
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets         = var.private_subnet_ids
+      security_groups = [var.signal_detection_agent_sg_id]
+    }
+  }
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "signal-detection-agent"
+        command = ["python", "-m", "src", "run-geopolitical-signal-pipeline"]
       }
     ]
   })

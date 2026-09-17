@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 from urllib.request import Request, urlopen
 
@@ -320,13 +321,19 @@ def translate_taiwan_articles(
             if _get_nested(a, source_path):
                 to_translate.append((a, source_path, dest_field))
 
-    translated_count = 0
-    for article, source_path, dest_field in to_translate:
+    def _translate_and_apply(item: tuple[dict, str, str]) -> bool:
+        article, source_path, dest_field = item
         text = _get_nested(article, source_path)
         result = _translate_one(text, model, api_key, base_url, timeout)
         if result is not None:
             article["metadata"][dest_field] = result
-            translated_count += 1
+            return True
+        return False
+
+    translated_count = 0
+    if to_translate:
+        with ThreadPoolExecutor(max_workers=config.TAIWAN_CLASSIFY_CONCURRENCY) as executor:
+            translated_count = sum(executor.map(_translate_and_apply, to_translate))
 
     if to_translate:
         logger.info(
@@ -438,10 +445,10 @@ def _classify_gdelt_relevance(
 def classify_gdelt_articles(
     articles: list[dict[str, Any]], model: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Classify GDELT articles (source_category == "gdelt") one at a time -
-    unlike revenue ranking, this needs no batch context, so it's a simple
-    per-article loop here; concurrency (if needed) belongs in the caller,
-    same as the existing news/geopolitical classifiers in controllers/run.py.
+    """Classify GDELT articles (source_category == "gdelt"), one model call
+    per article, bounded by config.TAIWAN_CLASSIFY_CONCURRENCY (same
+    semaphore-free thread-pool pattern translate_taiwan_articles uses -
+    each call is independent, no batch context needed).
 
     Only touches articles that already have a translated_title (i.e.
     survived Stage A + dedup + translation) - an article with no
@@ -459,7 +466,7 @@ def classify_gdelt_articles(
     base_url = config.OPENAI_BASE_URL
     timeout = config.OPENAI_TIMEOUT
 
-    results = []
+    candidates = []
     for a in articles:
         meta = a.get("metadata") or {}
         if meta.get("source_category") != "gdelt":
@@ -467,12 +474,15 @@ def classify_gdelt_articles(
         translated_title = meta.get("translated_title")
         if not translated_title:
             continue  # nothing usable to classify without a translated title
+        candidates.append((a, meta, translated_title))
 
+    def _classify_one(item: tuple[dict, dict, str]) -> dict[str, Any]:
+        a, meta, translated_title = item
         company_name = meta.get("translated_company_name") or meta.get("ticker") or ""
         signal, reason = _classify_gdelt_relevance(
             company_name, translated_title, model, api_key, base_url, timeout,
         )
-        results.append({
+        return {
             "article": a,
             "result": {
                 "signal": signal,
@@ -481,8 +491,12 @@ def classify_gdelt_articles(
                 "reason": reason,
                 "metadata": meta,
             },
-        })
-    return results
+        }
+
+    if not candidates:
+        return []
+    with ThreadPoolExecutor(max_workers=config.TAIWAN_CLASSIFY_CONCURRENCY) as executor:
+        return list(executor.map(_classify_one, candidates))
 
 
 def classify_taiwan_signal_batch(

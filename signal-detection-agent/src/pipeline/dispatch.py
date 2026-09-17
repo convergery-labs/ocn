@@ -1,7 +1,7 @@
 """Single source of truth for per-article classification domains.
 
 Scope: only domains classified one article at a time through
-run_agent_pipeline's generic loop (news, geopolitical, and future domains of
+run_agent_pipeline's generic loop (news, and future domains of
 the same shape, e.g. vc_commentary). sec_filing and taiwan_market_signal are
 NOT here - they run through their own dedicated controllers
 (controllers/filing_run.py, controllers/run.py's run_taiwan_signal_classification)
@@ -25,11 +25,9 @@ from adapters.web_search import search_entity_context
 from models.jobs import (
     get_recent_entity_classifications,
     insert_classification,
-    insert_geopolitical_classification,
 )
 from pipeline.classifier import classify_article_two_stage, load_prompt
 from pipeline.example_selector import ExampleSelector, parse_examples
-from pipeline.geopolitical_classifier import classify_geopolitical_article, load_geopolitical_prompt
 
 ClassifyOneFn = Callable[..., dict[str, Any]]
 InsertFn = Callable[[int, dict[str, Any], dict[str, Any]], None]
@@ -99,31 +97,8 @@ def _build_news_config() -> DomainConfig:
     )
 
 
-def _build_geopolitical_config() -> DomainConfig:
-    system_prompt = load_geopolitical_prompt()
-    models = [config.OPENAI_MODEL]
-
-    def classify_one(article: dict[str, Any], **_ignored: Any) -> dict[str, Any]:
-        return classify_geopolitical_article(
-            article,
-            system_prompt=system_prompt,
-            models=models,
-            api_key=config.OPENAI_API_KEY,
-            base_url=config.OPENAI_BASE_URL,
-            timeout=config.OPENAI_TIMEOUT,
-            max_attempts=config.OPENAI_MAX_ATTEMPTS,
-        )
-
-    return DomainConfig(
-        domain=config.GEOPOLITICAL_DOMAIN,
-        classify_one=classify_one,
-        insert_fn=insert_geopolitical_classification,
-    )
-
-
 _BUILDERS: dict[str, Callable[[], DomainConfig]] = {
     config.NEWS_DOMAIN: _build_news_config,
-    config.GEOPOLITICAL_DOMAIN: _build_geopolitical_config,
 }
 
 

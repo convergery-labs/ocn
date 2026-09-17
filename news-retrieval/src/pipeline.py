@@ -1095,25 +1095,58 @@ def _dedup_by_title_similarity(
 # the same underlying story from multiple outlets with differently-worded
 # titles, same problem _dedup_by_title_similarity solves for Taiwan GDELT,
 # just scoped by domain instead of ticker.
-_TITLE_DEDUP_DOMAINS: frozenset[str] = frozenset({"ai_news", "smart_money"})
+_TITLE_DEDUP_DOMAINS: frozenset[str] = frozenset({"ai_news", "smart_money", "geopolitical_news"})
 
-# Wider than Taiwan GDELT's 24h (_TITLE_DEDUP_WINDOW_HOURS) - ai_news and
-# smart_money sources (RSS/SerpAPI/NewsAPI) publish re-coverage of the same
-# story across a longer tail than same-day Taiwan company filings/news, so
-# a same-day-only window was missing duplicates that appear the next day.
-_DOMAIN_TITLE_DEDUP_WINDOW_HOURS = 48
+# ai_news/smart_money: wider than Taiwan GDELT's 24h (_TITLE_DEDUP_WINDOW_HOURS)
+# - RSS/SerpAPI/NewsAPI sources publish re-coverage of the same story across a
+# longer tail than same-day Taiwan company filings/news, so a same-day-only
+# window was missing duplicates that appear the next day.
+# geopolitical_news: 168h (7 days) - matches this domain's own full article
+# retention (see Article Retention in CLAUDE.md), so a story that resurfaces
+# anywhere within its retained lifetime still gets caught as a duplicate of
+# the original, not just same-news-cycle re-reporting. Deliberately wider
+# than Taiwan's 24h: geopolitical stories are corroborated by wire services
+# over a longer tail than a same-day window would catch. Trade-off accepted:
+# more embedding-comparison candidates per run than a 24h window, and a
+# genuine multi-day story development (e.g. a conflict escalating days
+# later) risks being merged into the original as a "duplicate" rather than
+# treated as new - both weighed against catching more real duplicates.
+_DOMAIN_TITLE_DEDUP_WINDOW_HOURS: dict[str, int] = {
+    "ai_news": 48,
+    "smart_money": 48,
+    "geopolitical_news": 168,
+}
+
+# Per-domain override of _TITLE_DEDUP_SIMILARITY_THRESHOLD (0.90 default,
+# used by ai_news/smart_money and Taiwan GDELT). geopolitical_news lowered
+# to 0.85 after two real same-story duplicates were confirmed missed at
+# 0.90 - e.g. "Canada Sanctions Streit Group Over Armored Vehicle Supplies
+# to Russia" (militarnyi.com) vs "Canada Hits Streit Group With Sanctions
+# Over Armored Vehicles Used by Russia's National Guard" (kyivpost.com)
+# measured at 0.8691, just under the old threshold. Kept domain-specific
+# rather than lowering the shared default globally: geopolitical wire
+# coverage of the same event varies headline wording more than ai_news/
+# smart_money's typical re-reporting, and 0.85 was chosen with a margin
+# above the ~0.61-0.72 range three genuinely different Canada-tariff
+# headlines (different specifics: general tariffs vs. named products)
+# scored in the same real dataset - so the new threshold catches the
+# confirmed-missed duplicate without pulling those distinct stories
+# together.
+_DOMAIN_TITLE_DEDUP_SIMILARITY_THRESHOLD: dict[str, float] = {
+    "geopolitical_news": 0.85,
+}
 
 
 def _dedup_by_title_similarity_for_domain(
     articles: list[dict], domain_slug: str,
 ) -> list[dict]:
     """Drop articles whose title is near-identical in meaning to one already
-    stored for this domain in the last ``_DOMAIN_TITLE_DEDUP_WINDOW_HOURS``
+    stored for this domain in the last ``_DOMAIN_TITLE_DEDUP_WINDOW_HOURS[domain_slug]``
     hours.
 
     Same algorithm as ``_dedup_by_title_similarity`` (Taiwan GDELT), scoped
-    by domain instead of ticker - ai_news/smart_money sources aren't
-    ticker-scoped, so "same domain" is the natural comparison boundary
+    by domain instead of ticker - ai_news/smart_money/geopolitical_news sources
+    aren't ticker-scoped, so "same domain" is the natural comparison boundary
     instead.
 
     Embedding failures fail open: an article whose title couldn't be
@@ -1127,7 +1160,7 @@ def _dedup_by_title_similarity_for_domain(
     new_embeddings = _embed_titles([a["title"] for a in articles], api_key)
 
     recent = get_recent_articles_for_domain(
-        domain_slug, hours=_DOMAIN_TITLE_DEDUP_WINDOW_HOURS,
+        domain_slug, hours=_DOMAIN_TITLE_DEDUP_WINDOW_HOURS[domain_slug],
     )
     candidates = [
         (c.get("title"), (c.get("metadata") or {}).get("title_embedding"),
@@ -1152,16 +1185,19 @@ def _dedup_by_title_similarity_for_domain(
             for c in kept_this_batch
         ]
 
+        threshold = _DOMAIN_TITLE_DEDUP_SIMILARITY_THRESHOLD.get(
+            domain_slug, _TITLE_DEDUP_SIMILARITY_THRESHOLD,
+        )
         match = None
         for candidate_title, candidate_embedding, db_id, batch_article in batch_candidates:
             if not candidate_embedding:
                 continue
             similarity = _cosine_similarity(embedding, candidate_embedding)
-            if similarity >= _TITLE_DEDUP_SIMILARITY_THRESHOLD:
+            if similarity >= threshold:
                 logger.info(
-                    "[%s] near-duplicate title (similarity=%.3f)"
+                    "[%s] near-duplicate title (similarity=%.3f, threshold=%.2f)"
                     " new=%r existing=%r",
-                    domain_slug, similarity, article["title"], candidate_title,
+                    domain_slug, similarity, threshold, article["title"], candidate_title,
                 )
                 match = (db_id, batch_article)
                 break
