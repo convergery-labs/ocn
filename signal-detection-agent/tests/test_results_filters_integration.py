@@ -121,12 +121,21 @@ def test_impacted_ticker_filter_matches_direct_or_by_category_case_insensitive()
     _insert_row(
         article_id=900005, title="Direct match row", url="https://reuters.com/e",
         published=datetime.now(timezone.utc),
-        metadata={"impacted_companies_direct": ["NVDA"], "impacted_companies_by_category": None},
+        metadata={
+            "impacted_companies_direct": [{"ticker": "NVDA", "company_name": "NVIDIA Corporation"}],
+            "impacted_companies_by_category": None,
+        },
     )
     _insert_row(
         article_id=900006, title="Category match row", url="https://reuters.com/f",
         published=datetime.now(timezone.utc),
-        metadata={"impacted_companies_direct": None, "impacted_companies_by_category": ["AMD", "TSM"]},
+        metadata={
+            "impacted_companies_direct": None,
+            "impacted_companies_by_category": [
+                {"ticker": "AMD", "company_name": "Advanced Micro Devices, INC", "matched_categories": ["Semiconductor Manufacturing"]},
+                {"ticker": "TSM", "company_name": "Taiwan Semiconductor Manufacturing Company", "matched_categories": ["Semiconductor Manufacturing"]},
+            ],
+        },
     )
     _insert_row(
         article_id=900007, title="No match row", url="https://reuters.com/g",

@@ -86,6 +86,20 @@ ALLOWED_DOMAINS: frozenset[str] = frozenset({
     "aa.com.tr",
     "france24.com",
     "haaretz.com",
+    # fourth review pass, real data confirmed these dropped as
+    # domain_not_allowed while carrying real HIGH-candidate stories:
+    # nytimes.com and politico.com (12 and 6 real dropped articles
+    # respectively in one sample - both are papers-of-record/serious
+    # policy-trade coverage, same tier as ft.com/economist.com already
+    # listed), spglobal.com (S&P Global - commodities/critical-minerals
+    # trade coverage, e.g. "China's export controls weigh on global
+    # critical minerals supply"), agenceurope.eu (EU policy wire - missed
+    # "European Commission updates export control list for dual-use
+    # civilian and military items", a textbook official regulatory action).
+    "nytimes.com",
+    "politico.com",
+    "spglobal.com",
+    "agenceurope.eu",
 })
 
 # Talk verbs: the headline is reporting rhetoric, not a completed/announced
@@ -128,6 +142,14 @@ _ACTION_VERBS: frozenset[str] = frozenset({
 _FEDERAL_REGISTER_ACTION_KEYWORDS: frozenset[str] = frozenset({
     "tariff", "import", "export control", "sanction", "embargo",
     "entity list", "denied persons", "trade restriction", "quota",
+    # "duties" added after a real miss: "Modifying the Scope of Products
+    # of Canada Subject to the Additional Duties Imposed To Offset
+    # Canadian Discrimination..." is a genuine tariff-scope trade action
+    # (part of the same Canada trade-war notice series as the "Excluding
+    # Certain Canadian Products..." notices this list already caught) but
+    # uses "duties" rather than "tariff" - the two are synonyms in
+    # Federal Register/customs notice titles.
+    "duties",
 })
 
 

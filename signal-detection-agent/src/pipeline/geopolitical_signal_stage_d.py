@@ -58,10 +58,21 @@ def _is_corroborated(also_reported_by: list[str] | None) -> bool:
     Stage A's allowlist - a real second wire/paper-of-record covering the
     same story, not just any syndicating outlet.
 
-    also_reported_by entries are recorded as news-retrieval saw them
-    (domain or source string, not normalized the same way _extract_domain
-    normalizes a URL) - checked with the same "www." stripping so
-    "www.reuters.com" and "reuters.com" both match.
+    news-retrieval now writes also_reported_by as a domain derived from
+    the duplicate article's own url (pipeline.py's
+    _extract_domain_for_also_reported_by), same normalization as this
+    function's "www." stripping - so a fresh entry is already
+    comparable as-is. Confirmed live this was NOT always true: this
+    function originally compared against article["source"] display names
+    ("PBS", "Bloomberg Law News", "ABC News - Breaking News, Latest News
+    and Videos") that news-retrieval had been storing directly, which
+    never matched ALLOWED_DOMAINS and made corroborated structurally
+    unreachable - real HIGH rows covering the same story on PBS and ABC
+    News both showed corroborated=false as a result. The "www." stripping
+    here stays anyway as a defensive no-op against any older rows still
+    holding a pre-fix display-name value (those will simply still not
+    match, same as before - this function does not retroactively reclassify
+    already-graded rows).
     """
     if not also_reported_by:
         return False
@@ -74,7 +85,10 @@ def _is_corroborated(also_reported_by: list[str] | None) -> bool:
     return False
 
 
-def _is_specific(title: str, impacted_companies_direct: list[str] | None) -> bool:
+def _is_specific(title: str, impacted_companies_direct: list[dict[str, str]] | None) -> bool:
+    # only checked for truthiness (non-empty) - shape-agnostic to whatever
+    # find_direct_company_matches returns (a list of ticker strings
+    # previously, now [{ticker, company_name}] objects).
     return bool(_DIGIT_RE.search(title or "")) or bool(impacted_companies_direct)
 
 
@@ -83,7 +97,7 @@ def grade_geopolitical_signal_article(
     url: str | None,
     title: str | None,
     also_reported_by: list[str] | None,
-    impacted_companies_direct: list[str] | None,
+    impacted_companies_direct: list[dict[str, str]] | None,
 ) -> dict[str, Any]:
     """Return {grade, corroborated, primary_source, specific} for one
     Stage-C-tagged article. Pure/free - no model call, no I/O; callers

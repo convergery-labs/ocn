@@ -54,26 +54,38 @@ def get_companies_for_name_matching() -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
-def get_tickers_for_categories(categories: list[str]) -> dict[str, list[str]]:
-    """Return {category: [tickers]} for exactly the given category names -
-    Layer 3's expansion step, reading only the categories Layer 2 (+
-    overrides) actually chose rather than the full 19-category table.
+def get_tickers_for_categories(categories: list[str]) -> list[dict[str, Any]]:
+    """Return [{ticker, company_name, matched_categories}] for exactly the
+    given category names - Layer 3's expansion step, reading only the
+    categories Layer 2 (+ overrides) actually chose rather than the full
+    19-category table.
+
+    One entry per ticker (not per ticker-category pair) - matched_categories
+    is a list so a ticker exposed via multiple chosen categories (a real,
+    common case: e.g. a Canada-tariff headline spanning Semiconductor
+    Manufacturing + Cloud & Compute Platforms) appears once with both
+    categories named, rather than as duplicate rows.
     """
     if not categories:
-        return {}
+        return []
     with get_db() as conn:
         rows = conn.execute(
             """
-            SELECT ticker, categories FROM geopolitical_signal_companies
+            SELECT ticker, company_name, categories FROM geopolitical_signal_companies
             WHERE categories && %s
             """,
             (categories,),
         ).fetchall()
-    result: dict[str, list[str]] = {c: [] for c in categories}
+    category_set = set(categories)
+    result: list[dict[str, Any]] = []
     for row in rows:
-        for category in row["categories"]:
-            if category in result:
-                result[category].append(row["ticker"])
+        matched = [c for c in row["categories"] if c in category_set]
+        if matched:
+            result.append({
+                "ticker": row["ticker"],
+                "company_name": row["company_name"],
+                "matched_categories": matched,
+            })
     return result
 
 
