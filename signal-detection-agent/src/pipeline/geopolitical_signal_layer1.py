@@ -57,26 +57,50 @@ def _strip_legal_suffix(company_name: str) -> str:
 # tradeoff, not an oversight.
 _MIN_NAME_LENGTH = 4
 
+# The length floor alone doesn't catch every case: some real company
+# names at or above _MIN_NAME_LENGTH are themselves ordinary English
+# words, and raising the floor further would drop many genuinely safe
+# short names (Axon, Cohu, EVgo, Ionq, Moog, Nova, Oklo, Okta, Rohm, Roku
+# - all real length-4 company names in the cache, none of them ordinary
+# English words) just to exclude a handful of real collisions. Confirmed
+# live: "BILL Holdings" (ticker BILL) matched "US Congress passes Russia
+# sanctions bill" purely because "bill" is being used in its ordinary
+# sense (legislation), not as a company reference - exactly the "ARM
+# problem" the length floor was built for, except "BILL" clears that bar.
+# This denylist is intentionally small and only grows when a real
+# false-positive match is confirmed live, same discipline as the domain
+# allowlist in geopolitical_signal_classifier.py - not populated
+# speculatively from every short/common-sounding name in the cache.
+_COMMON_WORD_COMPANY_NAME_DENYLIST: frozenset[str] = frozenset({
+    "bill", "nice", "snap", "flex",
+})
+
 
 def _build_pattern(company_name: str) -> re.Pattern[str] | None:
     name = _strip_legal_suffix(company_name.strip())
     if len(name) < _MIN_NAME_LENGTH:
+        return None
+    if name.lower() in _COMMON_WORD_COMPANY_NAME_DENYLIST:
         return None
     return re.compile(r"\b" + re.escape(name) + r"\b", re.IGNORECASE)
 
 
 def find_direct_company_matches(
     title: str, companies: list[dict],
-) -> list[str]:
-    """Return tickers of companies whose name appears in the headline as a
-    whole word/phrase (word-boundary match, case-insensitive).
+) -> list[dict[str, str]]:
+    """Return [{ticker, company_name}] for companies whose name appears in
+    the headline as a whole word/phrase (word-boundary match,
+    case-insensitive). company_name is the original stored name (not the
+    legal-suffix-stripped search form) - kept for display/attribution, same
+    reasoning _strip_legal_suffix's docstring already gives for why the
+    stored name itself is never mutated.
 
     ``companies`` must already be ordered longest-name-first (see
     get_companies_for_name_matching) - this function does not re-sort.
     """
     if not title:
         return []
-    matched: list[str] = []
+    matched: list[dict[str, str]] = []
     seen_tickers: set[str] = set()
     for company in companies:
         ticker = company["ticker"]
@@ -84,6 +108,6 @@ def find_direct_company_matches(
             continue
         pattern = _build_pattern(company["company_name"])
         if pattern is not None and pattern.search(title):
-            matched.append(ticker)
+            matched.append({"ticker": ticker, "company_name": company["company_name"]})
             seen_tickers.add(ticker)
     return matched

@@ -476,11 +476,11 @@ async def run_geopolitical_signal_stage_c(job_id: int) -> None:
             impacted_categories=layer2_result["impacted_categories"],
         )
 
-        # Layer 3 - free cache lookup, only for the categories actually chosen.
-        category_tickers = get_tickers_for_categories(final_categories)
-        expanded_tickers = sorted({
-            ticker for tickers in category_tickers.values() for ticker in tickers
-        })
+        # Layer 3 - free cache lookup, only for the categories actually
+        # chosen. Already [{ticker, company_name, matched_categories}] -
+        # one entry per ticker, not per ticker-category pair (see
+        # get_tickers_for_categories' docstring).
+        category_matches = get_tickers_for_categories(final_categories)
 
         tags = {
             "channel": layer2_result["channel"],
@@ -488,7 +488,7 @@ async def run_geopolitical_signal_stage_c(job_id: int) -> None:
             "assets": layer2_result["assets"],
             "impacted_categories": final_categories or None,
             "impacted_companies_direct": direct_matches or None,
-            "impacted_companies_by_category": expanded_tickers or None,
+            "impacted_companies_by_category": category_matches or None,
             "one_line": layer2_result["one_line"],
         }
         try:

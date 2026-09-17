@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from functools import partial
 from typing import Any
+from urllib.parse import urlparse
 
 import feedparser
 import httpx
@@ -776,31 +777,79 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
     return dot / (norm_a * norm_b)
 
 
+def _extract_domain_for_also_reported_by(article: dict) -> str | None:
+    """Return the registrable domain for an also_reported_by entry, derived
+    from the article's own url - never from article["source"].
+
+    Confirmed live: article["source"] is a display name ("PBS", "Bloomberg",
+    "Bloomberg Law News", "ABC News - Breaking News, Latest News and
+    Videos"), not a domain - both dedup call sites in this module were
+    storing that raw display name into also_reported_by, so any downstream
+    consumer comparing against a domain allowlist (signal-detection-agent's
+    Stage D corroboration check) could never match it, silently making
+    corroboration structurally unreachable. Same "www." stripping as
+    signal-detection-agent's Stage A _extract_domain, so a value written
+    here is directly comparable against that service's ALLOWED_DOMAINS
+    without further normalization.
+    """
+    url = article.get("url") or ""
+    host = urlparse(url).hostname or ""
+    host = host.lower()
+    if host.startswith("www."):
+        host = host[len("www."):]
+    return host or None
+
+
+_EMBED_TITLES_MAX_ATTEMPTS = 3
+_EMBED_TITLES_RETRY_BACKOFF_SECS = 2.0
+
+
 def _embed_titles(titles: list[str], api_key: str | None) -> list[list[float] | None]:
     """Embed a batch of titles via OpenRouter, same model class already used
     by signal-detection for lightweight claim-level comparison (as opposed
     to the larger text-embedding-3-large used there for full-body
     clustering — titles are short, a smaller model is enough and cheaper).
 
-    Returns one embedding per title, in order; a title's slot is None if the
-    batch call fails, so callers must treat missing embeddings as "cannot
-    compare" rather than "definitely not a duplicate" (fail-open — never
-    silently drop an article because embedding failed).
+    Returns one embedding per title, in order; a title's slot is None if
+    every attempt fails, so callers must treat missing embeddings as
+    "cannot compare" rather than "definitely not a duplicate" (fail-open —
+    never silently drop an article because embedding failed).
+
+    Retries up to _EMBED_TITLES_MAX_ATTEMPTS times with a short fixed
+    backoff before falling back to all-None. Confirmed live: a single
+    transient connection error on this call (no retry, at the time) caused
+    an entire 369-article geopolitical_news fetch to skip dedup completely
+    - real same-story duplicates across up to 7 different outlets were
+    never merged, which also meant also_reported_by (Stage D's
+    corroboration signal downstream) was never populated for that whole
+    day's fetch. A one-off network blip failing open for a handful of
+    unresolvable titles is an acceptable, rare cost; failing open for an
+    entire day's fetch on the first retry-free error is not.
     """
     if not titles:
         return []
-    try:
-        client = _make_client(api_key)
-        response = client.embeddings.create(
-            model=_TITLE_EMBEDDING_MODEL, input=titles,
-        )
-        return [item.embedding for item in response.data]
-    except Exception as exc:
-        logger.warning(
-            "[GDELT] title embedding failed for batch of %d: %s",
-            len(titles), exc,
-        )
-        return [None] * len(titles)
+    last_exc: Exception | None = None
+    for attempt in range(1, _EMBED_TITLES_MAX_ATTEMPTS + 1):
+        try:
+            client = _make_client(api_key)
+            response = client.embeddings.create(
+                model=_TITLE_EMBEDDING_MODEL, input=titles,
+            )
+            return [item.embedding for item in response.data]
+        except Exception as exc:
+            last_exc = exc
+            if attempt < _EMBED_TITLES_MAX_ATTEMPTS:
+                logger.warning(
+                    "[GDELT] title embedding attempt %d/%d failed for batch"
+                    " of %d, retrying: %s",
+                    attempt, _EMBED_TITLES_MAX_ATTEMPTS, len(titles), exc,
+                )
+                time.sleep(_EMBED_TITLES_RETRY_BACKOFF_SECS)
+    logger.warning(
+        "[GDELT] title embedding failed for batch of %d after %d attempts: %s",
+        len(titles), _EMBED_TITLES_MAX_ATTEMPTS, last_exc,
+    )
+    return [None] * len(titles)
 
 
 # ---------------------------------------------------------------------------
@@ -1047,7 +1096,7 @@ def _dedup_by_title_similarity(
 
         if match is not None:
             db_id, batch_article = match
-            domain = article.get("source")
+            domain = _extract_domain_for_also_reported_by(article)
             if batch_article is not None:
                 # Same-batch match: merge in-memory, nothing written yet.
                 also_reported_by = batch_article["metadata"].setdefault(
@@ -1119,21 +1168,30 @@ _DOMAIN_TITLE_DEDUP_WINDOW_HOURS: dict[str, int] = {
 
 # Per-domain override of _TITLE_DEDUP_SIMILARITY_THRESHOLD (0.90 default,
 # used by ai_news/smart_money and Taiwan GDELT). geopolitical_news lowered
-# to 0.85 after two real same-story duplicates were confirmed missed at
-# 0.90 - e.g. "Canada Sanctions Streit Group Over Armored Vehicle Supplies
-# to Russia" (militarnyi.com) vs "Canada Hits Streit Group With Sanctions
-# Over Armored Vehicles Used by Russia's National Guard" (kyivpost.com)
-# measured at 0.8691, just under the old threshold. Kept domain-specific
-# rather than lowering the shared default globally: geopolitical wire
-# coverage of the same event varies headline wording more than ai_news/
-# smart_money's typical re-reporting, and 0.85 was chosen with a margin
-# above the ~0.61-0.72 range three genuinely different Canada-tariff
-# headlines (different specifics: general tariffs vs. named products)
-# scored in the same real dataset - so the new threshold catches the
-# confirmed-missed duplicate without pulling those distinct stories
-# together.
+# twice after real same-story duplicates were confirmed missed just under
+# each prior threshold:
+#   0.90 -> 0.85: "Canada Sanctions Streit Group Over Armored Vehicle
+#   Supplies to Russia" (militarnyi.com) vs "Canada Hits Streit Group With
+#   Sanctions Over Armored Vehicles Used by Russia's National Guard"
+#   (kyivpost.com), measured at 0.8691.
+#   0.85 -> 0.82: "US Congress passes Russia sanctions bill" (dw.com) vs
+#   "Congress passes sweeping US sanctions bill targeting Russia"
+#   (aljazeera.com), measured at 0.8488 - both allowlisted wire sources,
+#   so this specific miss was directly suppressing real corroboration
+#   downstream (Stage D's corroborated check).
+# Kept domain-specific rather than lowering the shared default globally:
+# geopolitical wire coverage of the same event varies headline wording
+# more than ai_news/smart_money's typical re-reporting, and 0.82 keeps a
+# real margin above the ~0.61-0.72 range three genuinely different
+# Canada-tariff headlines (different specifics: general tariffs vs. named
+# products) scored in the same real dataset - so this still catches both
+# confirmed-missed duplicates without pulling those distinct stories
+# together. If a third real miss turns up close to 0.82, that's a signal
+# this domain's headline variance may need a different approach entirely
+# (e.g. entity/actor overlap in addition to title similarity) rather than
+# a third threshold nudge.
 _DOMAIN_TITLE_DEDUP_SIMILARITY_THRESHOLD: dict[str, float] = {
-    "geopolitical_news": 0.85,
+    "geopolitical_news": 0.82,
 }
 
 
@@ -1204,7 +1262,7 @@ def _dedup_by_title_similarity_for_domain(
 
         if match is not None:
             db_id, batch_article = match
-            outlet = article.get("source")
+            outlet = _extract_domain_for_also_reported_by(article)
             if batch_article is not None:
                 also_reported_by = batch_article["metadata"].setdefault(
                     "also_reported_by", []

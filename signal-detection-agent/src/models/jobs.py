@@ -891,15 +891,18 @@ def list_all_results(
 
     impacted_ticker matches a ticker against EITHER
     metadata->'impacted_companies_direct' OR metadata->'impacted_companies_
-    by_category' (both JSONB arrays, only geopolitical_signal Stage C rows
-    populate either). Deliberately a separate param from `ticker` above,
-    not a reuse of it - `ticker` is an exact string match against a flat
+    by_category' (both JSONB arrays of {ticker, company_name, ...} objects -
+    see models/geopolitical_signal_companies.py and pipeline/geopolitical_
+    signal_layer1.py - only geopolitical_signal Stage C rows populate
+    either). Deliberately a separate param from `ticker` above, not a
+    reuse of it - `ticker` is an exact string match against a flat
     metadata->>'ticker' field (sec_filing only) and has different match
-    semantics (case-insensitive equality vs. array membership); giving
-    geopolitical's array-shaped ticker data its own param name avoids one
-    param silently behaving differently depending on source_type. Matched
-    case-insensitively via UPPER() on both sides of jsonb array element
-    text extraction, same normalization the existing ticker filter uses.
+    semantics (case-insensitive equality vs. array-of-objects membership);
+    giving geopolitical's array-shaped ticker data its own param name
+    avoids one param silently behaving differently depending on
+    source_type. Matched case-insensitively via UPPER() on each element's
+    ->>'ticker' text extraction (jsonb_array_elements, not the _text
+    variant - these are objects, not scalar strings).
 
     channel matches metadata->>'channel' (energy/trade/sanctions/shipping/
     conflict) - only geopolitical_signal rows Stage C has tagged populate
@@ -947,16 +950,16 @@ def list_all_results(
         conditions.append(
             """(
                 EXISTS (
-                    SELECT 1 FROM jsonb_array_elements_text(
+                    SELECT 1 FROM jsonb_array_elements(
                         CASE WHEN jsonb_typeof(metadata->'impacted_companies_direct') = 'array'
                              THEN metadata->'impacted_companies_direct' ELSE '[]'::jsonb END
-                    ) t WHERE UPPER(t) = UPPER(%s)
+                    ) t WHERE UPPER(t->>'ticker') = UPPER(%s)
                 )
                 OR EXISTS (
-                    SELECT 1 FROM jsonb_array_elements_text(
+                    SELECT 1 FROM jsonb_array_elements(
                         CASE WHEN jsonb_typeof(metadata->'impacted_companies_by_category') = 'array'
                              THEN metadata->'impacted_companies_by_category' ELSE '[]'::jsonb END
-                    ) t WHERE UPPER(t) = UPPER(%s)
+                    ) t WHERE UPPER(t->>'ticker') = UPPER(%s)
                 )
             )"""
         )
