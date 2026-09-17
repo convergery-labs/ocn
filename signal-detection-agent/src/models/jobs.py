@@ -164,48 +164,10 @@ def insert_filing_classification(job_id: int, filing: dict[str, Any], result: di
         )
 
 
-def insert_geopolitical_classification(job_id: int, article: dict[str, Any], result: dict[str, Any]) -> None:
-    """Upsert one agent_classifications row for a geopolitical article (source_type='geopolitical').
-
-    category and materiality are left NULL - the geopolitical prompt does not
-    assign either (deferred to a later stage, see prompts/geopolitical_classifier_v1.txt).
-    concreteness/economic_scale are the two factor sub-scores unique to this domain.
-    """
-    entity_names_normalized = [
-        e["name"].lower() for e in (result.get("entities") or []) if e.get("name")
-    ]
-    with get_db() as conn:
-        conn.execute(
-            """
-            INSERT INTO agent_classifications (
-                job_id, source_type, source_id, url, title,
-                signal_detection, signal_score, signal_reason,
-                concreteness, economic_scale,
-                entities_json, entity_names_normalized, published
-            ) VALUES (%s, 'geopolitical', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT DO NOTHING
-            """,
-            (
-                job_id,
-                article.get("id"),
-                article.get("url"),
-                article.get("title"),
-                result["signal_detection"],
-                float(result["signal_score"]),
-                result.get("signal_reason"),
-                result.get("concreteness"),
-                result.get("economic_scale"),
-                json.dumps(result.get("entities") or [], ensure_ascii=False),
-                entity_names_normalized,
-                article.get("published"),
-            ),
-        )
-
-
 # Path 1/2 signals (revenue_rank_signal, announcement_materiality_signal)
 # use HIGH/WEAK/NOISE, distinct from this table's existing
 # signal/weak_signal/noise vocabulary used by the LLM-classified sources
-# (news, sec_filing, geopolitical) - mapped here so taiwan_market_signal
+# (news, sec_filing) - mapped here so taiwan_market_signal
 # rows are queryable via the same signal_detection column as everything
 # else (e.g. "give me today's HIGH items" doesn't need a special case).
 _TAIWAN_SIGNAL_MAP = {"HIGH": "signal", "WEAK": "weak_signal", "NOISE": "noise"}
@@ -382,6 +344,265 @@ def update_taiwan_revenue_rank(
                 json.dumps(metadata, ensure_ascii=False),
                 source_id,
             ),
+        )
+
+
+# geopolitical_signal's own vocabulary across both Stage A and Stage B
+# (DROPPED/WEAK/WAITING/HIGH) mapped onto the existing signal_detection
+# column, same rationale as _TAIWAN_SIGNAL_MAP - DROPPED->noise, WEAK->
+# weak_signal (from either stage: Stage A's free rhetoric-keyword
+# classification or Stage B's model call, both a real classification, not
+# a rejection), WAITING->waiting (a Stage A survivor not yet judged by
+# Stage B), HIGH->signal (Stage B's action classification). See db.py's
+# agent_classifications_signal_detection_check for the corresponding
+# schema change.
+_GEOPOLITICAL_SIGNAL_MAP = {
+    "DROPPED": "noise",
+    "WEAK": "weak_signal",
+    "WAITING": "waiting",
+    "HIGH": "signal",
+}
+
+
+def insert_geopolitical_signal_classification(
+    job_id: int, article: dict[str, Any], result: dict[str, Any],
+) -> None:
+    """Insert one agent_classifications row for a geopolitical_news article
+    going through Stage A's free rule-based filtering
+    (source_type='geopolitical_signal').
+
+    ``result['outcome']`` is one of DROPPED/WEAK/WAITING (Stage A's own
+    vocabulary - see the spec's Stage A section), mapped onto the existing
+    signal_detection column via _GEOPOLITICAL_SIGNAL_MAP.
+    ``result['drop_reason']`` (only set for DROPPED) and any other
+    Stage A/B/C/D field go in metadata - same JSONB-bag rationale as
+    taiwan_market_signal.
+
+    No ON CONFLICT clause: the idx_agent_classifications_geopolitical_signal_
+    article_id partial unique index (db.py) enforces one row per article_id
+    for this source_type: a caller must check get_existing_geopolitical_
+    signal_article_ids first (Stage A rule 1, "already classified: skip")
+    rather than rely on a silent conflict here, since Stage B/D need to
+    UPDATE the same row in place rather than have an insert silently no-op.
+    """
+    metadata = {}
+    if result.get("drop_reason"):
+        metadata["drop_reason"] = result["drop_reason"]
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO agent_classifications (
+                job_id, source_type, article_id, url, title,
+                signal_detection, signal_score, published, metadata
+            ) VALUES (%s, 'geopolitical_signal', %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                job_id,
+                article.get("id"),
+                article.get("url"),
+                article.get("title"),
+                _GEOPOLITICAL_SIGNAL_MAP[result["outcome"]],
+                None,
+                article.get("published"),
+                json.dumps(metadata, ensure_ascii=False),
+            ),
+        )
+
+
+def get_existing_geopolitical_signal_article_ids(
+    article_ids: list[int],
+) -> set[int]:
+    """Return the subset of article_ids already classified as
+    source_type='geopolitical_signal', across ALL prior jobs.
+
+    Stage A rule 1 ("already classified: skip") - checked before running any
+    filter so a re-run (cursor replay, crashed-run resume) never reprocesses
+    an article that already has a row, and never hits the unique index as an
+    error path. Same batched-query shape as get_existing_taiwan_source_ids.
+    """
+    if not article_ids:
+        return set()
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT article_id FROM agent_classifications
+            WHERE source_type = 'geopolitical_signal' AND article_id = ANY(%s)
+            """,
+            (article_ids,),
+        ).fetchall()
+    return {r["article_id"] for r in rows}
+
+
+def get_waiting_geopolitical_signal_articles() -> list[dict[str, Any]]:
+    """Return every agent_classifications row where
+    source_type='geopolitical_signal' AND signal_detection='waiting' -
+    Stage B's entire input (spec's "waiting" survivor state from Stage A).
+
+    Returns id, article_id, title (all Stage B needs) - not the full row.
+    """
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, article_id, title FROM agent_classifications
+            WHERE source_type = 'geopolitical_signal' AND signal_detection = 'waiting'
+            """,
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def count_geopolitical_signal_stage_b_calls_today() -> int:
+    """Count rows already stamped with metadata.stage_b_classified_at today
+    (UTC) - the daily cap's tripwire counter (spec: 1000/day, a safety
+    tripwire against a bug flooding the worklist, not a cost control - see
+    update_geopolitical_signal_classification's docstring for why this
+    timestamp exists at all).
+    """
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT count(*) AS n FROM agent_classifications
+            WHERE source_type = 'geopolitical_signal'
+              AND (metadata->>'stage_b_classified_at')::timestamptz >= date_trunc('day', NOW())
+            """,
+        ).fetchone()
+    return int(row["n"])
+
+
+def update_geopolitical_signal_classification(
+    row_id: int, *, outcome: str,
+) -> None:
+    """Update one geopolitical_signal row in place after Stage B's HIGH/WEAK
+    call - the exact same update-in-place pattern as
+    update_taiwan_revenue_rank, keyed on this table's own id (Stage A/B
+    share one row per article_id, never insert a second one).
+
+    outcome is Stage B's raw "HIGH"/"WEAK" answer, mapped via
+    _GEOPOLITICAL_SIGNAL_MAP (HIGH->signal, WEAK->weak_signal) so
+    this row is queryable the same way as every other source_type from
+    here on. metadata.stage_b_classified_at is stamped for the daily-cap
+    counter above - there is no other reliable per-row "when was Stage B
+    actually run" signal, since stored_at is set once at Stage A insert
+    time and never reflects Stage B's later update.
+    """
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE agent_classifications
+            SET signal_detection = %s,
+                metadata = metadata || jsonb_build_object('stage_b_classified_at', NOW())
+            WHERE id = %s
+            """,
+            (_GEOPOLITICAL_SIGNAL_MAP[outcome], row_id),
+        )
+
+
+def get_untagged_geopolitical_signal_high_articles() -> list[dict[str, Any]]:
+    """Return every geopolitical_signal row where signal_detection='signal'
+    (HIGH, from Stage B) that Stage C hasn't tagged yet - Stage C's entire
+    input. "Not tagged yet" means metadata has no stage_c_classified_at key
+    (set by update_geopolitical_signal_stage_c_tags below), not "metadata
+    is empty" - a HIGH row that failed Layer 2's parse still gets that
+    timestamp stamped (fail-open, per the spec: null tags, not a dropped
+    or re-attempted row).
+    """
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, article_id, title FROM agent_classifications
+            WHERE source_type = 'geopolitical_signal' AND signal_detection = 'signal'
+              AND NOT jsonb_exists(metadata, 'stage_c_classified_at')
+            """,
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def count_geopolitical_signal_stage_c_calls_today() -> int:
+    """Count rows already stamped with metadata.stage_c_classified_at today
+    (UTC) - Stage C's own daily cap tripwire counter (spec: 50/day), same
+    shape as count_geopolitical_signal_stage_b_calls_today.
+    """
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT count(*) AS n FROM agent_classifications
+            WHERE source_type = 'geopolitical_signal'
+              AND (metadata->>'stage_c_classified_at')::timestamptz >= date_trunc('day', NOW())
+            """,
+        ).fetchone()
+    return int(row["n"])
+
+
+def update_geopolitical_signal_stage_c_tags(
+    row_id: int, *, tags: dict[str, Any],
+) -> None:
+    """Merge Stage C's tags into an existing HIGH row's metadata - update
+    in place, same pattern as update_geopolitical_signal_classification.
+    signal_detection is never touched here (stays 'signal' regardless of
+    whether tagging succeeded or fail-opened to null tags).
+
+    ``tags`` is expected to already contain channel, actors, assets,
+    impacted_categories, one_line (Layer 2 + overrides' combined output,
+    all possibly None on fail-open) - merged alongside
+    stage_c_classified_at, which both marks this row done (see
+    get_untagged_geopolitical_signal_high_articles) and feeds the Stage C
+    daily-cap counter above.
+    """
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE agent_classifications
+            SET metadata = metadata || (%s::jsonb) ||
+                jsonb_build_object('stage_c_classified_at', NOW())
+            WHERE id = %s
+            """,
+            (json.dumps(tags, ensure_ascii=False), row_id),
+        )
+
+
+def get_ungraded_geopolitical_signal_tagged_articles() -> list[dict[str, Any]]:
+    """Return every geopolitical_signal row Stage C has tagged
+    (metadata.stage_c_classified_at set) that Stage D hasn't graded yet
+    (metadata has no stage_d_graded_at key) - Stage D's entire input.
+    Same "not yet" pattern as get_untagged_geopolitical_signal_high_articles:
+    a row is only skipped once it actually has the stamp, not based on
+    whether its tags came back null.
+
+    Returns id, article_id, title, url, and the metadata keys Stage D reads
+    (impacted_companies_direct) - not the full row.
+    """
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, article_id, title, url,
+                   metadata->'impacted_companies_direct' AS impacted_companies_direct
+            FROM agent_classifications
+            WHERE source_type = 'geopolitical_signal'
+              AND jsonb_exists(metadata, 'stage_c_classified_at')
+              AND NOT jsonb_exists(metadata, 'stage_d_graded_at')
+            """,
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def update_geopolitical_signal_stage_d_grade(
+    row_id: int, *, grade_fields: dict[str, Any],
+) -> None:
+    """Merge Stage D's grade into an existing tagged row's metadata -
+    update in place, same pattern as update_geopolitical_signal_stage_c_tags.
+
+    ``grade_fields`` is expected to contain grade, corroborated,
+    primary_source, specific - merged alongside stage_d_graded_at, which
+    marks this row done (see get_ungraded_geopolitical_signal_tagged_articles).
+    """
+    with get_db() as conn:
+        conn.execute(
+            """
+            UPDATE agent_classifications
+            SET metadata = metadata || (%s::jsonb) ||
+                jsonb_build_object('stage_d_graded_at', NOW())
+            WHERE id = %s
+            """,
+            (json.dumps(grade_fields, ensure_ascii=False), row_id),
         )
 
 
@@ -608,6 +829,13 @@ def list_all_results(
     ticker: str | None = None,
     period: str | None = None,
     source_category: str | None = None,
+    grade: str | None = None,
+    impacted_category: str | None = None,
+    impacted_ticker: str | None = None,
+    channel: str | None = None,
+    corroborated: bool | None = None,
+    published_from: str | None = None,
+    published_to: str | None = None,
 ) -> dict[str, Any]:
     """Return cursor-paginated agent_classifications across all jobs, ordered
     by effective date (see _EFFECTIVE_DATE_EXPR), newest first - NOT by id,
@@ -646,6 +874,51 @@ def list_all_results(
     page, without a page of material-announcement rows - which have no
     period_gregorian at all - crowding out the revenue rows a small limit
     would otherwise return).
+
+    grade matches metadata->>'grade' (TOP/STRONG/STANDARD) - only
+    geopolitical_signal rows Stage D has graded populate this field; a
+    digest wanting only TOP items (or only TOP+STRONG, via two calls)
+    filters here rather than client-side over a full page.
+
+    impacted_category matches against metadata->'impacted_categories', a
+    JSONB array - only geopolitical_signal rows Stage C has tagged
+    populate this field. Uses the `?` jsonb_exists operator's function
+    form (jsonb_exists(metadata->'impacted_categories', %s)), same reason
+    as elsewhere in this codebase the bare `?` operator is avoided: it is
+    ambiguous with psycopg2's %s paramstyle parser. One category per call
+    (not an array-overlap filter) - matches how a category picker/tab UI
+    would naturally query, one category at a time.
+
+    impacted_ticker matches a ticker against EITHER
+    metadata->'impacted_companies_direct' OR metadata->'impacted_companies_
+    by_category' (both JSONB arrays, only geopolitical_signal Stage C rows
+    populate either). Deliberately a separate param from `ticker` above,
+    not a reuse of it - `ticker` is an exact string match against a flat
+    metadata->>'ticker' field (sec_filing only) and has different match
+    semantics (case-insensitive equality vs. array membership); giving
+    geopolitical's array-shaped ticker data its own param name avoids one
+    param silently behaving differently depending on source_type. Matched
+    case-insensitively via UPPER() on both sides of jsonb array element
+    text extraction, same normalization the existing ticker filter uses.
+
+    channel matches metadata->>'channel' (energy/trade/sanctions/shipping/
+    conflict) - only geopolitical_signal rows Stage C has tagged populate
+    this field.
+
+    corroborated matches metadata->>'corroborated' (a JSON boolean stored
+    as text by Stage D) - only geopolitical_signal rows Stage D has graded
+    populate this field. Compared as text ('true'/'false') since JSONB
+    booleans read back via ->> are strings, not Postgres booleans.
+
+    published_from/published_to filter by the article's own `published`
+    timestamp (date-only, inclusive on both ends) - distinct from the
+    cursor's keyset position, which orders by when a row was effectively
+    dated for pagination purposes, not by publish date range. Needed
+    because classification runs can process a backlog of old articles in
+    one pass (see geopolitical_signal's Stage A pooling by run date, not
+    publish date) - a digest wanting only "the last 7 days of real news"
+    needs to filter published itself, not rely on when rows were
+    classified.
     """
     params: list[Any] = []
     conditions = []
@@ -664,6 +937,43 @@ def list_all_results(
     if source_category:
         conditions.append("metadata->>'source_category' = %s")
         params.append(source_category)
+    if grade:
+        conditions.append("metadata->>'grade' = %s")
+        params.append(grade)
+    if impacted_category:
+        conditions.append("jsonb_exists(metadata->'impacted_categories', %s)")
+        params.append(impacted_category)
+    if impacted_ticker:
+        conditions.append(
+            """(
+                EXISTS (
+                    SELECT 1 FROM jsonb_array_elements_text(
+                        CASE WHEN jsonb_typeof(metadata->'impacted_companies_direct') = 'array'
+                             THEN metadata->'impacted_companies_direct' ELSE '[]'::jsonb END
+                    ) t WHERE UPPER(t) = UPPER(%s)
+                )
+                OR EXISTS (
+                    SELECT 1 FROM jsonb_array_elements_text(
+                        CASE WHEN jsonb_typeof(metadata->'impacted_companies_by_category') = 'array'
+                             THEN metadata->'impacted_companies_by_category' ELSE '[]'::jsonb END
+                    ) t WHERE UPPER(t) = UPPER(%s)
+                )
+            )"""
+        )
+        params.append(impacted_ticker)
+        params.append(impacted_ticker)
+    if channel:
+        conditions.append("metadata->>'channel' = %s")
+        params.append(channel)
+    if corroborated is not None:
+        conditions.append("metadata->>'corroborated' = %s")
+        params.append("true" if corroborated else "false")
+    if published_from:
+        conditions.append("published >= %s")
+        params.append(published_from)
+    if published_to:
+        conditions.append("published < (%s::date + interval '1 day')")
+        params.append(published_to)
     if cursor:
         after = decode_cursor(cursor)
         # Composite keyset predicate: rows strictly after (date, id) in
@@ -709,6 +1019,13 @@ def list_results(
     ticker: str | None = None,
     period: str | None = None,
     source_category: str | None = None,
+    grade: str | None = None,
+    impacted_category: str | None = None,
+    impacted_ticker: str | None = None,
+    channel: str | None = None,
+    corroborated: bool | None = None,
+    published_from: str | None = None,
+    published_to: str | None = None,
 ) -> dict[str, Any]:
     """Return cursor-paginated agent_classifications for a job.
 
@@ -717,6 +1034,11 @@ def list_results(
     details; only taiwan_market_signal mops_revenue rows populate it.
     source_category matches metadata->>'source_category' - see
     list_all_results for details.
+    grade matches metadata->>'grade' - see list_all_results for details.
+    impacted_category matches metadata->'impacted_categories' - see
+    list_all_results for details.
+    impacted_ticker, channel, corroborated, published_from/published_to -
+    see list_all_results for details.
     """
     params: list[Any] = [job_id]
     extra_conditions = ""
@@ -735,6 +1057,41 @@ def list_results(
     if source_category:
         extra_conditions += " AND metadata->>'source_category' = %s"
         params.append(source_category)
+    if grade:
+        extra_conditions += " AND metadata->>'grade' = %s"
+        params.append(grade)
+    if impacted_category:
+        extra_conditions += " AND jsonb_exists(metadata->'impacted_categories', %s)"
+        params.append(impacted_category)
+    if impacted_ticker:
+        extra_conditions += """ AND (
+            EXISTS (
+                SELECT 1 FROM jsonb_array_elements_text(
+                    CASE WHEN jsonb_typeof(metadata->'impacted_companies_direct') = 'array'
+                         THEN metadata->'impacted_companies_direct' ELSE '[]'::jsonb END
+                ) t WHERE UPPER(t) = UPPER(%s)
+            )
+            OR EXISTS (
+                SELECT 1 FROM jsonb_array_elements_text(
+                    CASE WHEN jsonb_typeof(metadata->'impacted_companies_by_category') = 'array'
+                         THEN metadata->'impacted_companies_by_category' ELSE '[]'::jsonb END
+                ) t WHERE UPPER(t) = UPPER(%s)
+            )
+        )"""
+        params.append(impacted_ticker)
+        params.append(impacted_ticker)
+    if channel:
+        extra_conditions += " AND metadata->>'channel' = %s"
+        params.append(channel)
+    if corroborated is not None:
+        extra_conditions += " AND metadata->>'corroborated' = %s"
+        params.append("true" if corroborated else "false")
+    if published_from:
+        extra_conditions += " AND published >= %s"
+        params.append(published_from)
+    if published_to:
+        extra_conditions += " AND published < (%s::date + interval '1 day')"
+        params.append(published_to)
     if cursor:
         after_id = decode_cursor(cursor)
         extra_conditions += " AND id > %s"

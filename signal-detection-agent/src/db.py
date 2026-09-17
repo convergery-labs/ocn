@@ -120,7 +120,7 @@ def init_db() -> None:
                 DROP COLUMN IF EXISTS company_percentile
         """)
         # source_type's allowed set grows as new domains are added (news, sec_filing,
-        # geopolitical, company_specific, ...) - drop/recreate rather than ALTER,
+        # company_specific, ...) - drop/recreate rather than ALTER,
         # since Postgres has no ALTER CHECK. Add new values here, not a new migration.
         conn.execute("""
             ALTER TABLE agent_classifications
@@ -129,7 +129,22 @@ def init_db() -> None:
         conn.execute("""
             ALTER TABLE agent_classifications
                 ADD CONSTRAINT agent_classifications_source_type_check
-                    CHECK (source_type IN ('news', 'sec_filing', 'geopolitical', 'company_specific', 'taiwan_market_signal'))
+                    CHECK (source_type IN ('news', 'sec_filing', 'company_specific', 'taiwan_market_signal', 'geopolitical_signal'))
+        """)
+        # signal_detection's allowed set is widened (same drop/recreate
+        # pattern as source_type above) to add 'waiting' - geopolitical_signal
+        # Stage A writes this for a survivor that passed the free rule-based
+        # filters but hasn't been judged HIGH/WEAK by Stage B yet. Every other
+        # source_type only ever writes 'signal'/'weak_signal'/'noise'; adding
+        # 'waiting' doesn't change what any of them can write.
+        conn.execute("""
+            ALTER TABLE agent_classifications
+                DROP CONSTRAINT IF EXISTS agent_classifications_signal_detection_check
+        """)
+        conn.execute("""
+            ALTER TABLE agent_classifications
+                ADD CONSTRAINT agent_classifications_signal_detection_check
+                    CHECK (signal_detection IN ('signal', 'weak_signal', 'noise', 'waiting'))
         """)
         conn.execute("""
             ALTER TABLE agent_classifications
@@ -176,13 +191,25 @@ def init_db() -> None:
         # source - ticker+period for revenue, ticker+timestamp for material
         # announcements - unlike the other source types, which don't
         # consistently populate source_id). A partial index scopes this fix
-        # to taiwan_market_signal only, leaving news/sec_filing/geopolitical
+        # to taiwan_market_signal only, leaving news/sec_filing
         # untouched rather than risking their existing behavior.
         conn.execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS
                 idx_agent_classifications_taiwan_source_id
                 ON agent_classifications (source_type, source_id)
                 WHERE source_type = 'taiwan_market_signal'
+        """)
+        # geopolitical_signal: article_id is a real natural key here (unlike
+        # source_id above, which most source_types don't consistently
+        # populate) - one row per article_id is exactly Stage A's "already
+        # classified, skip" rule from the spec, enforced by the database
+        # rather than just application logic, and what makes a crashed run
+        # or cursor replay safe to resume without reclassifying anything.
+        conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS
+                idx_agent_classifications_geopolitical_signal_article_id
+                ON agent_classifications (source_type, article_id)
+                WHERE source_type = 'geopolitical_signal'
         """)
         # metadata->>'ticker' filtering (list_all_results/list_results) would
         # otherwise sequential-scan the whole table on every ticker-filtered
@@ -195,4 +222,40 @@ def init_db() -> None:
                 idx_agent_classifications_sec_filing_ticker
                 ON agent_classifications (UPPER(metadata->>'ticker'))
                 WHERE source_type = 'sec_filing'
+        """)
+        # geopolitical_signal Stage C: one row per US-listed company, built
+        # by a separate periodic refresh job that calls research-universe's
+        # GET /companies (see adapters/research_universe_client.py +
+        # controllers/category_map_refresh.py), not fetched live during
+        # Stage C itself - keeps both layers below a free, deterministic
+        # lookup, same spirit as the spec's own design intent.
+        #
+        # Serves BOTH Stage C layers from one refresh/one table, rather than
+        # a category-keyed table serving only Layer 3: Layer 1 (direct
+        # name-in-headline match) needs company_name+ticker: Layer 3
+        # (category -> ticker expansion) needs categories+ticker - both are
+        # just different WHERE/SELECT shapes over the same underlying data,
+        # so there is no reason to fetch or store it twice. categories is an
+        # array (a company can carry more than one - see Stage C plan's
+        # multi-category decision: shown under every matching category, not
+        # forced into one "primary").
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS geopolitical_signal_companies (
+                ticker        TEXT PRIMARY KEY,
+                company_name  TEXT NOT NULL,
+                categories    TEXT[] NOT NULL DEFAULT '{}',
+                refreshed_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        # Layer 1's word-boundary match is driven by company_name length
+        # (longest-first, so "Nvidia Corporation" beats an accidental
+        # substring match before a shorter name would) - this index isn't
+        # needed for correctness (Layer 1 loads the whole table into memory
+        # once per Stage C run, not per row), kept only for any future
+        # direct SQL access that wants the same ordering without an
+        # application-side sort.
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS
+                idx_geopolitical_signal_companies_name_length
+                ON geopolitical_signal_companies (length(company_name) DESC)
         """)

@@ -200,6 +200,30 @@ async def list_completed_runs(
     return run_ids
 
 
+async def get_article(article_id: int) -> dict[str, Any] | None:
+    """GET /articles/{article_id} from news-retrieval; return the article
+    (including its metadata, e.g. also_reported_by), or None if it no
+    longer exists (e.g. expired by news-retrieval's retention job).
+
+    Used by Stage D to read also_reported_by for corroboration grading -
+    that field lives only in news-retrieval's own article metadata, never
+    copied into this service's agent_classifications rows.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{config.NEWS_RETRIEVAL_URL}/articles/{article_id}",
+                headers=_headers(),
+            )
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        return resp.json()
+    except httpx.HTTPError as exc:
+        logger.warning("Failed to fetch article %s: %s", article_id, exc)
+        return None
+
+
 async def get_run_articles(run_id: int) -> list[dict[str, Any]]:
     """Paginate GET /runs/{run_id}/articles; return all articles with body."""
     articles: list[dict[str, Any]] = []
