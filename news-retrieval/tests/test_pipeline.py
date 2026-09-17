@@ -426,10 +426,19 @@ def _article(title: str, url: str, source: str = "Test Feed") -> dict:
 def test_title_dedup_drops_cross_run_near_duplicate() -> None:
     """A new article whose title is a near-duplicate (by embedding
     similarity) of an already-stored ai_news article is dropped, and the
-    new outlet is recorded on the existing row via also_reported_by."""
+    new outlet's DOMAIN (derived from its own url, not its source display
+    name) is recorded on the existing row via also_reported_by.
+
+    Confirmed live: also_reported_by was previously recorded from
+    article["source"] directly ("PBS", "Bloomberg Law News", etc.), which
+    made downstream corroboration checks (comparing against a domain
+    allowlist) structurally unable to ever match - fixed to derive a real
+    domain from the article's own url instead
+    (_extract_domain_for_also_reported_by).
+    """
     new_article = _article(
         "OpenAI unveils its next-generation GPT-5 model",
-        "http://example.com/new-story",
+        "https://www.example-outlet-b.com/new-story",
         source="Outlet B",
     )
 
@@ -454,7 +463,7 @@ def test_title_dedup_drops_cross_run_near_duplicate() -> None:
         )
 
     assert result == []
-    mock_append.assert_called_once_with(42, "Outlet B")
+    mock_append.assert_called_once_with(42, "example-outlet-b.com")
 
 
 def test_title_dedup_keeps_distinct_titles() -> None:
@@ -481,12 +490,13 @@ def test_title_dedup_keeps_distinct_titles() -> None:
 def test_title_dedup_same_batch_duplicate_merged_in_memory() -> None:
     """Two near-duplicate articles surfacing in the same run are merged
     without a DB round-trip - only the first is kept, and the second
-    outlet is recorded in its in-memory also_reported_by list."""
+    outlet's DOMAIN (from its own url) is recorded in its in-memory
+    also_reported_by list."""
     first = _article(
-        "OpenAI Releases GPT-5", "http://example.com/a", source="Outlet A",
+        "OpenAI Releases GPT-5", "http://example-outlet-a.com/a", source="Outlet A",
     )
     second = _article(
-        "OpenAI unveils GPT-5", "http://example.com/b", source="Outlet B",
+        "OpenAI unveils GPT-5", "http://example-outlet-b.com/b", source="Outlet B",
     )
 
     with (
@@ -502,8 +512,8 @@ def test_title_dedup_same_batch_duplicate_merged_in_memory() -> None:
         )
 
     assert len(result) == 1
-    assert result[0]["url"] == "http://example.com/a"
-    assert result[0]["metadata"]["also_reported_by"] == ["Outlet B"]
+    assert result[0]["url"] == "http://example-outlet-a.com/a"
+    assert result[0]["metadata"]["also_reported_by"] == ["example-outlet-b.com"]
     mock_append.assert_not_called()
 
 
