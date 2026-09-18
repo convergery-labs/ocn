@@ -591,8 +591,9 @@ def update_geopolitical_signal_stage_d_grade(
     update in place, same pattern as update_geopolitical_signal_stage_c_tags.
 
     ``grade_fields`` is expected to contain grade, corroborated,
-    primary_source, specific - merged alongside stage_d_graded_at, which
-    marks this row done (see get_ungraded_geopolitical_signal_tagged_articles).
+    corroborating_domains, primary_source, specific - merged alongside
+    stage_d_graded_at, which marks this row done (see
+    get_ungraded_geopolitical_signal_tagged_articles).
     """
     with get_db() as conn:
         conn.execute(

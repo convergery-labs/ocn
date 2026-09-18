@@ -16,7 +16,10 @@ Three independent checks, each true/false:
     entirely local TV affiliates re-syndicating the same AP wire copy
     (confirmed live: article 16514 had 25 also_reported_by entries, all
     ABC/NBC local affiliates carrying one AP story - none of that is
-    independent corroboration).
+    independent corroboration). The allowlisted subset that actually
+    made this true is stored as corroborating_domains, alongside the
+    boolean - previously read-then-discarded, so a caller could see
+    THAT a story was corroborated but never WHICH outlets did it.
   - primary_source: the article's own domain is on Stage A's allowlist.
     Expected to be true for nearly every row reaching Stage D, since
     Stage A already only lets allowlisted-domain articles through in the
@@ -53,36 +56,48 @@ def _extract_domain(url: str | None) -> str:
     return host
 
 
-def _is_corroborated(also_reported_by: list[str] | None) -> bool:
-    """True if at least one also_reported_by entry is itself a domain on
-    Stage A's allowlist - a real second wire/paper-of-record covering the
-    same story, not just any syndicating outlet.
+def _corroborating_domains(also_reported_by: list[str] | None) -> list[str]:
+    """Return the subset of also_reported_by entries that are themselves a
+    domain on Stage A's allowlist - a real second wire/paper-of-record
+    covering the same story, not just any syndicating outlet.
+
+    Deliberately filtered, not the raw also_reported_by list verbatim:
+    confirmed live that field can be entirely local TV affiliates
+    re-syndicating one AP wire copy (article 16514 had 25 also_reported_by
+    entries, all ABC/NBC local affiliates carrying one AP story - none of
+    that is independent corroboration). Storing the unfiltered list under
+    a name like "corroborating_domains" would make it look like real
+    corroboration when it's actually syndication noise - the same problem
+    this filter exists to avoid in the boolean, so the stored list mirrors
+    the boolean's own standard exactly rather than being a separate, more
+    permissive view of the same field.
 
     news-retrieval now writes also_reported_by as a domain derived from
     the duplicate article's own url (pipeline.py's
     _extract_domain_for_also_reported_by), same normalization as this
-    function's "www." stripping - so a fresh entry is already
-    comparable as-is. Confirmed live this was NOT always true: this
-    function originally compared against article["source"] display names
-    ("PBS", "Bloomberg Law News", "ABC News - Breaking News, Latest News
-    and Videos") that news-retrieval had been storing directly, which
-    never matched ALLOWED_DOMAINS and made corroborated structurally
-    unreachable - real HIGH rows covering the same story on PBS and ABC
-    News both showed corroborated=false as a result. The "www." stripping
-    here stays anyway as a defensive no-op against any older rows still
-    holding a pre-fix display-name value (those will simply still not
-    match, same as before - this function does not retroactively reclassify
-    already-graded rows).
+    function's "www." stripping - so a fresh entry is already comparable
+    as-is. Confirmed live this was NOT always true: this function
+    originally compared against article["source"] display names ("PBS",
+    "Bloomberg Law News", "ABC News - Breaking News, Latest News and
+    Videos") that news-retrieval had been storing directly, which never
+    matched ALLOWED_DOMAINS and made corroborated structurally
+    unreachable. The "www." stripping here stays anyway as a defensive
+    no-op against any older rows still holding a pre-fix display-name
+    value (those will simply still not match, same as before - this
+    function does not retroactively reclassify already-graded rows).
     """
     if not also_reported_by:
-        return False
+        return []
+    matched: list[str] = []
+    seen: set[str] = set()
     for entry in also_reported_by:
         domain = (entry or "").strip().lower()
         if domain.startswith("www."):
             domain = domain[len("www."):]
-        if domain in ALLOWED_DOMAINS:
-            return True
-    return False
+        if domain in ALLOWED_DOMAINS and domain not in seen:
+            matched.append(domain)
+            seen.add(domain)
+    return matched
 
 
 def _is_specific(title: str, impacted_companies_direct: list[dict[str, str]] | None) -> bool:
@@ -99,11 +114,20 @@ def grade_geopolitical_signal_article(
     also_reported_by: list[str] | None,
     impacted_companies_direct: list[dict[str, str]] | None,
 ) -> dict[str, Any]:
-    """Return {grade, corroborated, primary_source, specific} for one
-    Stage-C-tagged article. Pure/free - no model call, no I/O; callers
-    fetch also_reported_by from news-retrieval before calling this.
+    """Return {grade, corroborated, corroborating_domains, primary_source,
+    specific} for one Stage-C-tagged article. Pure/free - no model call,
+    no I/O; callers fetch also_reported_by from news-retrieval before
+    calling this.
+
+    corroborating_domains is stored alongside the boolean - previously
+    also_reported_by was read only to compute corroborated, then
+    discarded; a caller wanting to show WHICH outlets corroborated a
+    story (not just a true/false badge) had nothing to read. Empty list
+    (not null) when corroborated is False, same "always the type, just
+    empty" convention Stage C's tag arrays already use.
     """
-    corroborated = _is_corroborated(also_reported_by)
+    corroborating_domains = _corroborating_domains(also_reported_by)
+    corroborated = bool(corroborating_domains)
     primary_source = _extract_domain(url) in ALLOWED_DOMAINS
     specific = _is_specific(title or "", impacted_companies_direct)
 
@@ -118,6 +142,7 @@ def grade_geopolitical_signal_article(
     return {
         "grade": grade,
         "corroborated": corroborated,
+        "corroborating_domains": corroborating_domains,
         "primary_source": primary_source,
         "specific": specific,
     }
