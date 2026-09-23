@@ -72,6 +72,68 @@ def trigger(domain: str, days_back: int, callback_url: str | None) -> None:
     logger.info("Pipeline complete — run_id=%d", result["run_id"])
 
 
+@cli.command("backfill-korea-customs")
+@click.option(
+    "--max-pages",
+    default=None,
+    type=int,
+    help="Cap on how many pages of the Customs board's title-search "
+    "results to walk. Defaults to pipeline.py's own "
+    "_CUSTOMS_BACKFILL_MAX_PAGES (30) if not given - in practice the "
+    "walk stops itself well before that once it detects the board's "
+    "older stub-page format (see fetch_customs_export_backfill's own "
+    "docstring), so this is a safety ceiling, not the expected page count.",
+)
+def backfill_korea_customs(max_pages: int | None) -> None:
+    """One-time historical backfill for korea_market_signal's
+    kr_customs_export source - walks the Customs board's own pagination
+    to recover real historical semiconductor export figures, going
+    beyond the regular 4-hourly poll's "newest release only" scope.
+
+    Read/write against this service's own DB only (no other service
+    involved) - safe to run independently of the regular trigger command,
+    and safe to re-run (article storage is deduped by url, same as every
+    other domain). See pipeline.fetch_customs_export_backfill's own
+    docstring for what depth of real history this can actually recover
+    (confirmed live 2026-09-23: roughly 7 months, not the full 2 years
+    Korea Signals spec Section 5.1 asks for - the board's own detail-page
+    format changes further back in its history, past which this scraper
+    cannot extract anything).
+    """
+    import pipeline
+    from models.articles import create_articles
+    from models.runs import complete_run, create_run, fail_run
+
+    init_db()
+    seed()
+
+    kwargs = {"max_pages": max_pages} if max_pages is not None else {}
+    run_id = create_run(
+        name="backfill-korea-customs",
+        domain="korea_market_signal",
+        days_back=0,
+        max_articles=None,
+        focus=None,
+        model="none",
+    )
+    logger.info("Starting Korea Customs backfill — run_id=%d", run_id)
+    try:
+        articles = pipeline.fetch_customs_export_backfill(**kwargs)
+    except Exception as exc:
+        logger.error("Backfill failed: %s", exc)
+        fail_run(run_id, str(exc))
+        sys.exit(1)
+
+    all_articles = [{**art, "run_id": run_id} for art in articles]
+    if all_articles:
+        create_articles(all_articles)
+    complete_run(run_id, len(articles))
+    logger.info(
+        "Korea Customs backfill complete — run_id=%d articles=%d",
+        run_id, len(articles),
+    )
+
+
 @cli.command("expire-articles")
 @click.option("--domain", required=True, help="Domain slug to expire articles for, e.g. geopolitical_news.")
 @click.option("--days", default=7, show_default=True, help="Delete articles published more than this many days ago.")
