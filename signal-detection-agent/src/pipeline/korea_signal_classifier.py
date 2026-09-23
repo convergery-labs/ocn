@@ -9,26 +9,43 @@ Korea Signals spec's own design intent ("five of the seven signal types
 are decided by arithmetic or by looking up a code").
 
 Signal types and their status here:
-  S1 export surprise      - PERMANENTLY OUT OF SCOPE (decided 2026-09-23,
-                             not merely blocked pending a key). Needs 2yr
-                             history backfill before the "2 std devs above
-                             12-period average" rule means anything -
-                             kr_customs_export only ever sees "whatever's
-                             newest". The two candidate free backfill
-                             sources were both checked live and BOTH
-                             require Korea's mobile-carrier identity
-                             verification (PASS, run by NICE) behind their
-                             signup: data.go.kr (blocked on this from the
-                             start) AND Bank of Korea's ECOS (initially
-                             researched as "no Korean phone required" -
-                             that research was WRONG, confirmed live
-                             2026-09-23 when the actual ECOS signup flow
-                             hit the identical PASS carrier-selection
-                             screen). No Korean contact available to
-                             register on our behalf; a paid vendor route
-                             (e.g. CEIC) was considered and explicitly
-                             NOT pursued. Every other signal type (S2-S7)
-                             is independent of this gap.
+  S1 export surprise      - REOPENED 2026-09-23 (was briefly marked
+                             permanently out of scope - see below for why
+                             that reversed) and IMPLEMENTED:
+                             classify_export_surprise(). The two API-key
+                             backfill paths (data.go.kr, Bank of Korea
+                             ECOS) both genuinely require Korea's mobile-
+                             carrier identity verification (PASS, run by
+                             NICE) - confirmed live against both real
+                             signup flows, no foreigner path exists for
+                             either. BUT: news-retrieval's own Customs
+                             board scraper turned out to already expose
+                             full pagination on its title-search endpoint
+                             (no login at all) reaching back through real
+                             historical posts - a code limitation (only
+                             ever reading page 1's first match), not a
+                             source limitation. news-retrieval's
+                             fetch_customs_export_backfill() (pipeline.py)
+                             now walks that pagination for real historical
+                             semiconductor figures. Honest remaining gap:
+                             the board's own detail-page FORMAT changes
+                             further back in its history (confirmed live:
+                             March 2026 in the specific backfill run
+                             checked) - posts older than that are stub
+                             pages linking to an unopenable .hwpx/.pdf
+                             attachment, so real backfillable depth is
+                             ~7 months, not the full 2 years Section 5.1's
+                             own build note asks for. This function's own
+                             per-period-type precondition check (needs a
+                             same-period-one-year-ago reading AND 12 prior
+                             equivalent periods) means it correctly
+                             produces ZERO real classifications today -
+                             not a bug, an honest reflection of real data
+                             not existing yet - and will start producing
+                             real output as the existing 4-hourly poll's
+                             own organic growth (plus this backfill's head
+                             start) crosses that threshold over the
+                             following months.
   S2 supply contract       - IMPLEMENTED: classify_supply_contract() +
                              translation via _TRANSLATION_FIELDS["supply_contract"]
   S3 capacity commitment   - IMPLEMENTED: classify_capacity_commitment() +
@@ -138,6 +155,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import statistics
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -2067,6 +2085,254 @@ def _attach_english_coverage(
             delta_hours = (earliest_english_dt - korean_dt).total_seconds() / 3600.0
             meta["english_coverage_hours_after_korean"] = round(delta_hours, 1)
         r["result"]["metadata"] = meta
+
+
+_EXPORT_SURPRISE_SIGNAL_SPREADS = 2.0
+_EXPORT_SURPRISE_WEAK_SPREADS = 1.0
+# Spec Section 5.1's own rule needs 12 EQUIVALENT periods (12 prior
+# readings of the SAME period_type - e.g. 12 prior "1st-10th" readings,
+# one per month) before the average/spread mean anything at all - not 12
+# rows of any type. See this module's own docstring for the real,
+# confirmed depth of history actually available today (~7 months as of
+# 2026-09-23), genuinely short of this threshold for every period_type -
+# this constant is the real rule, not tuned down to match what exists.
+_EXPORT_SURPRISE_MIN_HISTORY_PERIODS = 12
+
+
+def _customs_period_key(meta: dict[str, Any]) -> tuple[str, str] | None:
+    """Return (period_type, period_start) for one kr_customs_export
+    article's metadata, or None if either field is missing (a malformed
+    row - not expected in practice given news-retrieval's own
+    _build_customs_article, but this module never trusts a field is
+    present without checking, same discipline as every other classify_*
+    function here).
+    """
+    period_type = meta.get("period_type")
+    period_start = meta.get("period_start")
+    if not period_type or not period_start:
+        return None
+    return period_type, period_start
+
+
+def _customs_same_period_last_year(period_start: str) -> str:
+    """Return the period_start string for the SAME period one year
+    earlier - e.g. "2026-07-01" -> "2025-07-01". Only the year changes;
+    month/day are identical by construction (period_start's own day is
+    always 1 for both 10-day/20-day periods - see news-retrieval's
+    _classify_customs_period_type, which always encodes the period's
+    START date - and for monthly periods, which use the 1st as a
+    placeholder). Matching on the exact string is correct and simpler
+    than parsing/re-formatting a date object, since the day component
+    never needs to change.
+    """
+    year, rest = period_start.split("-", 1)
+    return f"{int(year) - 1}-{rest}"
+
+
+def classify_export_surprise(
+    articles: list[dict[str, Any]],
+    context_articles: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Classify kr_customs_export articles per Korea Signals spec Section
+    5.1 - the one signal type here that needs real historical context,
+    not just the current batch (same shape as Taiwan's
+    rank_revenue_by_yoy - see that function's own context_articles
+    parameter for the precedent this mirrors).
+
+    ``context_articles``: already-stored kr_customs_export rows (as
+    {"metadata": {...}} dicts - caller's own DB read shape, matching how
+    rank_revenue_by_yoy's own context_articles are documented) covering
+    at least the last ~13 periods per period_type, so a genuine YoY
+    comparison and 12-period average/spread can be computed. Optional -
+    omitting it means every article in this batch is classified against
+    an empty history, which will correctly find no match for "same period
+    one year ago" and produce nothing (see below) - not an error, just
+    the same "not enough real data yet" outcome context_articles exists
+    to eventually resolve.
+
+    Per spec Section 5.1's own data-points table:
+      - semiconductor export value for the period: metadata.
+        semiconductor_export_usd_billion (10-day/20-day releases) OR
+        derived from metadata.semiconductor_yoy_pct_stated directly
+        (monthly CONFIRMED releases - see below, this is a genuinely
+        different, BETTER data path for that one period_type)
+      - period type: metadata.period_type ("10day"/"20day"/"monthly")
+      - change against the same period one year earlier: computed here
+      - average/spread over the last 12 equivalent periods: computed here
+        from context_articles, grouped by period_type
+      - how many spreads the current reading sits from the average:
+        computed here
+
+    Monthly releases are handled differently from 10-day/20-day: when a
+    monthly post's own body already states a real semiconductor-specific
+    YoY% (metadata.semiconductor_yoy_pct_stated - see news-retrieval's
+    _extract_customs_figures), that stated value IS this function's own
+    "change against the same period one year earlier" for that period,
+    used directly rather than recomputed from two raw dollar figures -
+    the source's own YoY% is a real, stated fact under the same
+    "we do not have to guess" principle Section 5.2 states for supply
+    contracts, not something to discard in favor of a self-computed
+    figure when a genuine one already exists. A monthly post with a
+    dollar figure but no stated YoY% (real, confirmed live - some monthly
+    posts have one field but not the other) still needs a same-period-
+    last-year dollar reading to compute YoY the normal way; if neither
+    path has what it needs, that period contributes nothing (see below).
+
+    The rule (spec's own table):
+      SIGNAL - the reading sits more than 2 spreads from its 12-period
+               average, in either direction, OR the YoY change is
+               negative (regardless of spread distance - shrinking
+               exports are rare enough in this cycle to matter on their
+               own, per the spec's own reasoning)
+      WEAK   - between 1 and 2 spreads away
+      NOISE  - within 1 spread (the series behaving normally)
+
+    A period contributes NO result at all (not NOISE, not anything) when
+    either precondition is unmet: no same-period-one-year-ago reading
+    exists in context_articles, or fewer than
+    _EXPORT_SURPRISE_MIN_HISTORY_PERIODS prior equivalent periods exist to
+    compute a real average/spread from. Confirmed live 2026-09-23: with
+    real history reaching back only to ~2026-02, BOTH preconditions
+    currently fail for every real period_type that exists - this function
+    is expected to return [] against real data today, not a bug, an
+    honest reflection of Section 5.1's own build note ("this rule needs
+    two years of stored history before it means anything") - see this
+    module's own docstring for the real, current depth.
+    """
+    by_period: dict[tuple[str, str], float] = {}
+
+    def _collect(source: list[dict[str, Any]], into: dict[tuple[str, str], float]) -> None:
+        for a in source:
+            meta = a.get("metadata") or {}
+            if meta.get("source_category") != "kr_customs_export":
+                continue
+            key = _customs_period_key(meta)
+            if key is None:
+                continue
+            # Prefer the source's own stated semiconductor YoY% (monthly
+            # CONFIRMED releases only - see this function's own docstring)
+            # over the raw dollar figure when both exist for the SAME
+            # period, since that's a directly-usable YoY reading already,
+            # not something needing a year-ago comparison at all. Stored
+            # keyed by (period_type, period_start) either way so the two
+            # paths merge into one lookup table.
+            usd = meta.get("semiconductor_export_usd_billion")
+            if usd is not None:
+                into[key] = float(usd)
+
+    _collect(context_articles or [], by_period)
+    _collect(articles, by_period)
+
+    # Monthly releases' own stated YoY%, kept separate from the dollar-
+    # figure table above - used directly as this period's "change" value
+    # instead of computing one from two dollar readings (see docstring).
+    stated_yoy: dict[tuple[str, str], float] = {}
+    for source in (context_articles or []), articles:
+        for a in source:
+            meta = a.get("metadata") or {}
+            if meta.get("source_category") != "kr_customs_export":
+                continue
+            key = _customs_period_key(meta)
+            if key is None:
+                continue
+            yoy = meta.get("semiconductor_yoy_pct_stated")
+            if yoy is not None:
+                stated_yoy[key] = float(yoy)
+
+    results: list[dict[str, Any]] = []
+    counts = {"SIGNAL": 0, "WEAK": 0, "NOISE": 0, "no_data": 0}
+
+    for a in articles:
+        meta = a.get("metadata") or {}
+        if meta.get("source_category") != "kr_customs_export":
+            continue
+        key = _customs_period_key(meta)
+        if key is None:
+            continue
+        period_type, period_start = key
+
+        # This period's own "change" value: prefer the source's own
+        # stated YoY% (monthly only); otherwise compute from this
+        # period's dollar figure vs the same period one year ago.
+        this_yoy = stated_yoy.get(key)
+        if this_yoy is None:
+            this_usd = by_period.get(key)
+            year_ago_key = (period_type, _customs_same_period_last_year(period_start))
+            year_ago_usd = by_period.get(year_ago_key)
+            if this_usd is None or year_ago_usd is None or year_ago_usd == 0:
+                counts["no_data"] += 1
+                continue
+            this_yoy = (this_usd - year_ago_usd) / year_ago_usd * 100.0
+
+        # 12 equivalent prior periods' own YoY values, for the average/
+        # spread - each prior period's YoY is itself computed the same
+        # way (stated YoY if that period was a monthly release with one,
+        # else its own dollar-figure-vs-year-ago computation), so the
+        # history this function judges the current reading against is
+        # internally consistent with how the current reading itself was
+        # derived.
+        history_yoys: list[float] = []
+        for candidate_key, candidate_usd in by_period.items():
+            if candidate_key == key or candidate_key[0] != period_type:
+                continue
+            candidate_yoy = stated_yoy.get(candidate_key)
+            if candidate_yoy is None:
+                candidate_year_ago = by_period.get(
+                    (period_type, _customs_same_period_last_year(candidate_key[1]))
+                )
+                if candidate_year_ago is None or candidate_year_ago == 0:
+                    continue
+                candidate_yoy = (candidate_usd - candidate_year_ago) / candidate_year_ago * 100.0
+            history_yoys.append(candidate_yoy)
+
+        if len(history_yoys) < _EXPORT_SURPRISE_MIN_HISTORY_PERIODS:
+            counts["no_data"] += 1
+            continue
+
+        average = statistics.mean(history_yoys)
+        spread = statistics.stdev(history_yoys)
+        if spread == 0:
+            counts["no_data"] += 1
+            continue
+        spreads_away = abs(this_yoy - average) / spread
+
+        if this_yoy < 0 or spreads_away > _EXPORT_SURPRISE_SIGNAL_SPREADS:
+            signal = "SIGNAL"
+            reason = (
+                "export_surprise_yoy_negative" if this_yoy < 0
+                else "export_surprise_spreads_away"
+            )
+        elif spreads_away > _EXPORT_SURPRISE_WEAK_SPREADS:
+            signal = "WEAK"
+            reason = "export_surprise_spreads_away"
+        else:
+            signal = "NOISE"
+            reason = "export_surprise_within_normal_range"
+
+        counts[signal] += 1
+        meta["source_category"] = "export_surprise"
+        meta["yoy_pct"] = round(this_yoy, 1)
+        meta["twelve_period_average_yoy_pct"] = round(average, 1)
+        meta["twelve_period_spread"] = round(spread, 2)
+        meta["spreads_from_average"] = round(spreads_away, 2)
+        a["metadata"] = meta
+        results.append({
+            "article": a,
+            "result": {
+                "signal": _KOREA_SIGNAL_MAP[signal],
+                "signal_score": None,
+                "source_id": f"kr_customs_export-{period_type}-{period_start}",
+                "reason": reason,
+                "metadata": meta,
+            },
+        })
+
+    if any(counts.values()):
+        logger.info(
+            "[KOREA_EXPORT_SURPRISE] signal=%d weak=%d noise=%d no_data=%d",
+            counts["SIGNAL"], counts["WEAK"], counts["NOISE"], counts["no_data"],
+        )
+    return results
 
 
 def classify_korea_signal_batch(

@@ -403,6 +403,12 @@ resource "aws_cloudwatch_event_rule" "news_retrieval_korea_market_signal" {
   # freshness for time-sensitive items (S6 rumour-adjudication answers,
   # Tier 1 company filings) rather than relying on a later catch-up.
   schedule_expression = "cron(0 0/4 * * ? *)"
+  # Paused 2026-09-23 (explicit request) - was previously disabled directly
+  # via `aws events disable-rule`, which would have been silently reverted
+  # by the next terraform apply touching this resource (state defaults to
+  # ENABLED) - set here so the paused state actually persists through
+  # Terraform. Set back to "ENABLED" (or remove this line) to resume.
+  state = "DISABLED"
 }
 
 resource "aws_cloudwatch_event_target" "news_retrieval_korea_market_signal" {
@@ -1014,6 +1020,10 @@ resource "aws_cloudwatch_event_rule" "signal_detection_agent_korea_signals" {
   # the two runs are additive rather than duplicating work, same pattern as
   # Taiwan's own two-pass schedule.
   schedule_expression = "cron(0 13,21 * * ? *)"
+  # Paused 2026-09-23 (explicit request) - see
+  # news_retrieval_korea_market_signal's own comment on why this is set
+  # here rather than left as a CLI-only disable-rule call.
+  state = "DISABLED"
 }
 
 resource "aws_cloudwatch_event_target" "signal_detection_agent_korea_signals" {
@@ -1059,6 +1069,10 @@ resource "aws_cloudwatch_event_rule" "signal_detection_agent_korea_signals_summa
   # the one summary-writer call) - so this is a fast job regardless of
   # how large the classify pass was.
   schedule_expression = "cron(30 13,21 * * ? *)"
+  # Paused 2026-09-23 (explicit request) - see
+  # news_retrieval_korea_market_signal's own comment on why this is set
+  # here rather than left as a CLI-only disable-rule call.
+  state = "DISABLED"
 }
 
 resource "aws_cloudwatch_event_target" "signal_detection_agent_korea_signals_summary" {
