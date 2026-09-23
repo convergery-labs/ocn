@@ -1,11 +1,13 @@
 """GET /jobs - job listing and results endpoints."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from auth import require_auth
+from controllers.run import generate_korea_signal_summary_for_date
 from models.jobs import get_job, list_all_results, list_jobs, list_results, list_taiwan_periods
 
 router = APIRouter()
@@ -31,6 +33,33 @@ async def get_all_results(
 ) -> dict[str, Any]:
     """Return paginated classification results across all jobs, newest first."""
     return list_all_results(limit=limit, cursor=cursor, signal_detection=signal_detection, source_type=source_type, ticker=ticker, period=period, source_category=source_category, grade=grade, impacted_category=impacted_category, impacted_ticker=impacted_ticker, channel=channel, corroborated=corroborated, published_from=published_from, published_to=published_to)
+
+
+@router.get("/korea-signals/summary")
+async def get_korea_signal_summary(
+    date: str | None = Query(default=None, description="YYYY-MM-DD (UTC). Defaults to today (UTC)."),
+    caller: dict[str, Any] = Depends(require_auth),
+) -> dict[str, Any]:
+    """Spec Section 8.4's twice-daily trader summary, generated on demand
+    for one day's already-classified korea_market_signal rows (reads
+    agent_classifications directly - no news-retrieval fetch, no
+    re-classification; see generate_korea_signal_summary_for_date's own
+    docstring).
+
+    Not paginated/streamed - this returns one finished text block per
+    call, same shape the CLI's summarize-korea-signals command logs.
+    Calling this twice for the same date before new rows are inserted is
+    expected to return the same or near-identical text - the row
+    selection/ordering is fully deterministic (see
+    generate_korea_signal_summary_for_date), and the model call itself
+    uses temperature=0 (see korea_signal_summary.py's own payload), same
+    as every other LLM call in this module - not a hard guarantee of
+    byte-identical output across calls, but not free-running temperature
+    either.
+    """
+    date = date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    summary = generate_korea_signal_summary_for_date(date)
+    return {"date": date, "summary": summary}
 
 
 @router.get("/results/periods")

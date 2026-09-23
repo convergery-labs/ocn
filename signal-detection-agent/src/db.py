@@ -129,7 +129,7 @@ def init_db() -> None:
         conn.execute("""
             ALTER TABLE agent_classifications
                 ADD CONSTRAINT agent_classifications_source_type_check
-                    CHECK (source_type IN ('news', 'sec_filing', 'company_specific', 'taiwan_market_signal', 'geopolitical_signal'))
+                    CHECK (source_type IN ('news', 'sec_filing', 'company_specific', 'taiwan_market_signal', 'geopolitical_signal', 'korea_market_signal'))
         """)
         # signal_detection's allowed set is widened (same drop/recreate
         # pattern as source_type above) to add 'waiting' - geopolitical_signal
@@ -210,6 +210,20 @@ def init_db() -> None:
                 idx_agent_classifications_geopolitical_signal_article_id
                 ON agent_classifications (source_type, article_id)
                 WHERE source_type = 'geopolitical_signal'
+        """)
+        # korea_market_signal: same condition and same fix as
+        # taiwan_market_signal above - source_id is a real, consistently
+        # populated natural key for every korea_signal_classifier.py
+        # classify_* function (DART's own rcept_no for S2-S6, the article's
+        # own url for S7's qualification_news - see classify_qualification_news),
+        # so insert_korea_signal_classification's own "ON CONFLICT DO
+        # NOTHING" had nothing to conflict against until this index exists,
+        # same pre-existing gap as every other source_type not listed here.
+        conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS
+                idx_agent_classifications_korea_source_id
+                ON agent_classifications (source_type, source_id)
+                WHERE source_type = 'korea_market_signal'
         """)
         # metadata->>'ticker' filtering (list_all_results/list_results) would
         # otherwise sequential-scan the whole table on every ticker-filtered

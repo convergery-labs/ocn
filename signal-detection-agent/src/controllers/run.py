@@ -27,13 +27,16 @@ from models.jobs import (
     create_job,
     get_completed_job_for_run,
     get_existing_geopolitical_signal_article_ids,
+    get_existing_korea_signal_source_ids,
     get_existing_taiwan_source_ids,
     get_taiwan_revenue_rows_for_periods,
     get_ungraded_geopolitical_signal_tagged_articles,
     get_untagged_geopolitical_signal_high_articles,
     get_waiting_geopolitical_signal_articles,
     insert_geopolitical_signal_classification,
+    insert_korea_signal_classification,
     insert_taiwan_signal_classification,
+    list_all_results,
     update_geopolitical_signal_classification,
     update_geopolitical_signal_stage_c_tags,
     update_geopolitical_signal_stage_d_grade,
@@ -51,6 +54,9 @@ from pipeline.geopolitical_signal_stage_b import (
     load_stage_b_prompt,
 )
 from pipeline.geopolitical_signal_stage_d import grade_geopolitical_signal_article
+from pipeline.korea_signal_classifier import classify_korea_signal_batch
+from pipeline.korea_signal_summary import generate_korea_signal_summary
+from pipeline.korea_ticker_universe import KOREA_TICKER_UNIVERSE
 from pipeline.taiwan_signal_classifier import classify_taiwan_signal_batch
 
 logger = logging.getLogger(__name__)
@@ -245,6 +251,130 @@ async def run_taiwan_signal_classification(job_id: int, from_date: str, to_date:
     update_job_status(job_id, "completed", article_count=inserted, set_completed_at=True)
 
 
+async def run_korea_signal_classification(job_id: int, from_date: str, to_date: str) -> None:
+    """Classify korea_market_signal items across ALL of news-retrieval's
+    completed runs in [from_date, to_date] - not just the latest run, same
+    reasoning as run_taiwan_signal_classification (news-retrieval polls
+    this domain every 4 hours, so a multi-day window or a slow day can
+    still span more than one completed run).
+
+    Simpler than the Taiwan controller: no revenue-context re-ranking step
+    (see classify_korea_signal_batch's own docstring - no Korea signal
+    type judges an article against a field of peers the way Taiwan's YoY
+    ranking does), so this is pool -> classify -> dedup -> insert, no
+    "changed_context" second return value or update_taiwan_revenue_rank
+    equivalent.
+
+    Only inserts items not already classified - checked via
+    get_existing_korea_signal_source_ids against the source_id
+    classify_korea_signal_batch derives (rcept_no for DART filings, the
+    article's own url for S7 qualification_news), not against article id,
+    for the same reason Taiwan's controller checks source_id instead of
+    id: the same underlying fact can legitimately reappear across
+    multiple news-retrieval runs before this job ever ran.
+    """
+    update_job_status(job_id, "running")
+    try:
+        run_ids = await list_completed_runs(
+            config.KOREA_SIGNAL_DOMAIN, from_date, to_date,
+        )
+        all_articles: list[dict[str, Any]] = []
+        seen_urls: set[str] = set()
+        for run_id in run_ids:
+            for article in await get_run_articles(run_id):
+                url = article.get("url")
+                if url and url not in seen_urls:
+                    seen_urls.add(url)
+                    all_articles.append(article)
+    except NewsRetrievalError:
+        logger.exception(
+            "Failed to fetch korea_market_signal articles for job %d", job_id,
+        )
+        update_job_status(job_id, "failed", set_completed_at=True)
+        return
+
+    if not all_articles:
+        update_job_status(job_id, "completed", article_count=0, set_completed_at=True)
+        return
+
+    classified = classify_korea_signal_batch(all_articles, tracked_companies=KOREA_TICKER_UNIVERSE)
+
+    candidate_source_ids = [c["result"]["source_id"] for c in classified if c["result"].get("source_id")]
+    already_done = get_existing_korea_signal_source_ids(candidate_source_ids)
+    to_insert = [
+        c for c in classified
+        if c["result"].get("source_id") not in already_done
+    ]
+
+    update_job_status(job_id, "running", article_count=len(to_insert))
+
+    inserted = 0
+    for c in to_insert:
+        try:
+            insert_korea_signal_classification(job_id, c["article"], c["result"])
+            inserted += 1
+        except Exception:
+            logger.exception(
+                "Failed to insert korea_market_signal classification for"
+                " source_id=%s (job %d)",
+                c["result"].get("source_id"), job_id,
+            )
+
+    logger.info(
+        "[KOREA_SIGNAL] job=%d runs=%d pooled_articles=%d classified=%d"
+        " already_done=%d inserted=%d",
+        job_id, len(run_ids), len(all_articles), len(classified),
+        len(already_done), inserted,
+    )
+    update_job_status(job_id, "completed", article_count=inserted, set_completed_at=True)
+
+
+def generate_korea_signal_summary_for_date(date: str) -> str:
+    """Spec Section 8.4: read today's (or ``date``'s) already-classified
+    korea_market_signal rows from this service's own DB and generate the
+    twice-daily trader summary text.
+
+    Not async (unlike the run_* functions above) - list_all_results is a
+    plain synchronous DB call (models/jobs.py, same psycopg2 connection
+    every other model function in this service uses), and
+    generate_korea_signal_summary itself is a synchronous urllib call
+    (matching every other LLM call in this codebase's pipeline/*.py
+    modules - none of them are async either). No news-retrieval fetch
+    here at all, unlike run_korea_signal_classification - this only reads
+    rows this service has ALREADY classified and inserted.
+
+    Rows are sorted signal before weak_signal, then newest published
+    first - see korea_signal_summary.py's own module docstring for why no
+    numeric rank is fabricated here instead.
+
+    ``date``: YYYY-MM-DD (UTC) - passed straight to list_all_results's
+    published_from/published_to as a single-day window.
+    """
+    result = list_all_results(
+        source_type=config.KOREA_SIGNAL_DOMAIN,
+        published_from=date,
+        published_to=date,
+        limit=200,
+    )
+    rows = result["results"]
+
+    # signal before weak_signal, newest published first within each group -
+    # a stable sort by published-descending, then a stable partition by
+    # signal_detection, achieves exactly that without a double-sort: the
+    # partition preserves each group's own already-newest-first order
+    # (list_all_results' own query already returns rows ORDER BY
+    # effective_date DESC).
+    signal_rows = [r for r in rows if r.get("signal_detection") == "signal"]
+    weak_rows = [r for r in rows if r.get("signal_detection") == "weak_signal"]
+    ordered_rows = signal_rows + weak_rows
+
+    logger.info(
+        "[KOREA_SIGNAL_SUMMARY] date=%s signal=%d weak_signal=%d",
+        date, len(signal_rows), len(weak_rows),
+    )
+    return generate_korea_signal_summary(ordered_rows)
+
+
 async def run_geopolitical_signal_stage_a(job_id: int, from_date: str, to_date: str) -> None:
     """Stage A only: pool all of news-retrieval's completed geopolitical_news
     runs in [from_date, to_date], apply the free rule-based filters, persist.
@@ -407,18 +537,26 @@ async def run_geopolitical_signal_stage_c(job_id: int) -> None:
     impacted_categories, one_line, impacted_companies_direct.
 
     Flow per article, matching the locked Stage C plan:
-      Layer 1 (free) -> Layer 2 (1 model call) -> deterministic overrides
-      (free) -> Layer 3 (free, cache read) -> update in place.
+      GET /articles/{id} (body, best-effort) -> Layer 1 (free) -> Layer 2
+      (1 model call) -> deterministic overrides (free) -> Layer 3 (free,
+      cache read) -> update in place.
     Rows are classified concurrently (bounded by CLASSIFY_CONCURRENCY,
     same pool as Stage B and the news domain), not one at a time - each
     row's flow above runs as a single unit in the shared thread pool.
 
-    No fetch from news-retrieval - Stage C's input is entirely rows
-    already in this table (get_untagged_geopolitical_signal_high_articles).
-    Layer 1's company list is loaded ONCE for the whole run, not once per
-    article (see get_companies_for_name_matching's docstring) - this was a
-    deliberate fix during design review, not the naive per-article refetch
-    the original plan implied.
+    Stage C's row data (title only) comes entirely from this table
+    (get_untagged_geopolitical_signal_high_articles); body text is fetched
+    per article from news-retrieval (get_article) so Layer 2 isn't judging
+    off a headline alone - a terse headline often omits the specific
+    goods/sector the prompt's own empty-impacted_categories rule requires.
+    That fetch fails open to headline-only (None body) if the article has
+    since expired from news-retrieval's 7-day geopolitical_news retention,
+    or the request otherwise fails - a missing body must never drop or
+    fail the row, same fail-open discipline as Layer 2's own model-call
+    handling. Layer 1's company list is loaded ONCE for the whole run, not
+    once per article (see get_companies_for_name_matching's docstring) -
+    this was a deliberate fix during design review, not the naive
+    per-article refetch the original plan implied.
 
     Daily cap (config.GEOPOLITICAL_SIGNAL_STAGE_C_DAILY_CAP, default 50) is
     a safety tripwire, same reasoning as Stage B's cap - once hit,
@@ -452,15 +590,20 @@ async def run_geopolitical_signal_stage_c(job_id: int) -> None:
     # nothing (no other awaitable work happens between it and the model
     # call). Reuses the same _executor/CLASSIFY_CONCURRENCY pool Stage B
     # and the news domain already share.
-    def _tag_one_sync(row: dict[str, Any]) -> dict[str, Any] | None:
+    def _tag_one_sync(row: dict[str, Any], body: str | None) -> dict[str, Any] | None:
         title = row["title"] or ""
 
         # Layer 1 - free, always kept regardless of what Layer 2 returns.
         direct_matches = find_direct_company_matches(title, companies)
 
         # Layer 2 - one model call; fail-open on any parse/shape failure.
+        # body is None when news-retrieval's article already expired
+        # (geopolitical_news is a 7-day retention domain) or the fetch
+        # failed - classify_geopolitical_signal_tags degrades to
+        # headline-only in that case rather than failing the row.
         layer2_result = classify_geopolitical_signal_tags(
             title,
+            body=body,
             system_prompt=system_prompt,
             model=model,
             api_key=api_key,
@@ -507,7 +650,15 @@ async def run_geopolitical_signal_stage_c(job_id: int) -> None:
 
     async def tag_one(row: dict[str, Any]) -> dict[str, Any] | None:
         async with semaphore:
-            return await loop.run_in_executor(_executor, _tag_one_sync, row)
+            # get_article is already async (own httpx.AsyncClient per call,
+            # same as Stage D's grade_one) - fetched here, before handing
+            # off to the executor, so the blocking Layer1->Layer3 body
+            # doesn't also have to manage an event loop. None (article
+            # expired/404, or body missing/blank) degrades Layer 2 to
+            # headline-only rather than failing the row.
+            article = await get_article(row["article_id"])
+            body = (article.get("body") or None) if article else None
+            return await loop.run_in_executor(_executor, _tag_one_sync, row, body)
 
     results = await asyncio.gather(*[tag_one(row) for row in to_classify])
     updated = sum(1 for r in results if r is not None)

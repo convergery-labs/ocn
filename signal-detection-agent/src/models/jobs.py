@@ -219,6 +219,65 @@ def insert_taiwan_signal_classification(
         )
 
 
+def insert_korea_signal_classification(
+    job_id: int, article: dict[str, Any], result: dict[str, Any],
+) -> None:
+    """Upsert one agent_classifications row for a korea_market_signal item
+    (source_type='korea_market_signal') - a DART filing or Korea Customs
+    export-data row read from news-retrieval.
+
+    Same shape as insert_taiwan_signal_classification (deterministic
+    rule/lookup result, not an LLM judgment - signal_score is left NULL
+    for these, not defaulted to 1.0, matching how
+    classify_taiwan_signal_batch's own rank/clause-lookup paths already
+    treat a computed-not-scored result). Not a call to that function with
+    a parameter swapped in, because 'taiwan_market_signal' and its
+    _TAIWAN_SIGNAL_MAP lookup are hardcoded there, not parameterized.
+    """
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO agent_classifications (
+                job_id, source_type, source_id, url, title,
+                signal_detection, signal_score, signal_reason,
+                published, metadata
+            ) VALUES (%s, 'korea_market_signal', %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT DO NOTHING
+            """,
+            (
+                job_id,
+                result.get("source_id"),
+                article.get("url"),
+                article.get("title"),
+                result["signal"],
+                result.get("signal_score"),
+                result.get("reason"),
+                article.get("published"),
+                json.dumps(result.get("metadata") or {}, ensure_ascii=False),
+            ),
+        )
+
+
+def get_existing_korea_signal_source_ids(source_ids: list[str]) -> set[str]:
+    """Return the subset of source_ids already classified as
+    source_type='korea_market_signal', across ALL prior jobs - same
+    dedup role as get_existing_taiwan_source_ids, since a DART rcept_no
+    (or other source-specific key) can legitimately reappear across
+    multiple news-retrieval polls before this job ever ran.
+    """
+    if not source_ids:
+        return set()
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT source_id FROM agent_classifications
+            WHERE source_type = 'korea_market_signal' AND source_id = ANY(%s)
+            """,
+            (source_ids,),
+        ).fetchall()
+    return {r["source_id"] for r in rows}
+
+
 def get_existing_taiwan_source_ids(source_ids: list[str]) -> set[str]:
     """Return the subset of source_ids already classified as
     source_type='taiwan_market_signal', across ALL prior jobs (not scoped
