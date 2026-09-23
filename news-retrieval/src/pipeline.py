@@ -6,7 +6,7 @@ import os
 import re
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from functools import partial
 from typing import Any
@@ -943,12 +943,71 @@ _SAME_EVENT_SIMILARITY_FLOOR = 0.50
 
 _SAME_EVENT_SYSTEM_PROMPT = (
     "You judge whether two news headlines report the SAME underlying event"
-    " (e.g. two outlets covering one signing, one ruling, one announcement),"
-    " as opposed to different events about the same ongoing situation (e.g."
-    " an announcement vs. a later reaction to it, or two different"
-    " developments days apart in a multi-day story)."
+    " - the same specific government/institutional action, decision,"
+    " ruling, signing, or announcement - even if the two headlines lead"
+    " with different details, emphasize different consequences, or use"
+    " different wording for the same outcome. Different outlets covering"
+    " one real-world action commonly emphasize different angles of it and"
+    " use different phrasing for the same outcome - this is still the SAME"
+    " event.\n\n"
+    "Watch for these specific traps:\n"
+    "- 'Lifting sanctions on X', 'removing X from the sanctions list', and"
+    " 'delisting X' all mean the SAME thing (X is no longer sanctioned) -"
+    " never treat these as opposite or different actions.\n"
+    "- A single vote or decision that both extends/renews a sanctions"
+    " package AND delists specific individuals as part of that same vote"
+    " is ONE event, not two - a headline emphasizing only the extension and"
+    " another emphasizing only the delisting can both be reporting the"
+    " exact same Council/legislative action.\n\n"
+    "Treat two headlines as DIFFERENT events only when they describe a"
+    " genuinely different action, decision, or moment in time: e.g. a"
+    " proposal, attempt, or failed vote vs. its later actual approval; an"
+    " announcement vs. a separate, later reaction to it; or two distinct"
+    " developments on different days in a multi-day story."
     ' Return strict JSON only: {"same_event": true or false}'
 )
+
+
+_SAME_EVENT_LLM_CONCURRENCY = 10
+
+
+def _resolve_db_borderline_matches_parallel(
+    pending: list[tuple[int, str, str, Any]], api_key: str | None,
+) -> dict[int, bool | None]:
+    """Resolve a batch of DB-history borderline same-event checks concurrently.
+
+    ``pending`` is a list of (article_index, article_title, candidate_title,
+    candidate_db_id) - one entry per article whose best borderline
+    candidate came from DB history (never same-batch; see the docstring on
+    the two-phase split in _dedup_by_title_similarity_for_domain for why
+    same-batch borderline candidates are excluded from this fast path and
+    resolved sequentially instead).
+
+    Each check only depends on its own (article_title, candidate_title)
+    pair, fixed before any of these calls run - none of them can change
+    another's outcome, so running them concurrently produces the exact
+    same per-pair results as running them one at a time, just faster.
+    Bounded by _SAME_EVENT_LLM_CONCURRENCY workers, each with its own
+    OpenAI client (httpx.Client instances aren't meant to be shared across
+    threads).
+
+    Returns {article_index: same_event_result}, same True/False/None
+    semantics as _titles_describe_same_event itself.
+    """
+    if not pending:
+        return {}
+
+    def _check_one(item):
+        idx, article_title, candidate_title, _candidate_db_id = item
+        return idx, _titles_describe_same_event(article_title, candidate_title, api_key)
+
+    results: dict[int, bool | None] = {}
+    with ThreadPoolExecutor(max_workers=_SAME_EVENT_LLM_CONCURRENCY) as executor:
+        futures = [executor.submit(_check_one, item) for item in pending]
+        for future in as_completed(futures):
+            idx, same_event = future.result()
+            results[idx] = same_event
+    return results
 
 
 def _titles_describe_same_event(
@@ -968,12 +1027,28 @@ def _titles_describe_same_event(
     that includes the real duplicate cluster while excluding the real
     false-positive case; they occupy the same band. This resolves that
     band with real semantic judgment instead of a threshold that cannot
-    exist. Tested live against 5 confirmed cases (3 same-event, 2
-    different-event, including the exact reaction-vs-event and multi-day
-    story-development cases that make this hard) - gpt-4o-mini agreed with
-    the confirmed answer in 4/5; the one disagreement was itself a
-    defensible read of a genuinely ambiguous pair, not a clear model
-    failure.
+    exist.
+
+    Prompt history (tested live against an 8-case set: reaction-vs-event,
+    multi-day story development, a confirmed false-positive pair, and 5
+    EU sanctions-delisting headlines confirmed by a human to be one real
+    event): the original wording scored 4/8, missing 4 of 5 EU cases -
+    root cause was two specific reading failures, not vague instructions:
+    the model read "lifting sanctions on X" and "removing X from the
+    sanctions list" as OPPOSITE actions (they mean the same thing), and
+    treated "delist individuals" and "extend the sanctions package" as
+    two events even when reported as one Council vote. Two more general
+    rewrites (a broader "same source article" framing, with and without
+    also naming the sanctions-terminology trap) scored 5/8 each - worse
+    than naming the specific traps directly, so this prompt keeps the
+    explicit trap callouts rather than relying on general phrasing.
+    Current wording scores 6/8 - fixed 3 of the 4 EU misses; the
+    remaining miss is a headline that mentions delisting only in a
+    subordinate clause explaining WHY an extension happened, which the
+    model reads as background rather than as itself reporting the
+    delisting - and introduced one new miss (conflates a failed vote with
+    the later successful one), which fails toward extra merging rather
+    than extra dropping, same direction other failures already accept.
 
     Returns True/False, or None on any failure (network, non-JSON, wrong
     shape) - callers must treat None as "cannot determine" and fail open
@@ -1500,66 +1575,125 @@ def _dedup_by_title_similarity_for_domain(
          c.get("id"), None)
         for c in recent
     ]
-    # Same-batch candidates kept so far - two outlets can surface the same
-    # story within one run, before either has been stored yet.
-    kept_this_batch: list[dict] = []
+    threshold = _DOMAIN_TITLE_DEDUP_SIMILARITY_THRESHOLD.get(
+        domain_slug, _TITLE_DEDUP_SIMILARITY_THRESHOLD,
+    )
+    same_event_domain = domain_slug in _SAME_EVENT_LLM_DOMAINS
 
-    kept: list[dict] = []
-    dropped = 0
-
-    for article, embedding in zip(articles, new_embeddings):
+    # Phase 1 (sequential, no I/O): resolve each article's DB-history-only
+    # hard match and best DB-history-only borderline candidate. DB history
+    # (``candidates``) is fixed before this loop starts - unlike same-batch
+    # candidates (which grow as earlier articles in THIS batch survive),
+    # comparing against it never depends on what order articles are
+    # processed in, so this pass is safe to resolve out of order (which
+    # phase 2 then does, concurrently).
+    db_hard_match: dict[int, Any] = {}
+    db_borderline: dict[int, tuple[float, str, Any]] = {}
+    for i, (article, embedding) in enumerate(zip(articles, new_embeddings)):
         article.setdefault("metadata", {})
         if embedding is None:
-            kept.append(article)
             continue
-
-        batch_candidates = candidates + [
-            (c["title"], c["metadata"]["title_embedding"], None, c)
-            for c in kept_this_batch
-        ]
-
-        threshold = _DOMAIN_TITLE_DEDUP_SIMILARITY_THRESHOLD.get(
-            domain_slug, _TITLE_DEDUP_SIMILARITY_THRESHOLD,
-        )
-        match = None
-        best_borderline: tuple[float, str, Any, dict | None] | None = None
-        for candidate_title, candidate_embedding, db_id, batch_article in batch_candidates:
+        best_borderline: tuple[float, str, Any] | None = None
+        for candidate_title, candidate_embedding, db_id, _batch_article in candidates:
             if not candidate_embedding:
                 continue
             similarity = _cosine_similarity(embedding, candidate_embedding)
             if similarity >= threshold:
-                logger.info(
-                    "[%s] near-duplicate title (similarity=%.3f, threshold=%.2f)"
-                    " new=%r existing=%r",
-                    domain_slug, similarity, threshold, article["title"], candidate_title,
-                )
-                match = (db_id, batch_article)
+                db_hard_match[i] = db_id
                 break
             if (
-                domain_slug in _SAME_EVENT_LLM_DOMAINS
+                same_event_domain
                 and similarity >= _SAME_EVENT_SIMILARITY_FLOOR
                 and (best_borderline is None or similarity > best_borderline[0])
             ):
-                best_borderline = (similarity, candidate_title, db_id, batch_article)
+                best_borderline = (similarity, candidate_title, db_id)
+        else:
+            if best_borderline is not None:
+                db_borderline[i] = best_borderline
 
-        # Similarity alone can't separate real duplicates from real
-        # different-but-related stories in this band - see
-        # _titles_describe_same_event's docstring. Only the single best
-        # (highest-similarity) borderline candidate is checked, not every
-        # one in range, so this stays one LLM call per article at most.
-        if match is None and best_borderline is not None:
-            similarity, candidate_title, db_id, batch_article = best_borderline
-            same_event = _titles_describe_same_event(
-                article["title"], candidate_title, api_key,
+    # Phase 2 (parallel): resolve every DB-history borderline check
+    # concurrently - each pair is independent (see
+    # _resolve_db_borderline_matches_parallel's docstring), so this is
+    # the one part of the whole function safe to run out of order and
+    # concurrently. Same-batch borderline checks are deliberately NOT
+    # included here - they're resolved sequentially in phase 3 below,
+    # since which same-batch candidates even EXIST depends on batch
+    # order (an earlier article being dropped means it's never added to
+    # kept_this_batch for a later article to match against).
+    pending = [
+        (i, articles[i]["title"], title, db_id)
+        for i, (sim, title, db_id) in db_borderline.items()
+    ]
+    db_same_event_results = _resolve_db_borderline_matches_parallel(pending, api_key)
+
+    # Phase 3 (sequential): walk the batch in order exactly as before,
+    # but hard matches and DB-borderline same-event checks are already
+    # known from phases 1-2 (no LLM call needed here for those) - only a
+    # same-batch borderline candidate (rare: two outlets in one fetch)
+    # still triggers an inline LLM call, same as the original single-pass
+    # version, preserving its exact behavior for that case.
+    kept_this_batch: list[dict] = []
+    kept: list[dict] = []
+    dropped = 0
+
+    for i, (article, embedding) in enumerate(zip(articles, new_embeddings)):
+        if embedding is None:
+            kept.append(article)
+            continue
+
+        match: tuple[Any, dict | None] | None = None
+
+        if i in db_hard_match:
+            db_id = db_hard_match[i]
+            logger.info(
+                "[%s] near-duplicate title (threshold=%.2f) new=%r db_id=%s",
+                domain_slug, threshold, article["title"], db_id,
             )
-            if same_event:
-                logger.info(
-                    "[%s] near-duplicate title via same-event check"
-                    " (similarity=%.3f, below threshold=%.2f)"
-                    " new=%r existing=%r",
-                    domain_slug, similarity, threshold, article["title"], candidate_title,
+            match = (db_id, None)
+        elif i in db_borderline and db_same_event_results.get(i):
+            similarity, candidate_title, db_id = db_borderline[i]
+            logger.info(
+                "[%s] near-duplicate title via same-event check"
+                " (similarity=%.3f, below threshold=%.2f) new=%r existing=%r",
+                domain_slug, similarity, threshold, article["title"], candidate_title,
+            )
+            match = (db_id, None)
+        else:
+            # No DB-history match - only same-batch candidates kept so
+            # far can still produce a match, checked sequentially exactly
+            # as the original single-pass loop did.
+            best_batch_borderline: tuple[float, str, dict] | None = None
+            for batch_article in kept_this_batch:
+                candidate_title = batch_article["title"]
+                candidate_embedding = batch_article["metadata"]["title_embedding"]
+                similarity = _cosine_similarity(embedding, candidate_embedding)
+                if similarity >= threshold:
+                    logger.info(
+                        "[%s] near-duplicate title (similarity=%.3f, threshold=%.2f)"
+                        " new=%r existing=%r",
+                        domain_slug, similarity, threshold, article["title"], candidate_title,
+                    )
+                    match = (None, batch_article)
+                    break
+                if (
+                    same_event_domain
+                    and similarity >= _SAME_EVENT_SIMILARITY_FLOOR
+                    and (best_batch_borderline is None or similarity > best_batch_borderline[0])
+                ):
+                    best_batch_borderline = (similarity, candidate_title, batch_article)
+            if match is None and best_batch_borderline is not None:
+                similarity, candidate_title, batch_article = best_batch_borderline
+                same_event = _titles_describe_same_event(
+                    article["title"], candidate_title, api_key,
                 )
-                match = (db_id, batch_article)
+                if same_event:
+                    logger.info(
+                        "[%s] near-duplicate title via same-event check"
+                        " (similarity=%.3f, below threshold=%.2f)"
+                        " new=%r existing=%r",
+                        domain_slug, similarity, threshold, article["title"], candidate_title,
+                    )
+                    match = (None, batch_article)
 
         if match is not None:
             db_id, batch_article = match
