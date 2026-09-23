@@ -1,5 +1,6 @@
 """News aggregation pipeline: fetch articles from configured sources."""
 import html
+import json
 import logging
 import os
 import re
@@ -865,45 +866,143 @@ def _embed_titles(titles: list[str], api_key: str | None) -> list[list[float] | 
     clustering — titles are short, a smaller model is enough and cheaper).
 
     Returns one embedding per title, in order; a title's slot is None if
-    every attempt fails, so callers must treat missing embeddings as
-    "cannot compare" rather than "definitely not a duplicate" (fail-open —
-    never silently drop an article because embedding failed).
+    it was blank or every attempt failed, so callers must treat missing
+    embeddings as "cannot compare" rather than "definitely not a duplicate"
+    (fail-open - never silently drop an article because embedding failed).
+
+    Blank/whitespace-only titles are filtered out before the API call and
+    always map to None, never sent. Confirmed live: OpenRouter's embeddings
+    endpoint rejects the ENTIRE batch with one 400 ("too_small": a string
+    must have >=1 characters) if even one input is blank - and since the
+    request is unchanged, every retry fails identically, so one blank title
+    among 1362 real ones silently zeroed out embedding coverage (and so
+    dedup) for the whole run. 6 of the 11 most recent geopolitical_news
+    daily runs hit this exact failure before the filter was added here -
+    not a rare blip, roughly half of all runs. Confirmed same-story
+    duplicates across up to 4 different outlets (e.g. "EU lifts sanctions
+    on Russian oligarchs Usmanov/Fridman", reuters.com/kyivpost.com/ft.com/
+    france24.com) went unmerged as a direct result.
 
     Retries up to _EMBED_TITLES_MAX_ATTEMPTS times with a short fixed
-    backoff before falling back to all-None. Confirmed live: a single
-    transient connection error on this call (no retry, at the time) caused
-    an entire 369-article geopolitical_news fetch to skip dedup completely
-    - real same-story duplicates across up to 7 different outlets were
-    never merged, which also meant also_reported_by (Stage D's
-    corroboration signal downstream) was never populated for that whole
-    day's fetch. A one-off network blip failing open for a handful of
+    backoff before falling back to all-None for whatever's left in the
+    batch (now only real, non-blank titles - a transient network/API error
+    remains the only retryable failure mode). Confirmed live, separately:
+    a single transient connection error on this call (no retry, at the
+    time) caused an entire 369-article geopolitical_news fetch to skip
+    dedup completely. A one-off network blip failing open for a handful of
     unresolvable titles is an acceptable, rare cost; failing open for an
     entire day's fetch on the first retry-free error is not.
     """
     if not titles:
         return []
+    results: list[list[float] | None] = [None] * len(titles)
+    embeddable_indices = [i for i, t in enumerate(titles) if t and t.strip()]
+    if not embeddable_indices:
+        return results
+    embeddable_titles = [titles[i] for i in embeddable_indices]
+
     last_exc: Exception | None = None
     for attempt in range(1, _EMBED_TITLES_MAX_ATTEMPTS + 1):
         try:
             client = _make_client(api_key)
             response = client.embeddings.create(
-                model=_TITLE_EMBEDDING_MODEL, input=titles,
+                model=_TITLE_EMBEDDING_MODEL, input=embeddable_titles,
             )
-            return [item.embedding for item in response.data]
+            for i, item in zip(embeddable_indices, response.data):
+                results[i] = item.embedding
+            return results
         except Exception as exc:
             last_exc = exc
             if attempt < _EMBED_TITLES_MAX_ATTEMPTS:
                 logger.warning(
                     "[GDELT] title embedding attempt %d/%d failed for batch"
                     " of %d, retrying: %s",
-                    attempt, _EMBED_TITLES_MAX_ATTEMPTS, len(titles), exc,
+                    attempt, _EMBED_TITLES_MAX_ATTEMPTS, len(embeddable_titles), exc,
                 )
                 time.sleep(_EMBED_TITLES_RETRY_BACKOFF_SECS)
     logger.warning(
         "[GDELT] title embedding failed for batch of %d after %d attempts: %s",
-        len(titles), _EMBED_TITLES_MAX_ATTEMPTS, last_exc,
+        len(embeddable_titles), _EMBED_TITLES_MAX_ATTEMPTS, last_exc,
     )
-    return [None] * len(titles)
+    return results
+
+
+# Below _SAME_EVENT_SIMILARITY_FLOOR, two titles are treated as definitely
+# not the same story - no LLM call. Set from real geopolitical_news data:
+# the lowest similarity measured between two confirmed-same-story headlines
+# ("EU Delists 2 Oligarchs, Extends Russia Sanctions for 3 Years..." vs
+# "EU to Extend Russia Sanctions After Latvia Drops Opposition to Oligarch
+# Delistings", both about the same September 2026 EU Council decision) was
+# 0.5951 - the floor is set just below that, not at an arbitrary round
+# number. At or above _DOMAIN_TITLE_DEDUP_SIMILARITY_THRESHOLD (0.82 for
+# geopolitical_news), two titles are treated as definitely the same story -
+# also no LLM call, matching existing behavior exactly. Only the band
+# between the two calls _titles_describe_same_event - see that function's
+# docstring for why title similarity alone can't resolve this band.
+_SAME_EVENT_SIMILARITY_FLOOR = 0.50
+
+_SAME_EVENT_SYSTEM_PROMPT = (
+    "You judge whether two news headlines report the SAME underlying event"
+    " (e.g. two outlets covering one signing, one ruling, one announcement),"
+    " as opposed to different events about the same ongoing situation (e.g."
+    " an announcement vs. a later reaction to it, or two different"
+    " developments days apart in a multi-day story)."
+    ' Return strict JSON only: {"same_event": true or false}'
+)
+
+
+def _titles_describe_same_event(
+    title_a: str, title_b: str, api_key: str | None,
+) -> bool | None:
+    """Ask an LLM whether two headlines report the same underlying event.
+
+    Exists because title-embedding similarity alone cannot separate real
+    same-story duplicates from real different-story near-misses in this
+    domain - confirmed live on geopolitical_news: a 9-headline cluster
+    confirmed (by a human reviewing the actual stored rows) to be the same
+    EU Council sanctions-extension story scored pairwise similarity
+    0.5951-0.8177, which fully overlaps the similarity range (0.61-0.72)
+    of a separately-confirmed pair of genuinely DIFFERENT stories (two
+    distinct Canada-tariff headlines) that motivated raising the threshold
+    to 0.82 in the first place - i.e. there is no single similarity cutoff
+    that includes the real duplicate cluster while excluding the real
+    false-positive case; they occupy the same band. This resolves that
+    band with real semantic judgment instead of a threshold that cannot
+    exist. Tested live against 5 confirmed cases (3 same-event, 2
+    different-event, including the exact reaction-vs-event and multi-day
+    story-development cases that make this hard) - gpt-4o-mini agreed with
+    the confirmed answer in 4/5; the one disagreement was itself a
+    defensible read of a genuinely ambiguous pair, not a clear model
+    failure.
+
+    Returns True/False, or None on any failure (network, non-JSON, wrong
+    shape) - callers must treat None as "cannot determine" and fail open
+    (not a duplicate), same discipline as _embed_titles: a missed dedup is
+    far cheaper than wrongly merging two real, distinct stories.
+    """
+    try:
+        client = _make_client(api_key)
+        response = client.chat.completions.create(
+            model="openai/gpt-4o-mini",
+            temperature=0,
+            messages=[
+                {"role": "system", "content": _SAME_EVENT_SYSTEM_PROMPT},
+                {"role": "user", "content": f"Headline A: {title_a}\nHeadline B: {title_b}"},
+            ],
+        )
+        content = response.choices[0].message.content or ""
+        parsed = json.loads(content)
+        same_event = parsed.get("same_event")
+        if not isinstance(same_event, bool):
+            raise ValueError(f"same_event field missing or not boolean: {parsed!r}")
+        return same_event
+    except Exception as exc:
+        logger.warning(
+            "[GDELT] same-event check failed, treating as not-duplicate"
+            " (fail-open): %r vs %r: %s",
+            title_a, title_b, exc,
+        )
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -1335,6 +1434,15 @@ _DOMAIN_TITLE_DEDUP_EXCLUDED_CATEGORIES: dict[str, frozenset[str]] = {
     "korea_market_signal": frozenset({"dart_filing", "kr_customs_export"}),
 }
 
+# Domains where a borderline-similarity pair (see _SAME_EVENT_SIMILARITY_FLOOR)
+# gets resolved by _titles_describe_same_event instead of staying unmerged.
+# geopolitical_news only for now - confirmed live there that title similarity
+# alone can't separate real duplicates from real different-story near-misses
+# (see that function's docstring); ai_news/smart_money haven't shown the same
+# confirmed failure, so they keep the cheaper threshold-only comparison
+# rather than paying for LLM calls speculatively.
+_SAME_EVENT_LLM_DOMAINS: frozenset[str] = frozenset({"geopolitical_news"})
+
 
 def _dedup_by_title_similarity_for_domain(
     articles: list[dict], domain_slug: str,
@@ -1414,6 +1522,7 @@ def _dedup_by_title_similarity_for_domain(
             domain_slug, _TITLE_DEDUP_SIMILARITY_THRESHOLD,
         )
         match = None
+        best_borderline: tuple[float, str, Any, dict | None] | None = None
         for candidate_title, candidate_embedding, db_id, batch_article in batch_candidates:
             if not candidate_embedding:
                 continue
@@ -1426,6 +1535,31 @@ def _dedup_by_title_similarity_for_domain(
                 )
                 match = (db_id, batch_article)
                 break
+            if (
+                domain_slug in _SAME_EVENT_LLM_DOMAINS
+                and similarity >= _SAME_EVENT_SIMILARITY_FLOOR
+                and (best_borderline is None or similarity > best_borderline[0])
+            ):
+                best_borderline = (similarity, candidate_title, db_id, batch_article)
+
+        # Similarity alone can't separate real duplicates from real
+        # different-but-related stories in this band - see
+        # _titles_describe_same_event's docstring. Only the single best
+        # (highest-similarity) borderline candidate is checked, not every
+        # one in range, so this stays one LLM call per article at most.
+        if match is None and best_borderline is not None:
+            similarity, candidate_title, db_id, batch_article = best_borderline
+            same_event = _titles_describe_same_event(
+                article["title"], candidate_title, api_key,
+            )
+            if same_event:
+                logger.info(
+                    "[%s] near-duplicate title via same-event check"
+                    " (similarity=%.3f, below threshold=%.2f)"
+                    " new=%r existing=%r",
+                    domain_slug, similarity, threshold, article["title"], candidate_title,
+                )
+                match = (db_id, batch_article)
 
         if match is not None:
             db_id, batch_article = match
