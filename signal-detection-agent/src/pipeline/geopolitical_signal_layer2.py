@@ -38,6 +38,12 @@ _EMPTY_RESULT: dict[str, Any] = {
     "one_line": None,
 }
 
+# Body is supporting context for a still-short headline-classification task,
+# not the full-article-comprehension job classifier.py's main pipeline does
+# - capped well below that pipeline's limits to keep Layer 2's per-article
+# cost close to its original headline-only size.
+_MAX_BODY_CHARS = 2000
+
 
 def _validate(parsed: Any) -> dict[str, Any] | None:
     """Return a cleaned result dict, or None if the shape/values are
@@ -88,6 +94,7 @@ def _validate(parsed: Any) -> dict[str, Any] | None:
 def classify_geopolitical_signal_tags(
     title: str,
     *,
+    body: str | None = None,
     system_prompt: str,
     model: str,
     api_key: str,
@@ -96,17 +103,28 @@ def classify_geopolitical_signal_tags(
 ) -> dict[str, Any]:
     """Return {channel, actors, assets, impacted_categories, one_line}.
 
+    ``body`` is optional article text (news-retrieval may not have it, or
+    the fetch may have failed/404'd upstream by the time this runs) - when
+    present it's included as extra context after the headline, truncated
+    to _MAX_BODY_CHARS, so the model can name the specific goods/sector an
+    intentionally terse headline leaves out (see the prompt's own
+    empty-impacted_categories rule for why that distinction matters). When
+    absent, the call degrades to the original headline-only prompt.
+
     Any failure (network error, non-JSON response, wrong shape, timeout)
     returns all-None fields rather than raising - the caller still writes
     the row as HIGH, just without tags, per the spec's fail-open rule.
     """
+    user_content = f"Headline: {title}"
+    if body:
+        user_content += f"\n\nArticle text: {body[:_MAX_BODY_CHARS]}"
     payload = {
         "model": model,
         "temperature": 0,
         "max_tokens": 400,
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Headline: {title}"},
+            {"role": "user", "content": user_content},
         ],
     }
     headers = {

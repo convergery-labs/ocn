@@ -165,6 +165,17 @@ resource "aws_ecs_task_definition" "news_retrieval" {
         {
           name      = "RESEARCH_UNIVERSE_API_KEY"
           valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:ocn/${var.env}/news-retrieval:RESEARCH_UNIVERSE_API_KEY::"
+        },
+        {
+          # Required for the dart_filing source_type (korea_market_signal
+          # domain) - DART (Financial Supervisory Service) OpenAPI key,
+          # free/self-service at opendart.fss.or.kr. Must exist in
+          # Secrets Manager under this key before terraform apply, same
+          # requirement as every other secret above (infra/CLAUDE.md).
+          # The Korea Customs press-release scraper (kr_customs_export
+          # source_type) needs no credential at all - no-login scrape.
+          name      = "DART_API_KEY"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:ocn/${var.env}/news-retrieval:DART_API_KEY::"
         }
       ]
       logConfiguration = {
@@ -365,6 +376,57 @@ resource "aws_cloudwatch_event_target" "news_retrieval_taiwan_market_signal" {
       {
         name    = "news-retrieval"
         command = ["python", "__main__.py", "trigger", "--domain", "taiwan_market_signal", "--days-back", "1"]
+      }
+    ]
+  })
+}
+
+resource "aws_cloudwatch_event_rule" "news_retrieval_korea_market_signal" {
+  name = "${var.env}-news-retrieval-korea-market-signal"
+  # Every 4 hours, unbounded across all 24 hours, all 7 days - unlike
+  # Taiwan's schedule above, Korea's own sources don't concentrate in a
+  # narrow trading-hours window. DART filings are lodged in the evening
+  # KST and around weekend board meetings (KST is UTC+9, so Korea's own
+  # business day runs roughly 23:00-14:00 UTC the previous calendar day);
+  # the Korea Customs press-release scrape publishes at a fixed few-times-
+  # a-month cadence (11th/21st/1st) with no time-of-day pattern to bound
+  # around; RSS/GDELT news can break at any hour. A 4-hour, all-day, all-
+  # week cadence matches the Korea Signals spec's own Step 2 instruction
+  # ("Run from early morning to late evening, seven days a week") rather
+  # than assuming a Taiwan-shaped trading session.
+  #
+  # DART's list.json IS date-range queryable (bgn_de/end_de), unlike
+  # TWSE/TPEx's always-latest-snapshot endpoints - so a missed poll window
+  # is recoverable on the next run (bounded by --days-back), not a
+  # permanent gap the way Taiwan's revenue/material feed is. Still polled
+  # on a schedule rather than backfilled after the fact, to keep same-day
+  # freshness for time-sensitive items (S6 rumour-adjudication answers,
+  # Tier 1 company filings) rather than relying on a later catch-up.
+  schedule_expression = "cron(0 0/4 * * ? *)"
+}
+
+resource "aws_cloudwatch_event_target" "news_retrieval_korea_market_signal" {
+  rule     = aws_cloudwatch_event_rule.news_retrieval_korea_market_signal.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+
+  ecs_target {
+    # Family-only ARN (no revision suffix) - see comment on the daily fetch
+    # target above for why this is unpinned rather than a specific revision.
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.news_retrieval.family}"
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets          = var.public_subnet_ids
+      security_groups  = [var.news_sg_id]
+      assign_public_ip = true
+    }
+  }
+
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "news-retrieval"
+        command = ["python", "__main__.py", "trigger", "--domain", "korea_market_signal", "--days-back", "1"]
       }
     ]
   })
@@ -765,6 +827,7 @@ resource "aws_ecs_task_definition" "signal_detection_agent" {
   cpu                      = "1024"
   memory                   = "2048"
   execution_role_arn       = aws_iam_role.ecs_task_execution.arn
+  task_role_arn            = aws_iam_role.ecs_task_exec_ssm.arn
 
   container_definitions = jsonencode([
     {
@@ -780,6 +843,7 @@ resource "aws_ecs_task_definition" "signal_detection_agent" {
         { name = "POSTGRES_USER",          value = "signal_user" },
         { name = "PGSSLMODE",              value = "require" },
         { name = "NEWS_RETRIEVAL_URL",     value = "http://news-retrieval.${var.env}.ocn.internal:8000" },
+        { name = "RESEARCH_UNIVERSE_URL",  value = "http://research-universe.${var.env}.ocn.internal:8007" },
         { name = "OPENAI_BASE_URL",        value = "https://openrouter.ai/api/v1" },
         { name = "SIGNAL_DETECTION_MODEL",    value = "anthropic/claude-sonnet-4-6" },
         { name = "SIGNAL_DETECTION_MODEL_V2", value = "openai/gpt-4o-mini" },
@@ -793,6 +857,10 @@ resource "aws_ecs_task_definition" "signal_detection_agent" {
         {
           name      = "OPENAI_API_KEY"
           valueFrom = "${data.aws_secretsmanager_secret.signal_detection_agent.arn}:OPENAI_API_KEY::"
+        },
+        {
+          name      = "RESEARCH_UNIVERSE_API_KEY"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:ocn/${var.env}/news-retrieval:RESEARCH_UNIVERSE_API_KEY::"
         }
       ]
       logConfiguration = {
@@ -807,7 +875,7 @@ resource "aws_ecs_task_definition" "signal_detection_agent" {
   ])
 
   lifecycle {
-    ignore_changes = [container_definitions]
+    ignore_changes = [container_definitions, task_role_arn]
   }
 }
 
@@ -907,6 +975,100 @@ resource "aws_cloudwatch_event_target" "signal_detection_agent_taiwan_signals" {
       {
         name    = "signal-detection-agent"
         command = ["python", "-m", "src", "classify-taiwan-signals"]
+      }
+    ]
+  })
+}
+
+resource "aws_cloudwatch_event_rule" "signal_detection_agent_korea_signals" {
+  name        = "${var.env}-signal-detection-agent-korea-signals"
+  description = "Classify today's pooled korea_market_signal news-retrieval runs (S2-S7 arithmetic/lookup + S7 model call + translate), twice daily"
+  # news-retrieval fetches korea_market_signal every 4 hours, unbounded
+  # across all 24h/7 days (00/04/08/12/16/20 UTC - see
+  # news_retrieval_korea_market_signal above), unlike Taiwan's
+  # trading-hours-bound schedule - so this rule's own timing isn't picking
+  # a "market close" moment the way Taiwan's is, just spacing two passes
+  # far enough apart to each pool a meaningful number of fetch cycles.
+  #
+  # 15:00 UTC = after KST business hours have fully closed (KST is
+  # UTC+9 - Korea's own business day runs roughly 23:00-14:00 UTC the
+  # previous calendar day, matching the spec's own "filings lodged in the
+  # evening, Korea time" observation already noted on the fetch rule
+  # above) AND after the 12:00 UTC fetch has landed - pools the 00/04/08/12
+  # UTC fetches, catching same-day DART filings and evening/weekend board
+  # meetings.
+  # 22:00 UTC = well before the next US trading day's pre-market (13:00 UTC
+  # / 9am ET), catching the 16:00/20:00 UTC fetches - same "pre-US-open"
+  # framing as Taiwan's second pass, since this is still a US hardware desk
+  # consuming both markets' output on the same trading-day rhythm.
+  # Both passes call classify-korea-signals with default from_date=to_date=
+  # today (UTC), which pools ALL of today's completed runs so far (not just
+  # the latest) and skips already-classified source_ids (via the
+  # idx_agent_classifications_korea_source_id unique index - see db.py), so
+  # the two runs are additive rather than duplicating work, same pattern as
+  # Taiwan's own two-pass schedule.
+  schedule_expression = "cron(0 15,22 * * ? *)"
+}
+
+resource "aws_cloudwatch_event_target" "signal_detection_agent_korea_signals" {
+  rule     = aws_cloudwatch_event_rule.signal_detection_agent_korea_signals.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+  ecs_target {
+    # Family-only ARN (no revision suffix) - same reasoning as Taiwan's own
+    # target above.
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.signal_detection_agent.family}"
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets         = var.private_subnet_ids
+      security_groups = [var.signal_detection_agent_sg_id]
+    }
+  }
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "signal-detection-agent"
+        command = ["python", "-m", "src", "classify-korea-signals"]
+      }
+    ]
+  })
+}
+
+resource "aws_cloudwatch_event_rule" "signal_detection_agent_korea_signals_summary" {
+  name        = "${var.env}-signal-detection-agent-korea-signals-summary"
+  description = "Generate the spec Section 8.4 twice-daily trader summary from today's already-classified korea_market_signal rows"
+  # 30 minutes after each classify-korea-signals pass (15:00/22:00 UTC
+  # above), not at the same time - classification itself takes real time
+  # (S7's own per-article model call, plus translation, over however many
+  # articles pooled that run), so summarizing at the exact same timestamp
+  # risks reading a DB that classification hasn't finished writing to
+  # yet. 30 minutes is a deliberate buffer, not a measured worst-case
+  # runtime - revisit if a real run is ever confirmed to still be
+  # in-flight past this offset.
+  # summarize-korea-signals only reads agent_classifications (no
+  # news-retrieval fetch, no LLM classification calls of its own beyond
+  # the one summary-writer call) - so this is a fast job regardless of
+  # how large the classify pass was.
+  schedule_expression = "cron(30 15,22 * * ? *)"
+}
+
+resource "aws_cloudwatch_event_target" "signal_detection_agent_korea_signals_summary" {
+  rule     = aws_cloudwatch_event_rule.signal_detection_agent_korea_signals_summary.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+  ecs_target {
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.signal_detection_agent.family}"
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets         = var.private_subnet_ids
+      security_groups = [var.signal_detection_agent_sg_id]
+    }
+  }
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "signal-detection-agent"
+        command = ["python", "-m", "src", "summarize-korea-signals"]
       }
     ]
   })

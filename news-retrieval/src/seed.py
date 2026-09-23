@@ -90,6 +90,20 @@ DOMAINS: list[dict[str, Any]] = [
             " OpenData APIs."
         ),
     },
+    {
+        "name": "Korea Market Signal",
+        "slug": "korea_market_signal",
+        "description": (
+            "Regulator filings, Korean-language trade press, and"
+            " semiconductor export statistics for Korea AI-supply-chain"
+            " companies, fetched via DART (Financial Supervisory"
+            " Service), GDELT/RSS, and a Korea Customs Service"
+            " press-release scrape (see KOREA_CUSTOMS_EXPORT_SOURCE"
+            " below - the data.go.kr structured API is blocked behind"
+            " Korean-phone-verified signup, so this is a no-login"
+            " fallback)."
+        ),
+    },
 ]
 
 # P0 core universe (spec Section 14.1), hardcoded pending research-universe
@@ -121,6 +135,63 @@ TAIWAN_TICKER_UNIVERSE: list[dict[str, str]] = [
     {"ticker": "2449", "company": "King Yuan Electronics", "native_name": "京元電子", "exchange": "TWSE"},
     {"ticker": "3661", "company": "Alchip", "native_name": "世芯-KY", "exchange": "TWSE"},
     {"ticker": "5274", "company": "Aspeed Technology", "native_name": "信驊", "exchange": "TPEx"},
+]
+
+
+# Korea Signals spec, Section 3. stock_code is KRX's 6-character listing
+# code, stored as a string everywhere — DART and KRX both return it as a
+# zero-padded string (e.g. SK Hynix is "000660"), and coercing it to an int
+# anywhere in the pipeline silently drops the leading zeros and produces a
+# code that matches no company ("660" instead of "000660").
+#
+# group_prefix + exclude_terms exist because Korean business groups (재벌)
+# share a name across many unrelated listed entities — e.g. multiple
+# "Samsung"-branded companies exist that are not Samsung Electronics. The
+# news-matching step (GDELT/RSS company-name filter) needs these to avoid
+# attributing an unrelated group company's news to the tracked ticker.
+#
+# corp_code (DART's own 8-digit company identifier, distinct from
+# stock_code) is intentionally omitted here — it is resolved at fetch time
+# from DART's corpCode.xml bulk mapping (see src/dart_corp_code.py), not
+# hardcoded, since DART's own filing-list API takes corp_code, not
+# stock_code, and a wrong hardcoded value would fail silently (empty
+# result, not an error).
+KOREA_TICKER_UNIVERSE: list[dict[str, Any]] = [
+    # Tier 1
+    {"ticker": "000660", "company": "SK Hynix", "korean_name": "SK하이닉스", "group_prefix": "SK", "exclude_terms": []},
+    {"ticker": "005930", "company": "Samsung Electronics", "korean_name": "삼성전자", "group_prefix": "Samsung", "exclude_terms": ["Samsung C&T", "Samsung Life", "Samsung SDI", "Samsung Fire"]},
+    # Tier 2 — memory stacking chain
+    {"ticker": "042700", "company": "Hanmi Semiconductor", "korean_name": "한미반도체", "group_prefix": "Hanmi", "exclude_terms": []},
+    # Hanwha Semitech (한화세미텍) has NO public ticker - verified live
+    # against four independent Korean financial sources (alphasquare,
+    # Hankyung, FnGuide, Thinkpool) on 2026-09-22. It is a wholly-owned,
+    # unlisted subsidiary of Hanwha Industrial Solutions, renamed from
+    # 한화정밀기계 (Hanwha Precision Machinery) to 한화세미텍 in Feb 2025.
+    # Ticker 272210 belongs to a DIFFERENT, unrelated company - 한화시스템
+    # (Hanwha System, defense electronics/radar), not this one. This is
+    # exactly the mistake the source spec's "check the code" warning was
+    # flagging. Since it has no stock_code, DART's corp_code lookup and the
+    # customs/filing fetchers below (which are keyed by listed ticker) do
+    # not apply - this entry is a placeholder for the news-only fetchers
+    # (GDELT/RSS), which can still query it by name.
+    {"ticker": None, "company": "Hanwha Semitech", "korean_name": "한화세미텍", "group_prefix": "Hanwha", "exclude_terms": ["Hanwha Solutions", "Hanwha Aerospace", "Hanwha Life", "Hanwha Ocean", "Hanwha System"], "unlisted": True},
+    {"ticker": "089030", "company": "Techwing", "korean_name": "테크윙", "group_prefix": "Techwing", "exclude_terms": []},
+    {"ticker": "058470", "company": "Leeno Industrial", "korean_name": "리노공업", "group_prefix": "Leeno", "exclude_terms": []},
+    {"ticker": "067310", "company": "Hana Micron", "korean_name": "하나마이크론", "group_prefix": "Hana", "exclude_terms": ["Hana Financial", "Hana Bank", "Hana Tour"]},
+    {"ticker": "222800", "company": "Simmtech", "korean_name": "심텍", "group_prefix": "Simmtech", "exclude_terms": []},
+    {"ticker": "007660", "company": "Isu Petasys", "korean_name": "이수페타시스", "group_prefix": "Isu", "exclude_terms": []},
+    {"ticker": "353200", "company": "Daeduck Electronics", "korean_name": "대덕전자", "group_prefix": "Daeduck", "exclude_terms": ["Daeduck GDS"]},
+    # Tier 3 — equipment, materials, chip making and power
+    {"ticker": "402340", "company": "SK Square", "korean_name": "SK스퀘어", "group_prefix": "SK", "exclude_terms": []},
+    {"ticker": "000990", "company": "DB HiTek", "korean_name": "DB하이텍", "group_prefix": "DB", "exclude_terms": ["DB Insurance", "DB Financial"]},
+    {"ticker": "009150", "company": "Samsung Electro-Mechanics", "korean_name": "삼성전기", "group_prefix": "Samsung", "exclude_terms": ["Samsung C&T", "Samsung Life", "Samsung SDI", "Samsung Fire"]},
+    {"ticker": "011070", "company": "LG Innotek", "korean_name": "LG이노텍", "group_prefix": "LG", "exclude_terms": ["LG Electronics", "LG Chem", "LG Display", "LG Energy Solution", "LG Uplus"]},
+    {"ticker": "036930", "company": "Jusung Engineering", "korean_name": "주성엔지니어링", "group_prefix": "Jusung", "exclude_terms": []},
+    {"ticker": "240810", "company": "Wonik IPS", "korean_name": "원익IPS", "group_prefix": "Wonik", "exclude_terms": ["Wonik Materials", "Wonik Holdings"]},
+    {"ticker": "319660", "company": "PSK", "korean_name": "피에스케이", "group_prefix": "PSK", "exclude_terms": []},
+    {"ticker": "357780", "company": "Soulbrain", "korean_name": "솔브레인", "group_prefix": "Soulbrain", "exclude_terms": []},
+    {"ticker": "267260", "company": "HD Hyundai Electric", "korean_name": "HD현대일렉트릭", "group_prefix": "HD Hyundai", "exclude_terms": ["HD Hyundai Heavy Industries", "HD Hyundai Marine"]},
+    {"ticker": "010120", "company": "LS Electric", "korean_name": "LS일렉트릭", "group_prefix": "LS", "exclude_terms": ["LS Cable", "LS Materials"]},
 ]
 
 
@@ -1445,6 +1516,380 @@ TAIWAN_GDELT_SOURCE: dict[str, Any] = {
     },
 }
 
+# DART (Financial Supervisory Service) filing list + document body fetch,
+# scoped to the 19 listed companies in KOREA_TICKER_UNIVERSE (Hanwha
+# Semitech is excluded - confirmed unlisted, no stock_code, no DART
+# corp_code exists for it under either its current or former name).
+# Fetcher (source_type: "dart_filing") implemented in pipeline.py.
+#
+# Covers Korea Signals spec Section 4 S2 (supply contract), S3 (capacity
+# commitment), S4 (preliminary earnings), S5 (guidance disclosure), and S6
+# (rumour adjudication - confirmed live 2026-09-22 that DART carries both
+# the exchange's demand and the company's answer as distinct filings; see
+# the _DART_TARGET_REPORT_PATTERNS comment in pipeline.py for the precision
+# caveat on "hours between the two"). Does NOT cover S1 (Korea Customs,
+# separate source).
+KOREA_DART_SOURCE: dict[str, Any] = {
+    "domain_slug": "korea_market_signal",
+    "url": "dart_filing:korea_market_signal",
+    "name": "DART Filings (Korea)",
+    "source_type": "dart_filing",
+    "frequency_name": "daily",
+    "description": (
+        "Exchange-mandated disclosures (supply contracts, capacity"
+        " investment, preliminary earnings, guidance, rumour adjudication)"
+        " for Korea AI-supply-chain companies, via DART's list.json +"
+        " document.xml, filtered to report_nm patterns matching those"
+        " signal types."
+    ),
+    "config": {
+        "companies": [
+            {"ticker": t["ticker"], "company": t["company"]}
+            for t in KOREA_TICKER_UNIVERSE
+            if t["ticker"] is not None
+        ],
+    },
+}
+
+# KOREA_CUSTOMS_SOURCE_STATUS: covers Korea Signals spec Section 4 S1
+# (export surprise), the doc's headline signal.
+#
+# THE ORIGINAL BLOCKER (still true, kept for context): the clean
+# structured REST API for this data is data.go.kr, dataset 15157908
+# ("관세청_수출 주요품목별 10일 단위 잠정치 통계") - endpoint, params
+# (serviceKey/strtYymm/endYymm), and response fields confirmed live
+# 2026-09-22. Getting a serviceKey requires a personal data.go.kr account,
+# and that signup's "정보입력" step has a REQUIRED 휴대전화번호 (mobile
+# phone) field wired to Korea's national identity-verification system
+# (NICE/KCB) - it validates the phone's carrier subscription is tied to a
+# real Korean identity credential (for a foreigner, an Alien Registration
+# Card). No foreigner-specific signup track exists. A non-resident
+# without an ARC-linked Korean phone number cannot complete this signup.
+# KOSIS is residency-gated the same way; KITA gates the same data behind
+# paid Korean corporate trade-registration membership (harder, not
+# easier); tradedata.go.kr's own API layer routes back through the same
+# data.go.kr account system.
+#
+# RESOLVED 2026-09-23 via a 4th option not in the original list: Korea
+# Customs Service's own public press-release board
+# (customs.go.kr/kcs/na/ntt/..., bbsId=1362, mi=2891) publishes the same
+# underlying figure with NO login required at all - confirmed live. This
+# is what KOREA_CUSTOMS_EXPORT_SOURCE below scrapes (fetcher:
+# source_type "kr_customs_export" in pipeline.py).
+#
+# Confirmed live 2026-09-23: this board has no RSS feed, and post IDs
+# (nttSn) are a global auto-increment across ~6,600+ unrelated posts, not
+# usable as a date pattern - the fetcher instead uses the board's own
+# title-search (a POST, not GET query params - a GET-param guess 404'd)
+# to isolate the recurring "수출입 현황" report family and take the
+# newest match.
+#
+# What the source actually gives us, confirmed live against real 10-day
+# and 20-day releases: a dollar figure plus a superlative record/streak
+# claim (e.g. "반도체(341억 달러) 수출 동기간 역대최대" - semiconductor
+# exports of $34.1bn, a period record) - NOT a year-over-year percentage
+# and NOT a share-of-total-exports percentage (checked every mention of
+# "반도체" on a real page and searched for "차지"/share-of, found neither
+# at 10-day/20-day granularity; a %-growth figure does appear on the
+# separate monthly "확정치"/confirmed release, ~15th-18th of the
+# following month, a 4th release type this board also carries).
+#
+# This means Section 5.1's "change against the same period one year
+# earlier" and "spread over the last 12 equivalent periods" cannot come
+# from the source's own text at 10-day granularity - this pipeline must
+# compute both itself from its own stored history of these dollar
+# figures, exactly matching the doc's own build note that "this rule
+# needs two years of stored history before it means anything." That
+# history is not backfilled, and S1 is now PERMANENTLY OUT OF SCOPE
+# (decided 2026-09-23) rather than pending - Bank of Korea ECOS was the
+# agreed backfill source, but its real signup flow was confirmed live to
+# require the same Korean mobile-carrier identity verification (PASS,
+# run by NICE) that already blocked data.go.kr - the earlier research
+# calling ECOS "no Korean phone required" was wrong. No Korean contact is
+# available to register on our behalf, and a paid vendor route (e.g.
+# CEIC) was considered and explicitly not pursued. classify_export_
+# surprise() is not implemented anywhere in signal-detection-agent as a
+# result - see that service's korea_signal_classifier.py module docstring
+# for the full record. This source (KOREA_CUSTOMS_EXPORT_SOURCE) stays
+# seeded regardless - it still fetches the newest release's raw figure
+# for the record and for the cross-check note below, even with no
+# classifier ever consuming it for S1's own arithmetic rule.
+#
+# Also agreed but not yet built: cross-checking this scrape against
+# same-day Korean wire coverage (Yonhap/Hankyung/ETNews all report this
+# figure within minutes of release) as a disagreement detector - if the
+# scraped number and the wire coverage disagree, that is a signal the
+# parser broke, not a signal to silently publish. This would reuse the
+# Korean news layer already being built for S7, not a new source type.
+KOREA_CUSTOMS_EXPORT_SOURCE: dict[str, Any] = {
+    "domain_slug": "korea_market_signal",
+    "url": "kr_customs_export:korea_market_signal",
+    "name": "Korea Customs Export Press Release",
+    "source_type": "kr_customs_export",
+    "frequency_name": "daily",
+    "description": (
+        "Semiconductor export figures scraped from Korea Customs"
+        " Service's public press-release board (no login required) -"
+        " fallback for the data.go.kr structured API, which is blocked"
+        " behind Korean-phone-verified account signup. Publishes the"
+        " newest 10-day/20-day/monthly release's dollar figure; YoY% is"
+        " computed downstream from this pipeline's own stored history,"
+        " not read from the source."
+    ),
+}
+
+# Korean-language trade/business press RSS feeds - plain rss source_type
+# (no config needed beyond the feed url itself), same as SUBSTACK_SOURCES.
+# Covers Korea Signals spec Section 4 S7 (qualification news), upstream of
+# the three-filter + LLM classification pipeline that lives in
+# signal-detection-agent (see that service's CLAUDE.md) - this service's
+# job is fetch/dedup only.
+#
+# Only THE ELEC (below) has a dedicated semiconductor/materials-equipment
+# section feed - ZDNet Korea, BusinessPost, and DigitalDaily do not;
+# semiconductor coverage appears as one recurring topic within their
+# general business/industry feeds, not an isolated stream. This is a known
+# tradeoff, not an oversight - broader feeds mean more volume for
+# signal-detection-agent's classification filters to work through.
+# (ETNews was also tried and dropped - see the comment further down where
+# it used to sit, kept as a record of why.)
+KOREA_RSS_SOURCES: list[dict[str, Any]] = [
+    {
+        "domain_slug": "korea_market_signal",
+        "url": "https://www.thelec.kr/rss/S1N2.xml",
+        "name": "THE ELEC - Semiconductors",
+        "frequency_name": "daily",
+        "description": (
+            "디일렉 (THE ELEC), Korean specialist electronics-component"
+            " trade press - semiconductors section. Closest Korean"
+            " equivalent to DIGITIMES; founded specifically to cover"
+            " Korea's component/equipment industry, which general/economic"
+            " media under-covers."
+        ),
+    },
+    {
+        "domain_slug": "korea_market_signal",
+        "url": "https://www.thelec.kr/rss/S1N3.xml",
+        "name": "THE ELEC - Materials & Equipment",
+        "frequency_name": "daily",
+        "description": (
+            "디일렉 (THE ELEC) materials & equipment section - directly"
+            " relevant to the Tier 2 memory-stacking-chain companies in"
+            " KOREA_TICKER_UNIVERSE."
+        ),
+    },
+    # ETNews (전자신문) was tried and DROPPED - both candidate section feeds
+    # (06061/장비/equipment, 06062/부품/components; ETNews has no dedicated
+    # semiconductor section at all, confirmed against the site's own RSS
+    # hub taxonomy) worked cleanly when first live-tested 2026-09-22, but a
+    # second check hours later returned the EXACT SAME 50 entries, same
+    # timestamps, all dated 2026-06-25 - a ~3-month-old snapshot, not a
+    # live feed. Confirmed stuck, not a transient delay: two independent
+    # fetches produced identical stale output rather than any forward
+    # movement. Decision 2026-09-23: drop rather than keep flagged, since a
+    # frozen "daily" source would silently stop contributing without any
+    # error to notice - not worth the false confidence of a source entry
+    # that looks live in seed.py but isn't. Revisit by re-testing
+    # http://rss.etnews.com/06061.xml directly if ETNews coverage is
+    # wanted again later.
+    {
+        "domain_slug": "korea_market_signal",
+        "url": "https://feeds.feedburner.com/zdkorea",
+        "name": "ZDNet Korea",
+        "frequency_name": "daily",
+        "description": (
+            "지디넷코리아 (ZDNet Korea), general Korean tech/IT news -"
+            " broader audience than THE ELEC, general feed (no"
+            " dedicated semiconductor section)."
+        ),
+    },
+    {
+        "domain_slug": "korea_market_signal",
+        "url": "https://www.businesspost.co.kr/rss/Article_3.xml",
+        "name": "BusinessPost - Corporate & Industry",
+        "frequency_name": "daily",
+        "description": (
+            "비즈니스포스트 (BusinessPost), Korean business news -"
+            " Corporate & Industry (기업과산업) section, general feed"
+            " with tech/industry crossover (no dedicated semiconductor"
+            " section)."
+        ),
+    },
+    {
+        "domain_slug": "korea_market_signal",
+        "url": "https://www.ddaily.co.kr/rss.xml",
+        "name": "DigitalDaily",
+        "frequency_name": "daily",
+        "description": (
+            "디지털데일리 (DigitalDaily), Korean IT/tech trade press -"
+            " general feed (no dedicated semiconductor section)."
+        ),
+    },
+    # Yonhap's only confirmed-working feed (en.yna.co.kr/RSS/news.xml) is
+    # its general English-language wire, not a business/economy section -
+    # no section-specific feed URL exists (checked economy.xml,
+    # business.xml, industry.xml, markets.xml, all 404; no category field
+    # or URL-encoded section code found on individual entries either, so
+    # there's no structured field to filter on). Live-tested 2026-09-23: a
+    # title-keyword regex against a real 102-entry sample matched 15
+    # (16%) with zero false positives - correctly excluded all Asian
+    # Games/politics/court content while catching every genuinely
+    # business/economy-relevant headline (Seoul stocks, BOK, growth
+    # forecast, consumer sentiment, Naver labor action, etc.). Applied via
+    # config.title_filter (see _parse_feed in pipeline.py) rather than
+    # dropping the source outright the way ETNews was, since the content
+    # that DOES pass is real, fresh (today's timestamps), and on-target -
+    # unlike ETNews, this isn't a dead/stale source, just an unfiltered
+    # one without this regex.
+    {
+        "domain_slug": "korea_market_signal",
+        "url": "https://en.yna.co.kr/RSS/news.xml",
+        "name": "Yonhap News (business/economy filtered)",
+        "frequency_name": "daily",
+        "description": (
+            "연합뉴스 (Yonhap News Agency), English-language wire -"
+            " general/mixed feed (no business-specific section feed"
+            " exists), filtered post-fetch to business/economy/markets"
+            " headlines via config.title_filter since there is no"
+            " structured category field to filter on instead."
+        ),
+        "config": {
+            "title_filter": (
+                r"\b(stocks?|won\b|\bBOK\b|econom|GDP|growth forecast|"
+                r"chip(s|maker)?|semiconductor|exports?|imports?|"
+                r"trade (deficit|surplus|balance|talks|war)|"
+                r"market (woes|slowdown|data)|inflation|"
+                r"consumer (sentiment|price)|investment|manufactur|"
+                r"Samsung|SK Hynix|\bLG\b|Hyundai|Naver|Kakao|earnings|"
+                r"profit|revenue|billion|trillion|fiscal|monetary policy|"
+                r"\bADB\b|\bIMF\b|insurance|loan|delinquency|debt|"
+                r"power plant|acquisition|stake\b|\bFTC\b|antitrust|"
+                r"banknotes)"
+            ),
+        },
+    },
+]
+
+# GDELT DOC 2.0 API scoped to Korean-language press for the Korea universe,
+# reusing the existing gdelt fetcher (source_type: "gdelt", same
+# _fetch_gdelt/_fetch_one_gdelt code path as geopolitical_news and
+# TAIWAN_GDELT_SOURCE) - just different queries.
+#
+# Confirmed live 2026-09-22: "sourcelang:korean sourcecountry:KS" (KS, not
+# KR - GDELT's sourcecountry operator uses FIPS 10-4 codes, not ISO 3166;
+# KR is not a valid FIPS code) returns genuine Korean-language, Korea-
+# domiciled results including real trade press (etnews.com).
+#
+# Short-native-name rejection (same GDELT quirk documented in
+# TAIWAN_GDELT_SOURCE above, for CJK-script queries under ~3 characters)
+# was NOT independently re-confirmed for Korean/Hangul specifically - live
+# testing was blocked by GDELT's own rate limit (429, "limit requests to
+# one every 5 seconds") persisting well past that stated window across
+# multiple spaced-out retries on 2026-09-22, so this could not be verified
+# before this was written. Applying the same defensive threshold Taiwan
+# already uses is low-cost even if unnecessary here (worst case: one extra,
+# redundant English-name query for the one affected company), so it is
+# applied rather than assumed unneeded. Of the 19 listed companies, only
+# Simmtech's Korean name (심텍, 2 characters) falls under the threshold -
+# a much smaller exposure than Taiwan's 11/20, since almost all Korean
+# company names in this universe are naturally 3+ characters.
+_KOREA_GDELT_MIN_QUERY_CHARS = 3
+
+KOREA_GDELT_SOURCE: dict[str, Any] = {
+    "domain_slug": "korea_market_signal",
+    "url": "gdelt:korea_market_signal",
+    "name": "GDELT DOC API (Korea)",
+    "source_type": "gdelt",
+    "frequency_name": "daily",
+    "description": (
+        "Korean-language press coverage via GDELT DOC 2.0, scoped to"
+        " sourcelang:korean sourcecountry:KS, queried per company by"
+        " Korean name (when >=3 characters) and English name."
+    ),
+    "config": {
+        "queries": [
+            q
+            for t in KOREA_TICKER_UNIVERSE
+            for q in (
+                [f"{t['korean_name']} sourcelang:korean sourcecountry:KS"]
+                if len(t["korean_name"]) >= _KOREA_GDELT_MIN_QUERY_CHARS
+                else []
+            ) + [f"{t['company']} sourcelang:korean sourcecountry:KS"]
+        ],
+        # Maps each query string back to its ticker (or, for the one
+        # unlisted company, its name) - GDELT queries by company name, not
+        # ticker, so the fetcher otherwise has no way to attribute a result.
+        # Used for the title-similarity dedup, scoped per-company.
+        "query_ticker": {
+            q: (t["ticker"] or t["company"])
+            for t in KOREA_TICKER_UNIVERSE
+            for q in (
+                ([f"{t['korean_name']} sourcelang:korean sourcecountry:KS"]
+                 if len(t["korean_name"]) >= _KOREA_GDELT_MIN_QUERY_CHARS else [])
+                + [f"{t['company']} sourcelang:korean sourcecountry:KS"]
+            )
+        },
+        "query_english_name": {
+            q: t["company"]
+            for t in KOREA_TICKER_UNIVERSE
+            for q in (
+                ([f"{t['korean_name']} sourcelang:korean sourcecountry:KS"]
+                 if len(t["korean_name"]) >= _KOREA_GDELT_MIN_QUERY_CHARS else [])
+                + [f"{t['company']} sourcelang:korean sourcecountry:KS"]
+            )
+        },
+    },
+}
+
+# GDELT DOC 2.0 API scoped to ENGLISH-language coverage of the same Korea
+# universe, for the English-coverage check (Korea Signals spec Section 7
+# Step 5: "run the same search in English and record whether anything was
+# found, and when"; displayed per-item in Section 6.4 as "English press:
+# None found at time of retrieval"). This service's job is only to fetch
+# and store this data - the actual comparison (does an English article
+# exist, and if so was it published before/after the Korean one) is
+# signal-detection-agent's job, computed from these rows plus
+# KOREA_GDELT_SOURCE's rows, not done here.
+#
+# Deliberately does NOT share ticker keys with KOREA_GDELT_SOURCE's
+# query_ticker, even though both ultimately concern the same companies -
+# _fetch_gdelt's title-similarity dedup (pipeline.py) is scoped per ticker
+# key across ALL merged GDELT sources in one run, and a same-ticker-key
+# collision here would let the dedup logic silently drop a genuine English
+# article as a "near-duplicate" of the Korean one, defeating the entire
+# point of fetching both. Ticker keys are suffixed "-en" so the two
+# languages' articles are dedup-scoped separately while both still get
+# stored, with metadata.ticker letting a downstream reader join them back
+# to the same company by stripping the suffix.
+KOREA_GDELT_ENGLISH_SOURCE: dict[str, Any] = {
+    "domain_slug": "korea_market_signal",
+    "url": "gdelt:korea_market_signal_english",
+    "name": "GDELT DOC API (Korea - English coverage check)",
+    "source_type": "gdelt",
+    "frequency_name": "daily",
+    "description": (
+        "English-language press coverage of the same Korea AI-supply-chain"
+        " companies via GDELT DOC 2.0, scoped to sourcelang:english."
+        " Exists solely to test whether/when English coverage of a fact"
+        " exists, for comparison against the Korean-language sources -"
+        " not a primary signal source itself."
+    ),
+    "config": {
+        "queries": [
+            f"{t['company']} sourcelang:english"
+            for t in KOREA_TICKER_UNIVERSE
+        ],
+        "query_ticker": {
+            f"{t['company']} sourcelang:english": f"{t['ticker'] or t['company']}-en"
+            for t in KOREA_TICKER_UNIVERSE
+        },
+        "query_english_name": {
+            f"{t['company']} sourcelang:english": t["company"]
+            for t in KOREA_TICKER_UNIVERSE
+        },
+    },
+}
+
 # GDELT DOC 2.0 API, queried once per individual theme code (not OR-joined -
 # only single bare "theme:X" queries are confirmed working against the live
 # API; multi-theme "(theme:X OR theme:Y)" queries could not be verified and
@@ -1959,6 +2404,15 @@ SOURCES: list[dict[str, Any]] = [
     *TAIWAN_REVENUE_SOURCES,
     *TAIWAN_MATERIAL_SOURCES,
     TAIWAN_GDELT_SOURCE,
+    # ------------------------------------------------------------------
+    # Korea market signal (DART + Korean-language trade press RSS + GDELT
+    # + Customs export press-release scrape)
+    # ------------------------------------------------------------------
+    KOREA_DART_SOURCE,
+    *KOREA_RSS_SOURCES,
+    KOREA_GDELT_SOURCE,
+    KOREA_GDELT_ENGLISH_SOURCE,
+    KOREA_CUSTOMS_EXPORT_SOURCE,
 ]
 
 # VC commentary / investor blogs.

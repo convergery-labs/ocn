@@ -15,7 +15,9 @@ import feedparser
 import httpx
 import trafilatura
 from openai import OpenAI
+from trafilatura.settings import use_config
 
+from dart_corp_code import resolve_corp_codes
 from models.articles import (
     append_also_reported_by,
     get_already_stored_urls,
@@ -115,8 +117,36 @@ def _extract_body(entry: Any, url: str, no_fetch: bool) -> str | None:
         return clean_body
     if no_fetch:
         return None
-    downloaded = trafilatura.fetch_url(url)
+    downloaded = trafilatura.fetch_url(url, config=_TRAFILATURA_CONFIG)
     return trafilatura.extract(downloaded) if downloaded else None
+
+
+# feedparser's own default User-Agent identifies it as a bot and is
+# rejected outright (HTTP 403) by at least one real, on-target Korean RSS
+# feed (hankyung.com) that returns clean 200s for a normal browser
+# User-Agent - see _parse_feed below. Applied to every RSS source, not
+# just the one feed where this was caught, since any other WAF-protected
+# feed would fail the same silent way (bozo=True, 0 entries, easy to
+# misread as "this source is dead" rather than "this source is blocking
+# feedparser specifically").
+_RSS_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    " (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+
+# Trafilatura's own default fetch User-Agent identifies it as a bot and is
+# rejected outright (HTTP 403) by at least one real, on-target source
+# (dailymail.com, confirmed live: 403 with Trafilatura's default UA, clean
+# 200 with a normal browser UA) - same root cause _RSS_USER_AGENT above
+# already fixes for RSS feeds, applied here to every trafilatura.fetch_url
+# call (GDELT, SerpAPI, and the RSS content:encoded-fallback body fetches)
+# so a WAF blocking Trafilatura specifically doesn't read as "this source
+# has no body text". Does not fix sites that block scraping regardless of
+# UA (confirmed live: reuters.com, bloomberg.com return 401/403 even with
+# this same browser UA) - those still fail open to a null body, same as
+# before.
+_TRAFILATURA_CONFIG = use_config()
+_TRAFILATURA_CONFIG.set("DEFAULT", "USER_AGENTS", _RSS_USER_AGENT)
 
 
 def _parse_feed(source: dict, cutoff: datetime) -> list[dict]:
@@ -131,9 +161,26 @@ def _parse_feed(source: dict, cutoff: datetime) -> list[dict]:
     """
     url: str = source["url"]
     no_fetch: bool = source["no_fetch"]
+    # Optional post-fetch title filter (config.title_filter, a regex
+    # pattern string) - for a general/mixed-topic feed with no
+    # business/economy section feed of its own (e.g. Yonhap's only
+    # confirmed-working feed is its general wire, ~85% off-topic for this
+    # pipeline's purposes: politics, diplomacy, sports). None/absent means
+    # no filtering at all, unchanged behavior for every other RSS source.
+    title_filter = (source.get("config") or {}).get("title_filter")
+    title_filter_re = re.compile(title_filter, re.IGNORECASE) if title_filter else None
     t0 = time.perf_counter()
-    feed = feedparser.parse(url)
+    # feedparser's own default User-Agent (UniversalFeedParser/...)
+    # identifies it as a bot - confirmed live 2026-09-23 that at least one
+    # real, on-target Korean feed (hankyung.com/feed/economy) 403s that
+    # default outright while returning clean 200s + full content for a
+    # normal browser User-Agent. Same underlying risk class as the
+    # DART/document-fetch WAF issue found earlier - a source can look
+    # "broken" (bozo=True, 0 entries) when it's actually just bot-blocked,
+    # not genuinely dead the way ETNews's frozen feed was.
+    feed = feedparser.parse(url, request_headers={"User-Agent": _RSS_USER_AGENT})
     results = []
+    filtered_out = 0
     for entry in feed.entries:
         pub_date = None
         if (
@@ -145,9 +192,13 @@ def _parse_feed(source: dict, cutoff: datetime) -> list[dict]:
             )
             if pub_date < cutoff:
                 continue
+        title = entry.get("title", "")
+        if title_filter_re and not title_filter_re.search(title):
+            filtered_out += 1
+            continue
         article_url = entry.get("link", "")
         results.append({
-            "title": entry.get("title", ""),
+            "title": title,
             "url": article_url,
             "published": entry.get("published", ""),
             "source": feed.feed.get("title", url),
@@ -156,8 +207,8 @@ def _parse_feed(source: dict, cutoff: datetime) -> list[dict]:
             "_pub_date": pub_date,
         })
     logger.info(
-        "[TIMER] feed=%s articles=%d elapsed=%.2fs",
-        url, len(results), time.perf_counter() - t0,
+        "[TIMER] feed=%s articles=%d filtered_out=%d elapsed=%.2fs",
+        url, len(results), filtered_out, time.perf_counter() - t0,
     )
     return results
 
@@ -275,7 +326,10 @@ def _fetch_one_serpapi(source: dict, days_back: int, api_key: str) -> list[dict]
                     candidates.append(a)
 
     def _fetch_body(url: str) -> str | None:
-        return trafilatura.extract(trafilatura.fetch_url(url)) if url else None
+        if not url:
+            return None
+        downloaded = trafilatura.fetch_url(url, config=_TRAFILATURA_CONFIG)
+        return trafilatura.extract(downloaded) if downloaded else None
 
     with ThreadPoolExecutor(max_workers=10) as executor:
         bodies = list(executor.map(_fetch_body, [a["url"] for a in candidates]))
@@ -904,11 +958,52 @@ _TAIWAN_PRESS_ALLOWLIST: frozenset[str] = frozenset({
     "nownews.com",    # NOWnews (今日新聞) - general Taiwan news outlet, same reasoning
 })
 
+# Same purpose as _TAIWAN_PRESS_ALLOWLIST, scoped to Korea instead - a
+# starter list, not exhaustive by design (per the Korea Signals spec's own
+# "trusted Korean list" framing and explicit user instruction not to make
+# this comprehensive), of domains this project has directly, live-verified
+# as real Korean trade/business press: the five RSS feeds already seeded in
+# KOREA_RSS_SOURCES below (thelec.kr, feedburner.com/zdkorea resolves to
+# zdnet.co.kr bylines, businesspost.co.kr, ddaily.co.kr, and Yonhap's
+# yna.co.kr), plus hankyung.com (Korea Economic Daily - confirmed reachable
+# during the RSS User-Agent fix earlier in this build, even though it isn't
+# one of the seeded RSS sources itself). GDELT can surface other genuine
+# Korean outlets beyond this starter set the same way real Taiwan runs
+# surfaced n.yam.com/finance.ettoday.net/etc. after the fact - extend as
+# more legitimate Korean outlets are observed in real GDELT results, same
+# process as Taiwan's own list above, not by trying to enumerate every
+# Korean publication upfront.
+_KOREA_PRESS_ALLOWLIST: frozenset[str] = frozenset({
+    "thelec.kr",          # THE ELEC (디일렉)
+    "zdnet.co.kr",        # ZDNet Korea (지디넷코리아)
+    "businesspost.co.kr", # BusinessPost (비즈니스포스트)
+    "ddaily.co.kr",       # DigitalDaily (디지털데일리)
+    "yna.co.kr",          # Yonhap (연합뉴스)
+    "hankyung.com",       # Korea Economic Daily (한국경제)
+})
+
+# Bug fixed 2026-09-23, live-confirmed against the test DB: BOTH
+# KOREA_GDELT_SOURCE and KOREA_GDELT_ENGLISH_SOURCE (seed.py) populate
+# query_ticker, so both were routed through _filter_by_domain_allowlist -
+# which, before this map existed, only ever checked against
+# _TAIWAN_PRESS_ALLOWLIST regardless of which domain's GDELT source called
+# it. Result: every real Korea GDELT article (Korean-language AND the
+# English-coverage-check source) was being silently dropped, since no
+# Korean or English-wire domain is on the Taiwan-specific list - confirmed
+# by a direct query against the local test DB returning zero
+# source_category='gdelt' rows ever stored under korea_market_signal,
+# despite the source being seeded and scheduled since early in this build.
+_DOMAIN_PRESS_ALLOWLIST: dict[str, frozenset[str]] = {
+    "taiwan_market_signal": _TAIWAN_PRESS_ALLOWLIST,
+    "korea_market_signal": _KOREA_PRESS_ALLOWLIST,
+}
+
 
 def _filter_by_domain_allowlist(
-    articles: list[dict], query_ticker: dict[str, str],
+    articles: list[dict], query_ticker: dict[str, str], domain_slug: str,
 ) -> list[dict]:
-    """Drop GDELT articles whose domain is not on the Taiwan press allowlist.
+    """Drop GDELT articles whose domain is not on ``domain_slug``'s press
+    allowlist (see ``_DOMAIN_PRESS_ALLOWLIST``).
 
     Only touches ticker-scoped GDELT articles (those whose ``_query`` is in
     ``query_ticker`` - the same test used by dedup) - other sources pass
@@ -918,20 +1013,40 @@ def _filter_by_domain_allowlist(
     source_category - at this point in the pipeline that field doesn't
     exist yet.
 
+    A ticker key ending in ``-en`` (KOREA_GDELT_ENGLISH_SOURCE's convention
+    - see seed.py) marks an English-coverage-CHECK query, not a primary
+    signal source: its whole purpose is "does English coverage exist at
+    all", so allowlisting it against a trusted-press list is the wrong
+    concept (Reuters/Bloomberg/etc. covering a story is exactly the
+    positive result this check wants to detect, not something to filter
+    out for being untrusted) - passed through unconditionally instead.
+
     GDELT's ``domain`` field (stored as the article's ``source``) is
     compared case-insensitively; articles with no ``source`` set are
     dropped (fail-closed here, unlike the embedding fail-open logic below,
     since a domain we can't identify at all can't be verified as
-    legitimate Taiwan press).
+    legitimate press for this market).
+
+    Bug fixed 2026-09-23: this used to check unconditionally against
+    _TAIWAN_PRESS_ALLOWLIST regardless of which domain's GDELT source
+    called it, which silently dropped every real Korea GDELT article
+    (Korean-language AND English-coverage-check) - confirmed live against
+    the test DB (zero source_category='gdelt' rows ever stored under
+    korea_market_signal despite the source being seeded and scheduled).
     """
+    allowlist = _DOMAIN_PRESS_ALLOWLIST.get(domain_slug, frozenset())
     kept = []
     dropped = 0
     for a in articles:
-        if not query_ticker.get(a.get("_query", "")):
+        ticker_key = query_ticker.get(a.get("_query", ""))
+        if not ticker_key:
+            kept.append(a)
+            continue
+        if ticker_key.endswith("-en"):
             kept.append(a)
             continue
         domain = (a.get("source") or "").lower()
-        if domain in _TAIWAN_PRESS_ALLOWLIST:
+        if domain in allowlist:
             kept.append(a)
         else:
             dropped += 1
@@ -1144,7 +1259,9 @@ def _dedup_by_title_similarity(
 # the same underlying story from multiple outlets with differently-worded
 # titles, same problem _dedup_by_title_similarity solves for Taiwan GDELT,
 # just scoped by domain instead of ticker.
-_TITLE_DEDUP_DOMAINS: frozenset[str] = frozenset({"ai_news", "smart_money", "geopolitical_news"})
+_TITLE_DEDUP_DOMAINS: frozenset[str] = frozenset({
+    "ai_news", "smart_money", "geopolitical_news", "korea_market_signal",
+})
 
 # ai_news/smart_money: wider than Taiwan GDELT's 24h (_TITLE_DEDUP_WINDOW_HOURS)
 # - RSS/SerpAPI/NewsAPI sources publish re-coverage of the same story across a
@@ -1164,6 +1281,13 @@ _DOMAIN_TITLE_DEDUP_WINDOW_HOURS: dict[str, int] = {
     "ai_news": 48,
     "smart_money": 48,
     "geopolitical_news": 168,
+    # Korea Signals spec Section 5.7, Filter 3: "drop anything that repeats
+    # a story already seen in the last day" - literally 24h, unlike the
+    # other domains here (which widened past 24h after missing real
+    # duplicates - see comment below). No such finding yet for Korea; start
+    # at the spec's literal number rather than importing another domain's
+    # correction pre-emptively.
+    "korea_market_signal": 24,
 }
 
 # Per-domain override of _TITLE_DEDUP_SIMILARITY_THRESHOLD (0.90 default,
@@ -1194,6 +1318,23 @@ _DOMAIN_TITLE_DEDUP_SIMILARITY_THRESHOLD: dict[str, float] = {
     "geopolitical_news": 0.82,
 }
 
+# korea_market_signal mixes DART filings, Customs export data, and RSS/GDELT
+# news in one domain - unlike ai_news/smart_money/geopolitical_news, which
+# are news-only. The Korea Signals spec's S7 "drop anything that repeats a
+# story already seen" (Filter 3) is a NEWS-story rule; a DART filing header
+# ("SK Hynix: 단일판매·공급계약체결") is never a near-duplicate of a real
+# headline by embedding similarity in practice, but running the comparison
+# over filing/customs rows at all is still wasted work and the wrong
+# candidate pool in principle - so korea_market_signal excludes any article
+# whose stored/incoming metadata.source_category is one of these from BOTH
+# sides of the comparison (new batch and DB-side recent candidates), rather
+# than trying to enumerate "is a news source_type" (RSS articles set no
+# source_category at all at this point in the pipeline - see _parse_feed -
+# so absence of source_category means "news", not "unknown").
+_DOMAIN_TITLE_DEDUP_EXCLUDED_CATEGORIES: dict[str, frozenset[str]] = {
+    "korea_market_signal": frozenset({"dart_filing", "kr_customs_export"}),
+}
+
 
 def _dedup_by_title_similarity_for_domain(
     articles: list[dict], domain_slug: str,
@@ -1210,9 +1351,30 @@ def _dedup_by_title_similarity_for_domain(
     Embedding failures fail open: an article whose title couldn't be
     embedded, or whose only comparison candidates lack a stored embedding,
     is kept rather than silently dropped or silently deduped.
+
+    Domains in ``_DOMAIN_TITLE_DEDUP_EXCLUDED_CATEGORIES`` mix news articles
+    with non-news rows (e.g. korea_market_signal's DART filings/Customs
+    export data) - rows whose ``metadata.source_category`` is in that set
+    are excluded from both the incoming batch and the DB-side candidate
+    pool, since this check is a news-story rule, not a general dedup.
     """
     if not articles:
         return articles
+
+    excluded_categories = _DOMAIN_TITLE_DEDUP_EXCLUDED_CATEGORIES.get(domain_slug)
+    if excluded_categories:
+        non_news = [
+            a for a in articles
+            if (a.get("metadata") or {}).get("source_category") in excluded_categories
+        ]
+        articles = [
+            a for a in articles
+            if (a.get("metadata") or {}).get("source_category") not in excluded_categories
+        ]
+        if not articles:
+            return non_news
+    else:
+        non_news = []
 
     api_key = os.environ.get("OPENROUTER_API_KEY")
     new_embeddings = _embed_titles([a["title"] for a in articles], api_key)
@@ -1220,6 +1382,11 @@ def _dedup_by_title_similarity_for_domain(
     recent = get_recent_articles_for_domain(
         domain_slug, hours=_DOMAIN_TITLE_DEDUP_WINDOW_HOURS[domain_slug],
     )
+    if excluded_categories:
+        recent = [
+            c for c in recent
+            if (c.get("metadata") or {}).get("source_category") not in excluded_categories
+        ]
     candidates = [
         (c.get("title"), (c.get("metadata") or {}).get("title_embedding"),
          c.get("id"), None)
@@ -1289,7 +1456,7 @@ def _dedup_by_title_similarity_for_domain(
         "[%s] title-similarity dedup: %d article(s), %d dropped as"
         " near-duplicates", domain_slug, len(articles), dropped,
     )
-    return kept
+    return kept + non_news
 
 
 def _fetch_one_gdelt(query: str, days_back: int):
@@ -1469,7 +1636,11 @@ def _fetch_gdelt(sources: list[dict], days_back: int) -> list[dict]:
     # Trafilatura fetch.
     if query_ticker:
         before_stage_a = len(articles)
-        articles = _filter_by_domain_allowlist(articles, query_ticker)
+        # All sources passed into one _fetch_gdelt call come from the same
+        # run() invocation, i.e. the same domain_slug (see _fetch_articles'
+        # per-domain routing) - safe to read off the first source.
+        domain_slug = sources[0].get("domain_slug", "") if sources else ""
+        articles = _filter_by_domain_allowlist(articles, query_ticker, domain_slug)
         articles = _filter_by_company_name_in_title(
             articles, query_ticker, query_english_name,
         )
@@ -1486,7 +1657,7 @@ def _fetch_gdelt(sources: list[dict], days_back: int) -> list[dict]:
         )
 
     def _fetch_body(url: str) -> str | None:
-        downloaded = trafilatura.fetch_url(url)
+        downloaded = trafilatura.fetch_url(url, config=_TRAFILATURA_CONFIG)
         return trafilatura.extract(downloaded) if downloaded else None
 
     with ThreadPoolExecutor(max_workers=10) as executor:
@@ -1944,6 +2115,467 @@ def _fetch_tpex_material(sources: list[dict]) -> list[dict]:
     )
 
 
+# DART (Financial Supervisory Service) filing list + document body fetch.
+# Covers Korea Signals spec Section 4's S2 (supply contract), S3 (capacity
+# commitment), S4 (preliminary earnings), S5 (guidance disclosure), and S6
+# (rumour adjudication) - all five live under DART's "I" (거래소공시/exchange
+# disclosure) pblntf_ty category, since DART mirrors KRX-mandated
+# disclosures rather than having a distinct structured endpoint per report
+# type (confirmed 2026-09-22 against DART's own official pblntf_detail_ty
+# taxonomy - no dedicated code exists for e.g. "supply contract"
+# specifically). Report-type identification is therefore by matching
+# report_nm text, not a query parameter.
+#
+# S6 was an open question (does DART carry the exchange's rumour-demand
+# separately from the company's answer?) - resolved live 2026-09-22 against
+# a real SK Hynix example (corp_code 00164779, rcept_no 20260821800214 /
+# 20260821800524): YES, DART carries both as distinct filings, and flr_nm
+# distinguishes them (exchange = "유가증권시장본부", company = the ticker's
+# own name). The precision rule 5.6 needs ("hours between the two") is NOT
+# available from list.json's rcept_dt (date-only, no time component) - both
+# filings showed the same date. It IS recoverable, but only from inside the
+# ANSWER filing's document body, which restates the original demand time as
+# free text, e.g. "거래소의 조회요구(2026년 08월 21일 11:35)에 따른
+# 공시사항임". Extracting that timestamp from body text is a downstream
+# parsing task (signal-detection-agent), not done here - this fetcher's job
+# is only to ensure both filings, bodies included, reach storage (see
+# "조회공시" in _DART_TARGET_REPORT_PATTERNS below).
+#
+# S1 (export data) is NOT covered here - separate source (Korea Customs).
+_DART_LIST_URL = "https://opendart.fss.or.kr/api/list.json"
+_DART_DOCUMENT_URL = "https://opendart.fss.or.kr/api/document.xml"
+
+# Substrings matched against report_nm (DART's filing title) to decide which
+# filings are worth a full document-body fetch. Matched as "contains", not
+# exact-equals, since real report_nm values append suffixes (e.g. a
+# correction: "...체결정정"). Left un-narrowed beyond this for now - false
+# positives here cost one extra document fetch, not a wrong classification
+# (classification itself is signal-detection-agent's job, not fetched here).
+_DART_TARGET_REPORT_PATTERNS = [
+    "단일판매",       # S2 - single-sale/supply contract conclusion
+    "공급계약",       # S2 - supply contract (alternate phrasing)
+    "시설투자",       # S3 - facility/capacity investment
+    "유형자산",       # S3 - tangible asset acquisition (equipment purchases)
+    "잠정",           # S4 - preliminary earnings. Confirmed live 2026-09-23
+                      # the real report_nm is
+                      # "연결재무제표기준영업(잠정)실적(공정공시)" - "(잠정)"
+                      # sits as a bracketed qualifier INSIDE the compound
+                      # word, not concatenated as a single
+                      # "잠정실적"/"잠정영업실적" substring. The two
+                      # previous patterns here never matched a single real
+                      # filing (verified: 14 real S4 filings in stored
+                      # data, all fetched only because "공정공시" below
+                      # also matched their same title) - this fixes the
+                      # dead patterns rather than leaving them as
+                      # harmless-looking but non-functional dead code.
+    "공정공시",       # S5 - fair disclosure (voluntary guidance)
+    "조회공시",       # S6 - rumour adjudication (both the exchange's demand
+                      # and the company's answer use this term; confirmed
+                      # live 2026-09-22 both filings are needed - the
+                      # precise demand timestamp is NOT in list.json's
+                      # rcept_dt (date-only), it's embedded as text inside
+                      # the ANSWER filing's body, e.g. "거래소의 조회요구
+                      # (2026년 08월 21일 11:35)" - so both filings' bodies
+                      # must be fetched, not just the answer's.
+    "해명",           # S6-adjacent - 자율적 해명공시 (voluntary clarification
+                      # disclosure), report_nm "풍문또는보도에대한해명" - a
+                      # DISTINCT mechanism from 조회공시 confirmed via
+                      # research 2026-09-23: introduced by KRX effective
+                      # 2015-09-07, this is COMPANY-initiated (a company
+                      # clarifying a rumor on its own, without the
+                      # exchange demanding it), unlike 조회공시 which is
+                      # exchange-compelled. Real examples found live
+                      # (SK Hynix 2026-07-22 and 2026-09-04, Samsung
+                      # Electronics 2026-07-23) had NO body fetched before
+                      # this pattern was added, since "해명" shares no
+                      # substring with "조회공시" - classified separately
+                      # in signal-detection-agent
+                      # (classify_voluntary_clarification), not folded
+                      # into the exchange-demand rule.
+]
+
+_dart_rate_lock = threading.Lock()
+_dart_last_call = [0.0]
+_DART_MIN_INTERVAL = 0.25  # conservative pending confirmation of DART's actual rate limit
+
+
+def _dart_rate_sleep() -> None:
+    with _dart_rate_lock:
+        elapsed = time.monotonic() - _dart_last_call[0]
+        if elapsed < _DART_MIN_INTERVAL:
+            time.sleep(_DART_MIN_INTERVAL - elapsed)
+        _dart_last_call[0] = time.monotonic()
+
+
+def _dart_matches_target_report(report_nm: str) -> bool:
+    return any(pattern in report_nm for pattern in _DART_TARGET_REPORT_PATTERNS)
+
+
+def _fetch_dart_document_body(corp_code: str, rcept_no: str, api_key: str) -> str | None:
+    """Fetch and extract plain text from a DART filing's document.xml.
+
+    Despite the .xml filename/extension, the member DART actually zips is
+    XForms-flavored HTML (confirmed live 2026-09-22: content starts with
+    "<html><head>...charset=euc-kr"), not well-formed XML - a strict XML
+    parser fails on it (unescaped "&", mismatched/unclosed tags are normal
+    in real filings). Stripped the same way sec_edgar.py's
+    fetch_filing_text() handles SEC's HTML filings: drop script/style
+    blocks, strip tags, unescape entities.
+
+    The declared "charset=euc-kr" meta tag is WRONG - confirmed live by
+    decoding the raw bytes both ways: euc-kr produces mojibake on every
+    Korean character, utf-8 produces correct readable Korean (e.g. the
+    font-name string decodes cleanly as "돋움체" under utf-8, garbage under
+    euc-kr). This is a stale/incorrect header on DART's side, not
+    something to infer from - decode as utf-8 regardless of what the
+    document claims.
+
+    Returns None on any failure - callers treat a missing body as "not yet
+    fetched", not an error, same fail-open convention as the rest of this
+    pipeline.
+    """
+    import zipfile
+    from io import BytesIO
+
+    _dart_rate_sleep()
+    try:
+        resp = httpx.get(
+            _DART_DOCUMENT_URL,
+            params={"crtfc_key": api_key, "rcept_no": rcept_no},
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        # On failure DART returns a small XML error envelope instead of a
+        # zip - confirmed live 2026-09-23 (status "014", message "파일이
+        # 존재하지 않습니다"/file does not exist) for a [첨부정정]
+        # (attachment-correction) filing, which apparently has no document
+        # body of its own to fetch. Checked explicitly before attempting
+        # to unzip so this fails with the real reason, not a misleading
+        # "not a zip file" error that gives no clue what actually happened.
+        if resp.content[:5] != b"PK\x03\x04" and b"<status>" in resp.content[:200]:
+            logger.warning(
+                "[DART] document.xml returned an error envelope for"
+                " rcept_no=%s (not a zip) - body: %r",
+                rcept_no, resp.content[:200],
+            )
+            return None
+        with zipfile.ZipFile(BytesIO(resp.content)) as zf:
+            # DART zips a single member per filing; name varies (usually
+            # "{rcept_no}.xml" but not guaranteed), so take whichever
+            # member is present rather than assuming a fixed filename
+            # (unlike corpCode.xml's fixed CORPCODE.xml).
+            names = zf.namelist()
+            if not names:
+                return None
+            raw = zf.read(names[0])
+        decoded = raw.decode("utf-8", errors="replace")
+        stripped = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", decoded, flags=re.S | re.I)
+        stripped = re.sub(r"<[^>]+>", " ", stripped)
+        stripped = html.unescape(stripped)
+        return re.sub(r"\s+", " ", stripped).strip() or None
+    except Exception as exc:
+        logger.warning(
+            "[DART] document fetch failed corp_code=%s rcept_no=%s error=%s",
+            corp_code, rcept_no, exc,
+        )
+        return None
+
+
+def _fetch_one_dart_filing_list(
+    corp_code: str,
+    stock_code: str,
+    company_name: str,
+    api_key: str,
+    bgn_de: str,
+    end_de: str,
+) -> list[dict]:
+    """Fetch DART's filing list for one company over a date range.
+
+    Returns article dicts with a synthetic url (dart-filing://corp_code/
+    rcept_no) so the DB's existing global-unique-url dedup applies without
+    any DART-specific dedup logic. Full document body is fetched only for
+    report_nm values matching _DART_TARGET_REPORT_PATTERNS.
+    """
+    _dart_rate_sleep()
+    try:
+        resp = httpx.get(
+            _DART_LIST_URL,
+            params={
+                "crtfc_key": api_key,
+                "corp_code": corp_code,
+                "bgn_de": bgn_de,
+                "end_de": end_de,
+                "pblntf_ty": "I",
+                "page_count": 100,
+            },
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        logger.warning("[DART] list fetch failed corp_code=%s error=%s", corp_code, exc)
+        return []
+
+    # DART returns status "013" (no data) as a normal empty result, not an
+    # error - only log/skip other non-success codes.
+    status = data.get("status")
+    if status not in ("000", "013"):
+        logger.warning(
+            "[DART] list fetch corp_code=%s status=%s message=%s",
+            corp_code, status, data.get("message"),
+        )
+    filings = data.get("list") or []
+
+    results = []
+    for filing in filings:
+        report_nm = filing.get("report_nm", "")
+        rcept_no = filing.get("rcept_no", "")
+        rcept_dt = filing.get("rcept_dt", "")
+        pub_date = (
+            datetime.strptime(rcept_dt, "%Y%m%d").replace(tzinfo=timezone.utc)
+            if rcept_dt else None
+        )
+        body = (
+            _fetch_dart_document_body(corp_code, rcept_no, api_key)
+            if _dart_matches_target_report(report_nm) else None
+        )
+        results.append({
+            "title": f"{company_name} ({stock_code}): {report_nm}",
+            "url": f"dart-filing://{corp_code}/{rcept_no}",
+            "published": rcept_dt,
+            "source": filing.get("flr_nm") or "DART",
+            "summary": None,
+            "body": body,
+            "_pub_date": pub_date,
+            "metadata": {
+                "corp_cls": filing.get("corp_cls"),
+                "corp_code": corp_code,
+                "stock_code": stock_code,
+                "rcept_no": rcept_no,
+                "rm": filing.get("rm"),
+                "pblntf_ty": "I",
+                "source_category": "dart_filing",
+            },
+        })
+    return results
+
+
+def _fetch_dart_filing(sources: list[dict], days_back: int, api_key: str) -> list[dict]:
+    """Fetch DART filings for all companies across all dart_filing sources.
+
+    Resolves stock_code -> corp_code once (cached process-lifetime by
+    dart_corp_code), then queries the filing list per company. Companies
+    with no resolvable corp_code (e.g. an unlisted entity with no
+    stock_code at all) are skipped with a warning, not an error - matches
+    KOREA_TICKER_UNIVERSE's Hanwha Semitech entry, which is intentionally
+    absent from every dart_filing source's ticker config for this reason.
+    """
+    tickers: list[dict[str, str]] = []
+    for source in sources:
+        config = source.get("config") or {}
+        tickers.extend(config.get("companies", []))
+    if not tickers:
+        return []
+
+    stock_codes = [t["ticker"] for t in tickers]
+    corp_code_map = resolve_corp_codes(stock_codes, api_key)
+
+    bgn_de = (datetime.now(timezone.utc) - timedelta(days=days_back)).strftime("%Y%m%d")
+    end_de = datetime.now(timezone.utc).strftime("%Y%m%d")
+
+    articles: list[dict] = []
+    for t in tickers:
+        stock_code = t["ticker"]
+        corp_code = corp_code_map.get(stock_code)
+        if not corp_code:
+            logger.warning("[DART] skipping stock_code=%s - no corp_code resolved", stock_code)
+            continue
+        articles.extend(
+            _fetch_one_dart_filing_list(
+                corp_code, stock_code, t["company"], api_key, bgn_de, end_de,
+            )
+        )
+    return articles
+
+
+# Korea Customs Service export-figure press-release scraper (S1 - export
+# surprise). Fallback for the official data.go.kr 10-day provisional
+# export-statistics API (dataset 15157908), which requires a personal
+# account gated behind Korea's phone/ARC-linked identity verification - not
+# obtainable without a Korean-resident proxy. This scrapes the same
+# underlying figure from Korea Customs' own public press-release board
+# instead, which needs no login at all.
+#
+# Confirmed live 2026-09-23: no RSS feed exists for this board, and post
+# IDs (nttSn) are a global auto-increment across ~6,600+ unrelated posts
+# (drug busts, personnel notices, etc.) - not usable as a date-based
+# pattern. The only reliable way to find the newest release is the
+# board's own server-side search, which is a POST (not GET query params -
+# a GET-param guess 404'd first), with the recurring report family
+# isolated by searching the title (searchType=sj) for "수출입 현황".
+_CUSTOMS_LIST_URL = "https://www.customs.go.kr/kcs/na/ntt/selectNttList.do"
+_CUSTOMS_INFO_URL = "https://www.customs.go.kr/kcs/na/ntt/selectNttInfo.do"
+_CUSTOMS_BBS_ID = "1362"
+_CUSTOMS_MI = "2891"
+_CUSTOMS_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    " (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+
+# Confirmed live 2026-09-23 against real posts: the 10-day/20-day
+# preliminary releases only ever state the semiconductor figure as a
+# dollar value plus a superlative record/streak claim - e.g.
+# "반도체(341억 달러) 수출 동기간 역대최대" (semiconductor exports of
+# $34.1bn, a period record) - never a year-over-year percentage or a
+# share-of-total-exports percentage in the page's own HTML text (checked
+# every occurrence of "반도체" on a real 20-day release page, found
+# exactly one, matching this pattern; also searched for "차지" - the verb
+# used for "share of" - and found zero matches). The YoY% Section 5.1
+# needs is therefore NOT available from the source at 10-day granularity
+# and must be computed by this pipeline itself, from its own stored
+# history of these dollar figures - matching the doc's own build note
+# that this rule needs two years of history before it means anything.
+#
+# "억" is a Korean numeral unit = 100,000,000 (one hundred million) - "341
+# 억" is not a typo/OCR artifact, it is standard Korean notation for large
+# won/dollar figures and must be multiplied out, not read digit-by-digit.
+_CUSTOMS_SEMICONDUCTOR_PATTERN = re.compile(
+    r"반도체\s*\(\s*([\d,]+)\s*억\s*달러\s*\)"
+)
+_CUSTOMS_PERIOD_PATTERN = re.compile(
+    r"(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일\s*(?:~|-)\s*(?:(\d{4})년\s*)?(\d{1,2})월\s*(\d{1,2})일\s*수출입\s*현황"
+)
+
+
+def _fetch_customs_newest_post(days_back: int) -> dict | None:
+    """Find the newest '수출입 현황' post via the board's title search.
+
+    Returns {"ntt_sn": str, "ntt_url": str, "title": str, "filed_date": str}
+    for the newest matching post, or None on any failure - fail-open, same
+    convention as every other fetcher in this module.
+    """
+    try:
+        resp = httpx.post(
+            _CUSTOMS_LIST_URL,
+            data={
+                "bbsId": _CUSTOMS_BBS_ID,
+                "mi": _CUSTOMS_MI,
+                "searchType": "sj",
+                "searchValue": "수출입 현황",
+                "currPage": "1",
+            },
+            headers={"User-Agent": _CUSTOMS_USER_AGENT},
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+    except Exception as exc:
+        logger.warning("[CUSTOMS] list fetch failed: %s", exc)
+        return None
+
+    # Post links are JS-driven (href="javascript:"), not real <a href>
+    # URLs - the real post identifiers live in data-id (nttSn) and
+    # data-url (nttSnUrl) attributes on the same anchor tag, alongside its
+    # title attribute, filtered to the nttInfoBtn class used for this
+    # board's title links specifically.
+    match = re.search(
+        r'data-id="(\d+)"\s+data-url="([a-f0-9]+)"\s+class="nttInfoBtn"'
+        r'\s+title="([^"]+)"',
+        resp.text,
+    )
+    if not match:
+        logger.warning("[CUSTOMS] no matching post found in search results")
+        return None
+    ntt_sn, ntt_url, title = match.groups()
+    return {"ntt_sn": ntt_sn, "ntt_url": ntt_url, "title": html.unescape(title)}
+
+
+def _fetch_customs_export_data(sources: list[dict], days_back: int) -> list[dict]:
+    """Fetch the newest Korea Customs semiconductor export figure.
+
+    Only produces an article for the newest 10-day/20-day/monthly release
+    found - this is a national figure published a few times a month, not
+    a per-poll feed, so there is nothing further back to backfill from
+    this source alone (the doc's own 2-year-history requirement has to be
+    satisfied separately, e.g. via the ECOS backfill discussed
+    separately - this scraper only ever sees "whatever's newest right
+    now").
+
+    url is deliberately keyed on ntt_sn (the post's own unique board ID),
+    not on period alone - a distinct real post exists per release, so
+    this is a natural, already-unique dedup key without needing to invent
+    a period+revision scheme.
+    """
+    post = _fetch_customs_newest_post(days_back)
+    if post is None:
+        return []
+
+    try:
+        resp = httpx.get(
+            _CUSTOMS_INFO_URL,
+            params={
+                "mi": _CUSTOMS_MI,
+                "bbsId": _CUSTOMS_BBS_ID,
+                "nttSn": post["ntt_sn"],
+                "nttSnUrl": post["ntt_url"],
+            },
+            headers={"User-Agent": _CUSTOMS_USER_AGENT},
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+    except Exception as exc:
+        logger.warning("[CUSTOMS] post fetch failed ntt_sn=%s: %s", post["ntt_sn"], exc)
+        return []
+
+    # Strip the per-word <span> fragments the HWP-to-HTML export wraps
+    # every few characters in - confirmed live these break a direct regex
+    # against the raw HTML, so tags must be stripped and whitespace
+    # collapsed first, same pattern as sec_edgar.py's HTML handling.
+    text = re.sub(r"<[^>]+>", " ", resp.text)
+    text = html.unescape(text)
+    text = re.sub(r"\s+", " ", text).strip()
+
+    semi_match = _CUSTOMS_SEMICONDUCTOR_PATTERN.search(text)
+    if not semi_match:
+        logger.warning(
+            "[CUSTOMS] no semiconductor figure found in post ntt_sn=%s title=%r",
+            post["ntt_sn"], post["title"],
+        )
+        return []
+    semiconductor_usd_billion = int(semi_match.group(1).replace(",", "")) / 10.0
+
+    period_match = _CUSTOMS_PERIOD_PATTERN.search(post["title"])
+    period_start = period_end = None
+    if period_match:
+        y1, m1, d1, y2, m2, d2 = period_match.groups()
+        y2 = y2 or y1
+        period_start = f"{y1}-{int(m1):02d}-{int(d1):02d}"
+        period_end = f"{y2}-{int(m2):02d}-{int(d2):02d}"
+
+    pub_date = None
+    if period_end:
+        try:
+            pub_date = datetime.strptime(period_end, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except ValueError:
+            pub_date = None
+
+    return [{
+        "title": post["title"],
+        "url": f"kr-customs-export://semiconductor/{post['ntt_sn']}",
+        "published": period_end or "",
+        "source": "Korea Customs Service",
+        "summary": None,
+        "body": text[:5000],
+        "_pub_date": pub_date,
+        "metadata": {
+            "ntt_sn": post["ntt_sn"],
+            "period_start": period_start,
+            "period_end": period_end,
+            "semiconductor_export_usd_billion": semiconductor_usd_billion,
+            "source_category": "kr_customs_export",
+        },
+    }]
+
+
 def _fetch_articles(
     sources: list[dict],
     days_back: int,
@@ -1953,6 +2585,7 @@ def _fetch_articles(
     alpha_vantage_key: str | None = None,
     universe_url: str | None = None,
     universe_api_key: str | None = None,
+    dart_api_key: str | None = None,
 ) -> list[dict]:
     """Fetch articles from all sources, routing by source_type.
 
@@ -1966,6 +2599,8 @@ def _fetch_articles(
         alpha_vantage_key: Alpha Vantage API key; AV sources are skipped if None.
         universe_url: research-universe base URL for dynamic ticker fetching.
         universe_api_key: Service API key (ru_ prefix) for research-universe auth.
+        dart_api_key: DART (Korea FSS) API key; dart_filing sources are
+            skipped if None.
 
     Returns:
         List of article dicts sorted newest-first.
@@ -1980,6 +2615,8 @@ def _fetch_articles(
     tpex_revenue_sources = [s for s in sources if s.get("source_type") == "tpex_revenue"]
     twse_material_sources = [s for s in sources if s.get("source_type") == "twse_material"]
     tpex_material_sources = [s for s in sources if s.get("source_type") == "tpex_material"]
+    dart_filing_sources = [s for s in sources if s.get("source_type") == "dart_filing"]
+    kr_customs_export_sources = [s for s in sources if s.get("source_type") == "kr_customs_export"]
 
     articles: list[dict] = []
     t0 = time.perf_counter()
@@ -2032,6 +2669,18 @@ def _fetch_articles(
     if tpex_material_sources:
         articles.extend(_fetch_tpex_material(tpex_material_sources))
 
+    if dart_filing_sources:
+        if dart_api_key:
+            articles.extend(_fetch_dart_filing(dart_filing_sources, days_back, dart_api_key))
+        else:
+            logger.warning(
+                "DART_API_KEY not set - skipping %d dart_filing source(s)",
+                len(dart_filing_sources),
+            )
+
+    if kr_customs_export_sources:
+        articles.extend(_fetch_customs_export_data(kr_customs_export_sources, days_back))
+
     articles.sort(
         key=lambda a: (
             a["_pub_date"] or datetime.min.replace(tzinfo=timezone.utc)
@@ -2082,6 +2731,7 @@ def run(
     alpha_vantage_key = os.environ.get("ALPHA_VANTAGE_API_KEY")
     universe_url = os.environ.get("RESEARCH_UNIVERSE_URL")
     universe_api_key = os.environ.get("RESEARCH_UNIVERSE_API_KEY")
+    dart_api_key = os.environ.get("DART_API_KEY")
 
     sources = load_sources(domain_slug, days_back)
     if not sources:
@@ -2089,7 +2739,7 @@ def run(
 
     articles = _fetch_articles(
         sources, days_back, max_articles, serpapi_key, newsapi_key, alpha_vantage_key,
-        universe_url, universe_api_key,
+        universe_url, universe_api_key, dart_api_key,
     )
     if not articles:
         return {"articles": []}

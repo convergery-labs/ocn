@@ -123,6 +123,82 @@ def classify_taiwan_signals(from_date: str | None, to_date: str | None) -> None:
     logger.info("taiwan_market_signal job_id=%s finished", job_id)
 
 
+@cli.command("classify-korea-signals")
+@click.option(
+    "--from-date",
+    default=None,
+    help="Start date (YYYY-MM-DD) of the news-retrieval run window to pool. "
+    "Defaults to today (UTC) - i.e. classify all of today's completed "
+    "korea_market_signal runs so far.",
+)
+@click.option(
+    "--to-date",
+    default=None,
+    help="End date (YYYY-MM-DD) of the news-retrieval run window to pool. "
+    "Defaults to today (UTC).",
+)
+def classify_korea_signals(from_date: str | None, to_date: str | None) -> None:
+    """One-shot: pool today's completed korea_market_signal news-retrieval
+    runs, classify (S2-S7)/translate, persist. Entry point for the scheduled
+    task - runs to completion and exits (not a server).
+    """
+    import asyncio
+    from datetime import datetime, timezone
+
+    import config
+    from controllers.run import run_korea_signal_classification
+    from models.jobs import create_job
+
+    logger.info("Initialising database...")
+    init_db()
+    seed()
+
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    from_date = from_date or today
+    to_date = to_date or today
+
+    job_id = create_job(domain=config.KOREA_SIGNAL_DOMAIN)
+    logger.info(
+        "Created korea_market_signal job_id=%s from_date=%s to_date=%s",
+        job_id, from_date, to_date,
+    )
+    asyncio.run(run_korea_signal_classification(job_id, from_date, to_date))
+    logger.info("korea_market_signal job_id=%s finished", job_id)
+
+
+@cli.command("summarize-korea-signals")
+@click.option(
+    "--date",
+    default=None,
+    help="Date (YYYY-MM-DD, UTC) of classified korea_market_signal rows to "
+    "summarize. Defaults to today (UTC).",
+)
+def summarize_korea_signals(date: str | None) -> None:
+    """One-shot: read today's already-classified korea_market_signal rows
+    from this service's own DB and generate the spec Section 8.4 trader
+    summary text. No news-retrieval fetch, no classification - reads only
+    (see generate_korea_signal_summary_for_date's own docstring). Runs to
+    completion and exits (not a server) - same shape as classify-korea-signals.
+
+    Output goes to the log only (INFO level) - there is no email/delivery
+    mechanism wired up yet (see korea_signal_summary.py's own module
+    docstring on scope). GET /korea-signals/summary (routes/jobs.py) is
+    the on-demand equivalent of this same call, for a caller that wants
+    the text back directly rather than reading CloudWatch logs.
+    """
+    from datetime import datetime, timezone
+
+    from controllers.run import generate_korea_signal_summary_for_date
+
+    logger.info("Initialising database...")
+    init_db()
+    seed()
+
+    date = date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    summary = generate_korea_signal_summary_for_date(date)
+    logger.info("[KOREA_SIGNAL_SUMMARY] date=%s\n%s", date, summary)
+
+
 @cli.command("classify-geopolitical-signals")
 @click.option(
     "--from-date",

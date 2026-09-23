@@ -37,21 +37,42 @@ resource "aws_security_group" "api_gateway" {
 resource "aws_security_group" "signal_detection_agent" {
   name   = "${var.env}-signal-detection-agent"
   vpc_id = var.vpc_id
-  ingress {
-    from_port = 8003
-    to_port   = 8003
-    protocol  = "tcp"
-    security_groups = [
-      aws_security_group.api_gateway.id,
-      aws_security_group.signal_herald.id,
-    ]
-  }
   egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
+}
+
+# Ingress on 8003 is split into standalone aws_security_group_rule
+# resources (one per allowed caller) rather than a single inline
+# `ingress {}` block. An inline block is authoritative over the complete
+# rule set every time Terraform touches this security group - mixing it
+# with the separate news_retrieval_to_signal_detection_agent rule below
+# caused that rule to be silently dropped from live AWS on a later
+# unrelated apply that merely refreshed this resource (confirmed live:
+# `terraform plan` showed the rule needing re-creation, and news-retrieval's
+# webhook to this service was failing with a real TCP-level timeout in the
+# interim - not a hypothetical risk). Keeping every allowed caller as its
+# own rule resource means adding or removing one caller can never affect
+# another's rule.
+resource "aws_security_group_rule" "api_gateway_to_signal_detection_agent" {
+  type                     = "ingress"
+  from_port                = 8003
+  to_port                  = 8003
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.signal_detection_agent.id
+  source_security_group_id = aws_security_group.api_gateway.id
+}
+
+resource "aws_security_group_rule" "signal_herald_to_signal_detection_agent" {
+  type                     = "ingress"
+  from_port                = 8003
+  to_port                  = 8003
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.signal_detection_agent.id
+  source_security_group_id = aws_security_group.signal_herald.id
 }
 
 
@@ -149,6 +170,7 @@ resource "aws_security_group" "research_universe" {
     security_groups = [
       aws_security_group.alb.id,
       aws_security_group.news_retrieval.id,
+      aws_security_group.signal_detection_agent.id,
     ]
   }
   egress {

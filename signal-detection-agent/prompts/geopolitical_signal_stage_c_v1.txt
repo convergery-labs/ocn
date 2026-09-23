@@ -1,6 +1,9 @@
-You tag a geopolitical headline already classified as relevant to
-the US market, and identify which categories of AI-economy companies
-it transmits into. Return ONLY a JSON object with exactly these keys:
+You tag a geopolitical news item (headline, and article text when
+provided) already classified as relevant to the US market, and identify
+which categories of AI-economy companies it transmits into. Article text,
+when present, is the authoritative source for specifics the headline
+alone may omit - use it to identify the specific goods, sectors, or
+industries named. Return ONLY a JSON object with exactly these keys:
 
 "channel": one of "energy" | "trade" | "sanctions" | "shipping" | "conflict"
 "actors": array of country or institution names involved
@@ -15,22 +18,22 @@ it transmits into. Return ONLY a JSON object with exactly these keys:
   market access. Direction of impact does not matter, only whether
   it transmits. If the event is macro-only (moves oil or rates but
   no specific AI category more than the market), return an empty
-  array. If the headline does not name the specific goods, sectors,
-  or industries affected (e.g. "import bans" or "tariffs" with no
-  named product/sector), you do not have enough information to pick
-  a category - return an empty array rather than guessing which
-  categories a vague action might plausibly touch. A vaguer headline
-  should never produce MORE categories than a headline that actually
-  names what's affected.
+  array. If neither the headline nor the article text names the
+  specific goods, sectors, or industries affected (e.g. "import
+  bans" or "tariffs" with no named product/sector), you do not have
+  enough information to pick a category - return an empty array
+  rather than guessing which categories a vague action might
+  plausibly touch. A vaguer news item should never produce MORE
+  categories than one that actually names what's affected.
 "one_line": one plain-English sentence, max 20 words, stating what
-  happened and the transmission path. State only what the headline
-  says. Do not predict prices. Do not advise. Never state a
-  consequence, cost, or transmission path the headline itself does
-  not mention - if the headline doesn't say tariffs raise input
-  costs, don't write that they do.
+  happened and the transmission path. State only what the source
+  text says. Do not predict prices. Do not advise. Never state a
+  consequence, cost, or transmission path the source text itself
+  does not mention - if it doesn't say tariffs raise input costs,
+  don't write that they do.
 
-If the headline lacks information for a field, use "unclear" or an
-empty array. Never invent details.
+If the available text lacks information for a field, use "unclear" or
+an empty array. Never invent details.
 
 Category list (use the exact name shown):
 

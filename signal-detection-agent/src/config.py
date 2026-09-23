@@ -29,6 +29,7 @@ DEFAULT_PROMPT: Path = PROMPTS_DIR / "ai_universe_signal_classifier_v1.txt"
 DEFAULT_PROMPT_V2: Path = PROMPTS_DIR / "ai_universe_signal_classifier_v2_refine.txt"
 
 TAIWAN_SIGNAL_DOMAIN: str = os.environ.get("TAIWAN_SIGNAL_DOMAIN", "taiwan_market_signal")
+KOREA_SIGNAL_DOMAIN: str = os.environ.get("KOREA_SIGNAL_DOMAIN", "korea_market_signal")
 NEWS_DOMAIN: str = os.environ.get("NEWS_DOMAIN", "ai_news")
 GEOPOLITICAL_SIGNAL_DOMAIN: str = os.environ.get("GEOPOLITICAL_SIGNAL_DOMAIN", "geopolitical_news")
 # Stage B is a forced one-word HIGH/WEAK call, same shape/cost tier as
