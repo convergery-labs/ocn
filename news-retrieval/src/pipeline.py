@@ -1543,7 +1543,7 @@ def _fetch_one_gdelt(query: str, days_back: int):
     return results
 
 
-def _fetch_gdelt(sources: list[dict], days_back: int) -> list[dict]:
+def _fetch_gdelt(sources: list[dict], days_back: int, domain_slug: str = "") -> list[dict]:
     """Fetch articles from GDELT for multiple theme queries, round-robin.
 
     Runs every query once, in order, spaced by ``_GDELT_MIN_INTERVAL`` to
@@ -1566,6 +1566,21 @@ def _fetch_gdelt(sources: list[dict], days_back: int) -> list[dict]:
         sources: List of gdelt source dicts; ``config.queries`` is a list
             of GDELT query strings (one per theme/category).
         days_back: Exclude articles older than this many days.
+        domain_slug: The domain these sources belong to - used for the
+            domain-scoped press allowlist (_DOMAIN_PRESS_ALLOWLIST) below.
+            Passed explicitly by the caller (run() via _fetch_articles),
+            not read off a source dict - a source dict here (as returned
+            by load_sources) never carries its own domain_slug field
+            (unlike list_sources, an unrelated admin/UI-facing query which
+            does join it in). Bug fixed 2026-09-23, confirmed live: this
+            function used to try `sources[0].get("domain_slug", "")`,
+            which always silently returned "" (never matching any real
+            key in _DOMAIN_PRESS_ALLOWLIST) - a real staging run showed
+            every GDELT article for korea_market_signal being dropped by
+            the allowlist check, including ones from domains that ARE on
+            _KOREA_PRESS_ALLOWLIST (zdnet.co.kr, ddaily.co.kr), proving
+            the lookup itself was never reaching the right allowlist, not
+            that those domains were missing from it.
 
     Returns:
         List of article dicts with ``_pub_date`` set, deduplicated by URL.
@@ -1636,10 +1651,6 @@ def _fetch_gdelt(sources: list[dict], days_back: int) -> list[dict]:
     # Trafilatura fetch.
     if query_ticker:
         before_stage_a = len(articles)
-        # All sources passed into one _fetch_gdelt call come from the same
-        # run() invocation, i.e. the same domain_slug (see _fetch_articles'
-        # per-domain routing) - safe to read off the first source.
-        domain_slug = sources[0].get("domain_slug", "") if sources else ""
         articles = _filter_by_domain_allowlist(articles, query_ticker, domain_slug)
         articles = _filter_by_company_name_in_title(
             articles, query_ticker, query_english_name,
@@ -2586,6 +2597,7 @@ def _fetch_articles(
     universe_url: str | None = None,
     universe_api_key: str | None = None,
     dart_api_key: str | None = None,
+    domain_slug: str = "",
 ) -> list[dict]:
     """Fetch articles from all sources, routing by source_type.
 
@@ -2601,6 +2613,12 @@ def _fetch_articles(
         universe_api_key: Service API key (ru_ prefix) for research-universe auth.
         dart_api_key: DART (Korea FSS) API key; dart_filing sources are
             skipped if None.
+        domain_slug: The domain this fetch is for - passed through to
+            _fetch_gdelt for its own domain-scoped press allowlist (see
+            that function's own docstring for why sources' own dicts
+            can't carry this: load_sources' SELECT never includes
+            domain_slug, unlike list_sources - a source dict read via the
+            normal run() path has no such field to read it off of).
 
     Returns:
         List of article dicts sorted newest-first.
@@ -2655,7 +2673,7 @@ def _fetch_articles(
         articles.extend(_fetch_federal_register(federal_register_sources, days_back))
 
     if gdelt_sources:
-        articles.extend(_fetch_gdelt(gdelt_sources, days_back))
+        articles.extend(_fetch_gdelt(gdelt_sources, days_back, domain_slug))
 
     if twse_revenue_sources:
         articles.extend(_fetch_twse_revenue(twse_revenue_sources))
@@ -2739,7 +2757,7 @@ def run(
 
     articles = _fetch_articles(
         sources, days_back, max_articles, serpapi_key, newsapi_key, alpha_vantage_key,
-        universe_url, universe_api_key, dart_api_key,
+        universe_url, universe_api_key, dart_api_key, domain_slug,
     )
     if not articles:
         return {"articles": []}
