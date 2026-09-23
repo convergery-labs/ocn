@@ -2432,6 +2432,8 @@ _CUSTOMS_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     " (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
+_CUSTOMS_LIST_PAGE_MAX_ATTEMPTS = 3
+_CUSTOMS_LIST_PAGE_RETRY_BACKOFF_SECS = 2.0
 
 # Confirmed live 2026-09-23 against real posts: the 10-day/20-day
 # preliminary releases only ever state the semiconductor figure as a
@@ -2450,66 +2452,358 @@ _CUSTOMS_USER_AGENT = (
 # "억" is a Korean numeral unit = 100,000,000 (one hundred million) - "341
 # 억" is not a typo/OCR artifact, it is standard Korean notation for large
 # won/dollar figures and must be multiplied out, not read digit-by-digit.
+# Confirmed live 2026-09-23 against real historical posts (backfill
+# verification): the bracketed semiconductor figure is stated as either
+# "반도체(341억 달러)" (10-day/20-day releases) or "반도체 수출(468억 달러)"
+# (monthly confirmed releases - an extra "수출"/export word inserted
+# between 반도체 and the parenthesis) - both real phrasings, not a typo in
+# one of them. The optional "(?:수출)?" covers both without a second
+# pattern.
 _CUSTOMS_SEMICONDUCTOR_PATTERN = re.compile(
-    r"반도체\s*\(\s*([\d,]+)\s*억\s*달러\s*\)"
+    r"반도체\s*(?:수출)?\s*\(\s*([\d,]+)\s*억\s*달러\s*\)"
 )
 _CUSTOMS_PERIOD_PATTERN = re.compile(
     r"(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일\s*(?:~|-)\s*(?:(\d{4})년\s*)?(\d{1,2})월\s*(\d{1,2})일\s*수출입\s*현황"
 )
+# Monthly CONFIRMED release title, e.g. "2026년 8월 월간 수출입 현황
+# [확정치]" - distinct from the day-range pattern above (no day numbers,
+# has "월간"/monthly) and from the monthly PROVISIONAL title (same month
+# number but no "월간" word, e.g. "2026년 8월 수출입 현황 [잠정치]" -
+# confirmed live this provisional monthly variant has no bracketed
+# semiconductor figure in extractable form, so it is deliberately NOT
+# matched by this pattern nor produced by classify_export_surprise's
+# period grouping - see _classify_customs_period_type's own docstring).
+_CUSTOMS_MONTHLY_CONFIRMED_PERIOD_PATTERN = re.compile(
+    r"(\d{4})년\s*(\d{1,2})월\s*월간\s*수출입\s*현황\s*\[\s*확정치\s*\]"
+)
+# Confirmed live: only the monthly CONFIRMED release states a real YoY%
+# in its own body text ("전년 동월 대비 수출은 68.7% 증가") - 10-day/20-day
+# releases never do (checked live, see module comment on
+# _CUSTOMS_SEMICONDUCTOR_PATTERN's own history). This is the TOTAL export
+# YoY%, not semiconductor-specific - used only as a cross-check value,
+# never as classify_export_surprise's own computed semiconductor YoY
+# (which is always computed by this pipeline from its own stored history,
+# per spec Section 5.1's own design intent).
+_CUSTOMS_YOY_PATTERN = re.compile(
+    r"전년\s*동월\s*대비\s*수출\s*은?\s*([\d.]+)\s*%\s*증가"
+)
+# Confirmed live 2026-09-23 against a real May 2026 monthly CONFIRMED
+# post that had NO bracketed dollar figure at all (unlike June/July/
+# August's same-type posts, which do - real inconsistency between
+# individual releases, not a parsing gap): this same post instead states
+# a real, SEMICONDUCTOR-SPECIFIC (not total-export) YoY% series, e.g.
+# "반도체 전년동월대비 증감률(%): ['25.10월] 25.2 → [11월] 38.7 → ... →
+# [5월] 167.7" - a genuinely better data point than the dollar figure for
+# S1's own purposes (it's already the exact YoY comparison Section 5.1
+# needs, semiconductor-specific, and it comes with several trailing
+# months embedded in the same sentence). Captures everything after the
+# label up to the next "*"-prefixed series (the next line is always a
+# different product's own series, e.g. "승용차"/passenger cars) or end of
+# string.
+_CUSTOMS_SEMI_YOY_SERIES_HEADER_PATTERN = re.compile(
+    r"반도체\s*전년동월대비\s*증감률\s*\(%\)\s*:\s*(.+?)(?:\*|$)"
+)
+# One entry in that series: "['25. 10월] 25.2" or "[11월] 38.7" (year
+# omitted when unchanged from the previous entry - real behavior
+# confirmed live, not every entry restates it) with an optional "△"
+# prefix meaning negative (a real minus sign glyph used throughout this
+# board's tables, confirmed live on the same page's "승용차" series
+# showing "△12.6" for an actual year-on-year decline). The apostrophe
+# before the 2-digit year is a RIGHT SINGLE QUOTATION MARK (U+2019, "'"),
+# not an ASCII apostrophe (confirmed live via direct byte inspection of a
+# real fetched page - a plain "'?" silently matched nothing here and made
+# every entry in a real series fail to parse, since the year group never
+# matched at all). Both accepted, in case a straight apostrophe appears
+# in some other real post never checked.
+_CUSTOMS_SEMI_YOY_SERIES_ENTRY_PATTERN = re.compile(
+    r"\[\s*(?:['’]?(\d{2})\.\s*)?(\d{1,2})\s*월\s*\]\s*(△?)\s*([\d.]+)"
+)
+
+
+def _fetch_customs_list_page(page: int) -> list[dict]:
+    """Return every '수출입 현황' post on one page of the board's title
+    search results (confirmed live 2026-09-23: ~10 posts/page, 47 total
+    pages at the time of checking - real history reaching back through at
+    least mid-2025, likely further).
+
+    Post links are JS-driven (href="javascript:"), not real <a href>
+    URLs - the real post identifiers live in data-id (nttSn) and
+    data-url (nttSnUrl) attributes on the same anchor tag, alongside its
+    title attribute, filtered to the nttInfoBtn class used for this
+    board's title links specifically. Returns [] after
+    ``_CUSTOMS_LIST_PAGE_MAX_ATTEMPTS`` failed attempts - fail-open, same
+    convention as every other fetcher in this module, but retried first:
+    confirmed live this board can return a transient "server disconnected"
+    error on an otherwise-real, non-empty page (seen during backfill
+    verification) - without a retry, that transient error is
+    indistinguishable from "this page is genuinely past the end of
+    results" to fetch_customs_export_backfill's own stopping condition,
+    which would silently truncate a real backfill run short.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(1, _CUSTOMS_LIST_PAGE_MAX_ATTEMPTS + 1):
+        try:
+            resp = httpx.post(
+                _CUSTOMS_LIST_URL,
+                data={
+                    "bbsId": _CUSTOMS_BBS_ID,
+                    "mi": _CUSTOMS_MI,
+                    "searchType": "sj",
+                    "searchValue": "수출입 현황",
+                    "currPage": str(page),
+                },
+                headers={"User-Agent": _CUSTOMS_USER_AGENT},
+                timeout=30.0,
+            )
+            resp.raise_for_status()
+            break
+        except Exception as exc:
+            last_exc = exc
+            if attempt < _CUSTOMS_LIST_PAGE_MAX_ATTEMPTS:
+                logger.warning(
+                    "[CUSTOMS] list fetch attempt %d/%d failed page=%d, retrying: %s",
+                    attempt, _CUSTOMS_LIST_PAGE_MAX_ATTEMPTS, page, exc,
+                )
+                time.sleep(_CUSTOMS_LIST_PAGE_RETRY_BACKOFF_SECS)
+    else:
+        logger.warning(
+            "[CUSTOMS] list fetch failed page=%d after %d attempts: %s",
+            page, _CUSTOMS_LIST_PAGE_MAX_ATTEMPTS, last_exc,
+        )
+        return []
+
+    return [
+        {"ntt_sn": ntt_sn, "ntt_url": ntt_url, "title": html.unescape(title)}
+        for ntt_sn, ntt_url, title in re.findall(
+            r'data-id="(\d+)"\s+data-url="([a-f0-9]+)"\s+class="nttInfoBtn"'
+            r'\s+title="([^"]+)"',
+            resp.text,
+        )
+    ]
 
 
 def _fetch_customs_newest_post(days_back: int) -> dict | None:
-    """Find the newest '수출입 현황' post via the board's title search.
+    """Find the newest '수출입 현황' post via the board's title search
+    (page 1's first result - confirmed live the board lists newest-first).
 
-    Returns {"ntt_sn": str, "ntt_url": str, "title": str, "filed_date": str}
-    for the newest matching post, or None on any failure - fail-open, same
-    convention as every other fetcher in this module.
+    Returns {"ntt_sn": str, "ntt_url": str, "title": str} for the newest
+    matching post, or None on any failure - fail-open, same convention as
+    every other fetcher in this module.
+    """
+    posts = _fetch_customs_list_page(1)
+    if not posts:
+        logger.warning("[CUSTOMS] no matching post found in search results")
+        return None
+    return posts[0]
+
+
+def _classify_customs_period_type(title: str) -> tuple[str, dict[str, Any]] | None:
+    """Classify a real Customs board title into one of the THREE period
+    types Korea Signals spec Section 5.1 actually asks for ("days 1-10,
+    days 1-20, or full month") - returns (period_type, fields) or None if
+    the title doesn't match any of the three.
+
+    Confirmed live 2026-09-23 against real historical titles: at least 5
+    distinct title shapes exist on this board, not 3 - a monthly
+    PROVISIONAL release (e.g. "2026년 8월 수출입 현황 [잠정치]", no "월간"
+    word) that has no bracketed semiconductor figure in extractable plain
+    text, and a "기업규모별" (by company size) report that doesn't mention
+    semiconductors at all. Both are deliberately NOT matched here -
+    returning None for them, not a guessed period_type - since forcing
+    them into one of the three real types would either silently produce
+    a NULL semiconductor value or double-count a period already covered
+    by the monthly CONFIRMED release for the same month.
+
+    period_type is one of "10day", "20day", "monthly" - "monthly" always
+    refers to the CONFIRMED release specifically (the only monthly
+    variant this function ever returns), never the provisional one.
+    """
+    day_range = _CUSTOMS_PERIOD_PATTERN.search(title)
+    if day_range:
+        y1, m1, d1, y2, m2, d2 = day_range.groups()
+        y2 = y2 or y1
+        period_start = f"{y1}-{int(m1):02d}-{int(d1):02d}"
+        period_end = f"{y2}-{int(m2):02d}-{int(d2):02d}"
+        period_type = "10day" if int(d2) <= 10 else "20day"
+        return period_type, {"period_start": period_start, "period_end": period_end}
+
+    monthly = _CUSTOMS_MONTHLY_CONFIRMED_PERIOD_PATTERN.search(title)
+    if monthly:
+        y, m = monthly.groups()
+        # A full-month period's "end" is the month's own last day - not
+        # computed exactly here (would need real per-month day counts,
+        # leap years); the first day of the NEXT month minus one day is
+        # unnecessary precision for what published/period_end are used
+        # for downstream (grouping/sorting by month, not exact-day math),
+        # so period_end is left as the month's first day too, distinguished
+        # from period_start only by period_type="monthly" - a caller
+        # needing the real last day should derive it from period_type,
+        # not assume period_end is that day.
+        period_start = f"{y}-{int(m):02d}-01"
+        return "monthly", {"period_start": period_start, "period_end": period_start}
+
+    return None
+
+
+def _parse_customs_semi_yoy_series(text: str) -> dict[str, float]:
+    """Parse the semiconductor-specific YoY% trailing series (see
+    _CUSTOMS_SEMI_YOY_SERIES_HEADER_PATTERN's own docstring for a real
+    example) into {"YYYY-MM": pct, ...}.
+
+    A year digit is only restated in the source when it changes from the
+    previous entry (confirmed live: "['25.10월] 25.2 → [11월] 38.7" - Nov
+    doesn't repeat '25) - carried forward here from the last entry that
+    DID state one. An entry appearing before any year has been stated at
+    all is skipped (can't anchor it to a real year) rather than guessed.
+    """
+    header = _CUSTOMS_SEMI_YOY_SERIES_HEADER_PATTERN.search(text)
+    if not header:
+        return {}
+    series: dict[str, float] = {}
+    current_year: int | None = None
+    for year_suffix, month, sign, value in _CUSTOMS_SEMI_YOY_SERIES_ENTRY_PATTERN.findall(
+        header.group(1)
+    ):
+        if year_suffix:
+            current_year = 2000 + int(year_suffix)
+        if current_year is None:
+            continue
+        try:
+            pct = float(value)
+        except ValueError:
+            continue
+        if sign == "△":
+            pct = -pct
+        series[f"{current_year}-{int(month):02d}"] = pct
+    return series
+
+
+def _extract_customs_figures(text: str) -> dict[str, Any]:
+    """Pull the semiconductor export figure, the semiconductor-specific
+    YoY% series (if present - monthly CONFIRMED releases only, and not
+    even every one of those, see _CUSTOMS_SEMI_YOY_SERIES_HEADER_PATTERN's
+    own docstring), and the total-export YoY% cross-check value (see
+    _CUSTOMS_YOY_PATTERN's own docstring for why this is never used as
+    classify_export_surprise's own computed YoY) out of a Customs post's
+    plain-text body.
+
+    Returns {} if NEITHER the dollar figure NOR the YoY series was found -
+    a real, expected outcome for some post shapes (see
+    _classify_customs_period_type's own docstring), not treated as an
+    error by any caller. A post with the series but no dollar figure (the
+    real May/April/March/Feb/Jan 2026 monthly examples found during
+    backfill verification) still returns real data via the series alone -
+    _build_customs_article's own "no semiconductor figure" check looks
+    for either field, not just the dollar one.
+    """
+    fields: dict[str, Any] = {}
+    semi_match = _CUSTOMS_SEMICONDUCTOR_PATTERN.search(text)
+    if semi_match:
+        fields["semiconductor_export_usd_billion"] = (
+            int(semi_match.group(1).replace(",", "")) / 10.0
+        )
+    semi_yoy_series = _parse_customs_semi_yoy_series(text)
+    if semi_yoy_series:
+        fields["semiconductor_yoy_pct_series"] = semi_yoy_series
+        # The series' own last entry is this release's own period - a
+        # direct, stated semiconductor YoY%, not the total-export one
+        # _CUSTOMS_YOY_PATTERN captures.
+        fields["semiconductor_yoy_pct_stated"] = semi_yoy_series[max(semi_yoy_series)]
+    yoy_match = _CUSTOMS_YOY_PATTERN.search(text)
+    if yoy_match:
+        try:
+            fields["total_export_yoy_pct_stated"] = float(yoy_match.group(1))
+        except ValueError:
+            pass
+    return fields
+
+
+def _fetch_customs_post_body(ntt_sn: str, ntt_url: str) -> str | None:
+    """Fetch and clean one Customs board post's body text. Returns None on
+    any failure - fail-open, same convention as every other fetcher here.
+
+    Strips the per-word <span> fragments the HWP-to-HTML export wraps
+    every few characters in - confirmed live these break a direct regex
+    against the raw HTML, so tags must be stripped and whitespace
+    collapsed first, same pattern as sec_edgar.py's HTML handling.
     """
     try:
-        resp = httpx.post(
-            _CUSTOMS_LIST_URL,
-            data={
-                "bbsId": _CUSTOMS_BBS_ID,
-                "mi": _CUSTOMS_MI,
-                "searchType": "sj",
-                "searchValue": "수출입 현황",
-                "currPage": "1",
-            },
+        resp = httpx.get(
+            _CUSTOMS_INFO_URL,
+            params={"mi": _CUSTOMS_MI, "bbsId": _CUSTOMS_BBS_ID, "nttSn": ntt_sn, "nttSnUrl": ntt_url},
             headers={"User-Agent": _CUSTOMS_USER_AGENT},
             timeout=30.0,
         )
         resp.raise_for_status()
     except Exception as exc:
-        logger.warning("[CUSTOMS] list fetch failed: %s", exc)
+        logger.warning("[CUSTOMS] post fetch failed ntt_sn=%s: %s", ntt_sn, exc)
+        return None
+    text = re.sub(r"<[^>]+>", " ", resp.text)
+    text = html.unescape(text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _build_customs_article(post: dict, text: str) -> dict | None:
+    """Build one article dict from a Customs post's title + cleaned body,
+    or None if the title isn't one of the three period types
+    classify_export_surprise needs (_classify_customs_period_type) or
+    NEITHER a semiconductor dollar figure NOR a semiconductor YoY% series
+    was found in the body (_extract_customs_figures) - both real, expected
+    outcomes for some post shapes, not errors.
+
+    Shared by both the newest-only fetch (_fetch_customs_export_data) and
+    the historical backfill (_fetch_customs_export_backfill) - one place
+    defining what makes a post into a storable article, so the two
+    fetchers can never silently diverge on that definition.
+    """
+    period_info = _classify_customs_period_type(post["title"])
+    if period_info is None:
+        return None
+    period_type, period_fields = period_info
+
+    figures = _extract_customs_figures(text)
+    if not ({"semiconductor_export_usd_billion", "semiconductor_yoy_pct_stated"} & figures.keys()):
+        logger.warning(
+            "[CUSTOMS] no semiconductor figure or YoY series found in post ntt_sn=%s title=%r",
+            post["ntt_sn"], post["title"],
+        )
         return None
 
-    # Post links are JS-driven (href="javascript:"), not real <a href>
-    # URLs - the real post identifiers live in data-id (nttSn) and
-    # data-url (nttSnUrl) attributes on the same anchor tag, alongside its
-    # title attribute, filtered to the nttInfoBtn class used for this
-    # board's title links specifically.
-    match = re.search(
-        r'data-id="(\d+)"\s+data-url="([a-f0-9]+)"\s+class="nttInfoBtn"'
-        r'\s+title="([^"]+)"',
-        resp.text,
-    )
-    if not match:
-        logger.warning("[CUSTOMS] no matching post found in search results")
-        return None
-    ntt_sn, ntt_url, title = match.groups()
-    return {"ntt_sn": ntt_sn, "ntt_url": ntt_url, "title": html.unescape(title)}
+    period_end = period_fields["period_end"]
+    pub_date = None
+    try:
+        pub_date = datetime.strptime(period_end, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        pub_date = None
+
+    return {
+        "title": post["title"],
+        "url": f"kr-customs-export://semiconductor/{post['ntt_sn']}",
+        "published": period_end,
+        "source": "Korea Customs Service",
+        "summary": None,
+        "body": text[:5000],
+        "_pub_date": pub_date,
+        "metadata": {
+            "ntt_sn": post["ntt_sn"],
+            "period_type": period_type,
+            **period_fields,
+            **figures,
+            "source_category": "kr_customs_export",
+        },
+    }
 
 
 def _fetch_customs_export_data(sources: list[dict], days_back: int) -> list[dict]:
     """Fetch the newest Korea Customs semiconductor export figure.
 
     Only produces an article for the newest 10-day/20-day/monthly release
-    found - this is a national figure published a few times a month, not
-    a per-poll feed, so there is nothing further back to backfill from
-    this source alone (the doc's own 2-year-history requirement has to be
-    satisfied separately, e.g. via the ECOS backfill discussed
-    separately - this scraper only ever sees "whatever's newest right
-    now").
+    found - this is the going-forward path the 4-hourly schedule runs
+    every poll; historical backfill is a SEPARATE, one-time fetcher
+    (_fetch_customs_export_backfill) - see that function's own docstring
+    for why a real 2-year backfill turned out to be reachable through
+    this same no-login board after all (confirmed live 2026-09-23,
+    reversing this comment's own earlier claim that no backfill existed).
 
     url is deliberately keyed on ntt_sn (the post's own unique board ID),
     not on period alone - a distinct real post exists per release, so
@@ -2519,72 +2813,135 @@ def _fetch_customs_export_data(sources: list[dict], days_back: int) -> list[dict
     post = _fetch_customs_newest_post(days_back)
     if post is None:
         return []
-
-    try:
-        resp = httpx.get(
-            _CUSTOMS_INFO_URL,
-            params={
-                "mi": _CUSTOMS_MI,
-                "bbsId": _CUSTOMS_BBS_ID,
-                "nttSn": post["ntt_sn"],
-                "nttSnUrl": post["ntt_url"],
-            },
-            headers={"User-Agent": _CUSTOMS_USER_AGENT},
-            timeout=30.0,
-        )
-        resp.raise_for_status()
-    except Exception as exc:
-        logger.warning("[CUSTOMS] post fetch failed ntt_sn=%s: %s", post["ntt_sn"], exc)
+    text = _fetch_customs_post_body(post["ntt_sn"], post["ntt_url"])
+    if text is None:
         return []
+    article = _build_customs_article(post, text)
+    return [article] if article else []
 
-    # Strip the per-word <span> fragments the HWP-to-HTML export wraps
-    # every few characters in - confirmed live these break a direct regex
-    # against the raw HTML, so tags must be stripped and whitespace
-    # collapsed first, same pattern as sec_edgar.py's HTML handling.
-    text = re.sub(r"<[^>]+>", " ", resp.text)
-    text = html.unescape(text)
-    text = re.sub(r"\s+", " ", text).strip()
 
-    semi_match = _CUSTOMS_SEMICONDUCTOR_PATTERN.search(text)
-    if not semi_match:
-        logger.warning(
-            "[CUSTOMS] no semiconductor figure found in post ntt_sn=%s title=%r",
-            post["ntt_sn"], post["title"],
-        )
-        return []
-    semiconductor_usd_billion = int(semi_match.group(1).replace(",", "")) / 10.0
+# ~2 years of history at 3 releases/month (10-day + 20-day + monthly) plus
+# the 2 non-target report shapes each month (monthly provisional,
+# 기업규모별) that also appear in this same title search - confirmed live
+# 2026-09-23 that ~5 posts/month appear across all shapes, so 2 years
+# needs roughly 120 posts / ~10 posts-per-page = ~12 pages minimum;
+# doubled for margin since real page density varies (some months had more
+# report variants than others in the pages actually checked).
+_CUSTOMS_BACKFILL_MAX_PAGES = 30
+# Confirmed live 2026-09-23: this board's detail pages genuinely stop
+# including inline breakdown text at some point in its history (March
+# 2026 in the specific run checked) - everything older is a stub page
+# linking to a .hwpx/.pdf attachment this scraper never opens. A real,
+# permanent content-format boundary, not a transient gap - once a real
+# run crosses it, every earlier post will also fail the same way, so
+# there's no reason to keep walking further pages after a solid run of
+# consecutive misses among otherwise-target-type posts. 4 is a small
+# margin above 1 (a single miss could still be one of the OTHER real
+# gaps this module already accepts - a genuinely missing figure on one
+# real post, a transient fetch failure already retried and still failed)
+# without walking dozens of pointless pages once the real boundary is
+# crossed.
+_CUSTOMS_BACKFILL_STOP_AFTER_CONSECUTIVE_MISSES = 4
 
-    period_match = _CUSTOMS_PERIOD_PATTERN.search(post["title"])
-    period_start = period_end = None
-    if period_match:
-        y1, m1, d1, y2, m2, d2 = period_match.groups()
-        y2 = y2 or y1
-        period_start = f"{y1}-{int(m1):02d}-{int(d1):02d}"
-        period_end = f"{y2}-{int(m2):02d}-{int(d2):02d}"
 
-    pub_date = None
-    if period_end:
-        try:
-            pub_date = datetime.strptime(period_end, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-        except ValueError:
-            pub_date = None
+def fetch_customs_export_backfill(max_pages: int = _CUSTOMS_BACKFILL_MAX_PAGES) -> list[dict]:
+    """One-time historical backfill for korea_market_signal's
+    kr_customs_export source - walks the SAME title-search board
+    _fetch_customs_export_data already polls going forward, but paginates
+    through it instead of only ever reading page 1's first match.
 
-    return [{
-        "title": post["title"],
-        "url": f"kr-customs-export://semiconductor/{post['ntt_sn']}",
-        "published": period_end or "",
-        "source": "Korea Customs Service",
-        "summary": None,
-        "body": text[:5000],
-        "_pub_date": pub_date,
-        "metadata": {
-            "ntt_sn": post["ntt_sn"],
-            "period_start": period_start,
-            "period_end": period_end,
-            "semiconductor_export_usd_billion": semiconductor_usd_billion,
-            "source_category": "kr_customs_export",
-        },
-    }]
+    Confirmed live 2026-09-23: this board's own title search already
+    returns full pagination (~10 posts/page, 47 total pages at the time of
+    checking) with no login or Korean identity verification required at
+    all - directly reversing the earlier finding (recorded in
+    KOREA_CUSTOMS_EXPORT_SOURCE's own seed.py comment, now stale) that
+    "this scraper only ever sees whatever's newest right now" and that S1
+    was therefore permanently out of scope. HOWEVER, also confirmed live:
+    the board's own detail-page FORMAT changed at some point in its own
+    history (March 2026, in the specific run checked) - posts from that
+    point forward embed the full breakdown (including, for monthly
+    CONFIRMED releases, a real semiconductor-specific YoY% series - see
+    _extract_customs_figures) directly in the page's own HTML; everything
+    older is a stub page linking to a .hwpx/.pdf attachment this scraper
+    never opens. This means REAL backfillable depth today is roughly 7
+    months (March-September 2026), not the full 2 years Section 5.1's own
+    build note asks for - genuinely short of the 12 EQUIVALENT periods
+    (12 prior same-period-type readings) that rule needs before it's
+    computable, so a real first classification still needs several more
+    months of the existing 4-hourly poll's own organic growth on top of
+    this backfill, not an immediate fix. This function stops itself once
+    it detects that older-format boundary (see
+    _CUSTOMS_BACKFILL_STOP_AFTER_CONSECUTIVE_MISSES) rather than walking
+    dozens of pages that can only ever return stub pages past that point.
+
+    The existing 4-hourly scheduled fetch (_fetch_customs_export_data)
+    still only reads page 1 - this function is a SEPARATE, one-time (or
+    manually re-run) call, not part of that regular poll.
+
+    Stops after ``max_pages`` (a real page limit, not a date-based one -
+    the board has no date filter on this search, only pagination), as
+    soon as a page returns zero posts (end of results), or once the
+    older-format boundary is detected (see above) - whichever comes
+    first. Not stopped by encountering an already-stored URL - unlike the
+    regular fetch, a one-time backfill run is expected to see mostly-new
+    URLs throughout, and stopping early on the first repeat would risk
+    missing genuine gaps if pages are ever returned out of strict
+    chronological order (not confirmed either way - safer to walk every
+    page up to whichever real stopping condition fires first).
+
+    Returns article dicts in the same shape _fetch_customs_export_data
+    produces (via the same shared _build_customs_article) - posts that
+    aren't one of the three target period types, or have no extractable
+    semiconductor figure, are silently skipped (see
+    _classify_customs_period_type / _extract_customs_figures's own
+    docstrings for why that's a real, expected outcome, not an error).
+    """
+    articles: list[dict] = []
+    skipped_period_type = 0
+    skipped_no_figure = 0
+    skipped_fetch_failed = 0
+    consecutive_no_figure = 0
+
+    for page in range(1, max_pages + 1):
+        posts = _fetch_customs_list_page(page)
+        if not posts:
+            logger.info("[CUSTOMS_BACKFILL] page=%d empty, stopping", page)
+            break
+        for post in posts:
+            period_info = _classify_customs_period_type(post["title"])
+            if period_info is None:
+                skipped_period_type += 1
+                continue
+            text = _fetch_customs_post_body(post["ntt_sn"], post["ntt_url"])
+            if text is None:
+                skipped_fetch_failed += 1
+                continue
+            article = _build_customs_article(post, text)
+            if article is None:
+                skipped_no_figure += 1
+                consecutive_no_figure += 1
+                if consecutive_no_figure >= _CUSTOMS_BACKFILL_STOP_AFTER_CONSECUTIVE_MISSES:
+                    logger.info(
+                        "[CUSTOMS_BACKFILL] %d consecutive target-type posts with no"
+                        " extractable figure - stopping (this board's detail-page"
+                        " format changed at some point in its history; confirmed"
+                        " live 2026-09-23 that posts before March 2026 are stub"
+                        " pages linking to a .hwpx/.pdf attachment this scraper"
+                        " never opens, not a parsing bug)",
+                        consecutive_no_figure,
+                    )
+                    return articles
+                continue
+            consecutive_no_figure = 0
+            articles.append(article)
+
+    logger.info(
+        "[CUSTOMS_BACKFILL] pages_walked<=%d articles=%d skipped_period_type=%d"
+        " skipped_no_figure=%d skipped_fetch_failed=%d",
+        max_pages, len(articles), skipped_period_type, skipped_no_figure,
+        skipped_fetch_failed,
+    )
+    return articles
 
 
 def _fetch_articles(
