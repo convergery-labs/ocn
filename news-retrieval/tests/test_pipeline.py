@@ -130,7 +130,14 @@ def test_body_trafilatura_fallback() -> None:
 
     assert len(result["articles"]) == 1
     assert result["articles"][0]["body"] == trafilatura_body
-    mock_fetch.assert_called_once_with("http://example.com/test")
+    # fetch_url is called with config=_TRAFILATURA_CONFIG (the User-Agent
+    # fix - see pipeline.py's own comment on _TRAFILATURA_CONFIG) on every
+    # real call site, not just a bare url - assert on the url positional
+    # arg only, since the config object itself isn't meaningful to compare
+    # by identity here.
+    mock_fetch.assert_called_once()
+    assert mock_fetch.call_args.args == ("http://example.com/test",)
+    assert "config" in mock_fetch.call_args.kwargs
 
 
 def _insert_stored_run_with_article(domain: str, url: str) -> None:

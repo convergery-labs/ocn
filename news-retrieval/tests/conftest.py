@@ -159,8 +159,8 @@ def mock_trafilatura(monkeypatch) -> None:
     with their own ``patch`` context managers.
     """
     import trafilatura as _traf
-    monkeypatch.setattr(_traf, "fetch_url", lambda url: None)
-    monkeypatch.setattr(_traf, "extract", lambda html: None)
+    monkeypatch.setattr(_traf, "fetch_url", lambda url, **kwargs: None)
+    monkeypatch.setattr(_traf, "extract", lambda html, **kwargs: None)
 
 
 @pytest.fixture(autouse=True)
