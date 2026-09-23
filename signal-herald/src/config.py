@@ -38,6 +38,7 @@ EMAIL_RECIPIENTS: list[str] = [
     "wadhwa.amisha@gmail.com",
     "contact_amitwadhwa@yahoo.com",
     "adam@lynmarestate.com",
+    "sourav.dey@opengrowth.com",
 ]
 
 if _test_email := os.environ.get("DIGEST_TEST_EMAIL"):
