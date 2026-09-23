@@ -990,24 +990,30 @@ resource "aws_cloudwatch_event_rule" "signal_detection_agent_korea_signals" {
   # a "market close" moment the way Taiwan's is, just spacing two passes
   # far enough apart to each pool a meaningful number of fetch cycles.
   #
-  # 15:00 UTC = after KST business hours have fully closed (KST is
-  # UTC+9 - Korea's own business day runs roughly 23:00-14:00 UTC the
-  # previous calendar day, matching the spec's own "filings lodged in the
-  # evening, Korea time" observation already noted on the fetch rule
-  # above) AND after the 12:00 UTC fetch has landed - pools the 00/04/08/12
-  # UTC fetches, catching same-day DART filings and evening/weekend board
-  # meetings.
-  # 22:00 UTC = well before the next US trading day's pre-market (13:00 UTC
-  # / 9am ET), catching the 16:00/20:00 UTC fetches - same "pre-US-open"
-  # framing as Taiwan's second pass, since this is still a US hardware desk
-  # consuming both markets' output on the same trading-day rhythm.
+  # Corrected 2026-09-23: an earlier version of this schedule (15:00/22:00
+  # UTC) was designed by reasoning about UTC-relative-to-Taiwan's-own-
+  # framing ("post-Asia-close, pre-US-open") without actually converting
+  # to real KST (UTC+9) - converting it after the fact showed those two
+  # times land at 00:00 and 07:00 KST, the middle of the Korean night and
+  # early pre-dawn, not "after KST business hours close" as that version's
+  # own comment incorrectly claimed. Recomputed properly below.
+  #
+  # 13:00 UTC = 22:00 KST (right after Korea's evening filing window - the
+  # spec's own "filings lodged in the evening, Korea time" - and right
+  # after the 12:00 UTC fetch has landed, pooling 00/04/08/12 UTC) AND
+  # 09:00 ET / 13:30 UTC summary = right at US market open (9:30am ET) -
+  # a trader has the digest before the US trading day starts.
+  # 21:00 UTC = 06:00 KST (right after the 20:00 UTC fetch, catching
+  # Korea's very early morning filings before that day's Korean business
+  # hours even start) AND 17:00 ET / 21:30 UTC summary = end of the US
+  # trading day - a second checkpoint before the desk closes out.
   # Both passes call classify-korea-signals with default from_date=to_date=
   # today (UTC), which pools ALL of today's completed runs so far (not just
   # the latest) and skips already-classified source_ids (via the
   # idx_agent_classifications_korea_source_id unique index - see db.py), so
   # the two runs are additive rather than duplicating work, same pattern as
   # Taiwan's own two-pass schedule.
-  schedule_expression = "cron(0 15,22 * * ? *)"
+  schedule_expression = "cron(0 13,21 * * ? *)"
 }
 
 resource "aws_cloudwatch_event_target" "signal_detection_agent_korea_signals" {
@@ -1037,7 +1043,7 @@ resource "aws_cloudwatch_event_target" "signal_detection_agent_korea_signals" {
 resource "aws_cloudwatch_event_rule" "signal_detection_agent_korea_signals_summary" {
   name        = "${var.env}-signal-detection-agent-korea-signals-summary"
   description = "Generate the spec Section 8.4 twice-daily trader summary from today's already-classified korea_market_signal rows"
-  # 30 minutes after each classify-korea-signals pass (15:00/22:00 UTC
+  # 30 minutes after each classify-korea-signals pass (13:00/21:00 UTC
   # above), not at the same time - classification itself takes real time
   # (S7's own per-article model call, plus translation, over however many
   # articles pooled that run), so summarizing at the exact same timestamp
@@ -1045,11 +1051,14 @@ resource "aws_cloudwatch_event_rule" "signal_detection_agent_korea_signals_summa
   # yet. 30 minutes is a deliberate buffer, not a measured worst-case
   # runtime - revisit if a real run is ever confirmed to still be
   # in-flight past this offset.
+  # 13:30 UTC = 9:30am ET, right at US market open - the trader has the
+  # digest before the trading day starts. 21:30 UTC = 5:30pm ET, just
+  # after the US trading day ends - a second checkpoint before close-out.
   # summarize-korea-signals only reads agent_classifications (no
   # news-retrieval fetch, no LLM classification calls of its own beyond
   # the one summary-writer call) - so this is a fast job regardless of
   # how large the classify pass was.
-  schedule_expression = "cron(30 15,22 * * ? *)"
+  schedule_expression = "cron(30 13,21 * * ? *)"
 }
 
 resource "aws_cloudwatch_event_target" "signal_detection_agent_korea_signals_summary" {
