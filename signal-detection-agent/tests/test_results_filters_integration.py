@@ -262,3 +262,146 @@ def test_combined_filters_all_apply_together():
     titles = {r["title"] for r in result["results"]}
     assert "Matches all row" in titles
     assert "Wrong channel row" not in titles
+
+
+def _insert_macro_row(*, source_id: str, published: datetime, metadata: dict, signal_detection: str = "signal"):
+    """macro_signal rows have no article_id/url/title (see
+    insert_macro_signal_event) - a dedicated helper rather than reusing
+    _insert_row above, which hardcodes source_type='geopolitical_signal'
+    and an article-shaped INSERT."""
+    job_id = create_job(domain="macro_signal")
+    full_metadata = {**metadata, "_test_marker": _TEST_MARKER}
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO agent_classifications
+                (job_id, source_id, signal_detection, published, source_type, metadata)
+            VALUES (%s, %s, %s, %s, 'macro_signal', %s::jsonb)
+            """,
+            (job_id, source_id, signal_detection, published, json.dumps(full_metadata)),
+        )
+
+
+def test_macro_signal_detection_filter_matches_only_that_value():
+    """macro_signal has no domain-specific tier filter - it reads
+    through plain signal_detection ('signal'/'weak_signal'/'noise'),
+    same as every other domain."""
+    _insert_macro_row(
+        source_id="TESTFIXTURE-18-2026-08-28T20:30:00+00:00", published=datetime.now(timezone.utc),
+        metadata={}, signal_detection="signal",
+    )
+    _insert_macro_row(
+        source_id="TESTFIXTURE-DGS10-2026-08-27", published=datetime.now(timezone.utc),
+        metadata={}, signal_detection="noise",
+    )
+    result_signal = list_all_results(source_type="macro_signal", signal_detection="signal", limit=100)
+    signal_ids = {r["source_id"] for r in result_signal["results"] if r["metadata"].get("_test_marker") == _TEST_MARKER}
+    assert signal_ids == {"TESTFIXTURE-18-2026-08-28T20:30:00+00:00"}
+
+    result_noise = list_all_results(source_type="macro_signal", signal_detection="noise", limit=100)
+    noise_ids = {r["source_id"] for r in result_noise["results"] if r["metadata"].get("_test_marker") == _TEST_MARKER}
+    assert noise_ids == {"TESTFIXTURE-DGS10-2026-08-27"}
+
+
+def test_macro_series_filter_matches_both_row_shapes():
+    """member_series (interpreted-event rows, a JSONB array) and
+    series_id (suppressed/audit rows, a plain string) are the two
+    different places macro_signal stores 'which series' - this filter
+    must match a series_id search against either shape."""
+    _insert_macro_row(
+        source_id="TESTFIXTURE-18-2026-08-28T20:30:00+00:00", published=datetime.now(timezone.utc),
+        metadata={"member_series": ["DFII5", "DGS1"]},
+    )
+    _insert_macro_row(
+        source_id="TESTFIXTURE-DGS10-2026-08-28", published=datetime.now(timezone.utc),
+        metadata={"series_id": "DGS10", "suppressed_by": "derived:DFII10+T10YIE"},
+        signal_detection="signal",
+    )
+    _insert_macro_row(
+        source_id="TESTFIXTURE-VIXCLS-2026-08-28", published=datetime.now(timezone.utc),
+        metadata={"series_id": "VIXCLS"}, signal_detection="noise",
+    )
+
+    result_dgs1 = list_all_results(source_type="macro_signal", macro_series="DGS1", limit=100)
+    matched_ids = {r["source_id"] for r in result_dgs1["results"]}
+    assert "TESTFIXTURE-18-2026-08-28T20:30:00+00:00" in matched_ids  # matched via member_series
+    assert "TESTFIXTURE-VIXCLS-2026-08-28" not in matched_ids
+
+    result_dgs10 = list_all_results(source_type="macro_signal", macro_series="DGS10", limit=100)
+    matched_ids = {r["source_id"] for r in result_dgs10["results"]}
+    assert "TESTFIXTURE-DGS10-2026-08-28" in matched_ids  # matched via series_id
+    assert "TESTFIXTURE-18-2026-08-28T20:30:00+00:00" not in matched_ids
+
+
+def test_macro_suspect_filter():
+    _insert_macro_row(
+        source_id="TESTFIXTURE-18-2026-11-27T14:00:00+00:00", published=datetime.now(timezone.utc),
+        metadata={"suspect": True, "suspect_reason": "Thanksgiving holiday week"},
+    )
+    _insert_macro_row(
+        source_id="TESTFIXTURE-18-2026-08-28T20:30:00+00:00", published=datetime.now(timezone.utc),
+        metadata={"suspect": False, "suspect_reason": None},
+    )
+    result_suspect = list_all_results(source_type="macro_signal", macro_suspect=True, limit=100)
+    matched_ids = {r["source_id"] for r in result_suspect["results"]}
+    assert "TESTFIXTURE-18-2026-11-27T14:00:00+00:00" in matched_ids
+    assert "TESTFIXTURE-18-2026-08-28T20:30:00+00:00" not in matched_ids
+
+    result_not_suspect = list_all_results(source_type="macro_signal", macro_suspect=False, limit=100)
+    matched_ids = {r["source_id"] for r in result_not_suspect["results"]}
+    assert "TESTFIXTURE-18-2026-08-28T20:30:00+00:00" in matched_ids
+    assert "TESTFIXTURE-18-2026-11-27T14:00:00+00:00" not in matched_ids
+
+
+def test_macro_interpreted_only_filter_excludes_suppressed_high_rows():
+    """CONFIRMED LIVE against a real pipeline run on 2026-08-28: DGS2
+    cleared HIGH (z=2.736) but was suppressed via the {DGS3MO,DGS1,DGS2}
+    collinear cluster - the audit-row branch of insert_macro_signal_event
+    mapped its original HIGH tier to signal_detection='signal'
+    (metadata.suppressed_by='collinear:DGS1'), same as a genuinely
+    interpreted survivor, so signal_detection='signal' alone returns
+    both mixed together with no way to tell them apart except
+    suppressed_by. This is exactly the gap macro_interpreted_only
+    exists to close."""
+    _insert_macro_row(
+        source_id="TESTFIXTURE-DGS2-2026-08-28", published=datetime.now(timezone.utc),
+        metadata={"series_id": "DGS2", "suppressed_by": "collinear:DGS1"},
+        signal_detection="signal",
+    )
+    _insert_macro_row(
+        source_id="TESTFIXTURE-18-2026-08-28", published=datetime.now(timezone.utc),
+        metadata={
+            "suppressed_by": None, "channel": "discount_rate",
+            "transmission": "The 5-year real yield rose 18bp.",
+        },
+        signal_detection="signal",
+    )
+
+    result_all_signal = list_all_results(source_type="macro_signal", signal_detection="signal", limit=100)
+    all_ids = {r["source_id"] for r in result_all_signal["results"] if r["metadata"].get("_test_marker") == _TEST_MARKER}
+    assert all_ids == {"TESTFIXTURE-DGS2-2026-08-28", "TESTFIXTURE-18-2026-08-28"}  # both present without the new filter
+
+    result_interpreted = list_all_results(
+        source_type="macro_signal", signal_detection="signal", macro_interpreted_only=True, limit=100,
+    )
+    interpreted_ids = {r["source_id"] for r in result_interpreted["results"] if r["metadata"].get("_test_marker") == _TEST_MARKER}
+    assert interpreted_ids == {"TESTFIXTURE-18-2026-08-28"}  # only the real interpreted event
+
+    result_suppressed = list_all_results(
+        source_type="macro_signal", signal_detection="signal", macro_interpreted_only=False, limit=100,
+    )
+    suppressed_ids = {r["source_id"] for r in result_suppressed["results"] if r["metadata"].get("_test_marker") == _TEST_MARKER}
+    assert suppressed_ids == {"TESTFIXTURE-DGS2-2026-08-28"}  # only the suppressed audit row
+
+
+def test_macro_interpreted_only_excludes_noise_rows_regardless_of_suppressed_by():
+    """A genuine NOISE row (suppressed_by is absent, never set) must also
+    be excluded by macro_interpreted_only=True - it never reached
+    INTERPRET either, even though it has no suppressed_by value to check."""
+    _insert_macro_row(
+        source_id="TESTFIXTURE-DGS10-2026-08-27", published=datetime.now(timezone.utc),
+        metadata={}, signal_detection="noise",
+    )
+    result = list_all_results(source_type="macro_signal", macro_interpreted_only=True, limit=100)
+    matched_ids = {r["source_id"] for r in result["results"] if r["metadata"].get("_test_marker") == _TEST_MARKER}
+    assert "TESTFIXTURE-DGS10-2026-08-27" not in matched_ids

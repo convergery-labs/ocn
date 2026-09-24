@@ -29,10 +29,13 @@ async def get_all_results(
     corroborated: bool | None = Query(default=None, description="Filter by metadata.corroborated (only populated for geopolitical_signal rows Stage D has graded)"),
     published_from: str | None = Query(default=None, description="Filter to rows with published >= this date (YYYY-MM-DD), inclusive"),
     published_to: str | None = Query(default=None, description="Filter to rows with published <= this date (YYYY-MM-DD), inclusive"),
+    macro_series: str | None = Query(default=None, description="Filter to macro_signal rows involving this series_id, e.g. 'DGS10' - matches either an interpreted event's member_series or a suppressed/audit row's own series_id"),
+    macro_suspect: bool | None = Query(default=None, description="Filter by metadata.suspect (only populated for source_type='macro_signal' interpreted-event rows - the model's calendar-mechanics override flag from Appendix A)"),
+    macro_interpreted_only: bool | None = Query(default=None, description="true: only macro_signal rows that reached and passed INTERPRET (a real LLM call, real channel/entry_point/assets/transmission fields) - excludes suppressed/NOISE audit rows kept only for the 'nothing is ever deleted' audit trail, which otherwise mix in with real signal_detection='signal'/'weak_signal' results. false: only the suppressed/audit rows. Use plain signal_detection ('signal'/'weak_signal'/'noise') for macro_signal's HIGH/WEAK/NOISE tier - same convention as every other domain, no separate macro-specific tier filter."),
     caller: dict[str, Any] = Depends(require_auth),
 ) -> dict[str, Any]:
     """Return paginated classification results across all jobs, newest first."""
-    return list_all_results(limit=limit, cursor=cursor, signal_detection=signal_detection, source_type=source_type, ticker=ticker, period=period, source_category=source_category, grade=grade, impacted_category=impacted_category, impacted_ticker=impacted_ticker, channel=channel, corroborated=corroborated, published_from=published_from, published_to=published_to)
+    return list_all_results(limit=limit, cursor=cursor, signal_detection=signal_detection, source_type=source_type, ticker=ticker, period=period, source_category=source_category, grade=grade, impacted_category=impacted_category, impacted_ticker=impacted_ticker, channel=channel, corroborated=corroborated, published_from=published_from, published_to=published_to, macro_series=macro_series, macro_suspect=macro_suspect, macro_interpreted_only=macro_interpreted_only)
 
 
 @router.get("/korea-signals/summary")
@@ -115,9 +118,12 @@ async def get_job_results(
     corroborated: bool | None = Query(default=None, description="Filter by metadata.corroborated (only populated for geopolitical_signal rows Stage D has graded)"),
     published_from: str | None = Query(default=None, description="Filter to rows with published >= this date (YYYY-MM-DD), inclusive"),
     published_to: str | None = Query(default=None, description="Filter to rows with published <= this date (YYYY-MM-DD), inclusive"),
+    macro_series: str | None = Query(default=None, description="Filter to macro_signal rows involving this series_id, e.g. 'DGS10' - matches either an interpreted event's member_series or a suppressed/audit row's own series_id"),
+    macro_suspect: bool | None = Query(default=None, description="Filter by metadata.suspect (only populated for source_type='macro_signal' interpreted-event rows - the model's calendar-mechanics override flag from Appendix A)"),
+    macro_interpreted_only: bool | None = Query(default=None, description="true: only macro_signal rows that reached and passed INTERPRET (a real LLM call, real channel/entry_point/assets/transmission fields) - excludes suppressed/NOISE audit rows kept only for the 'nothing is ever deleted' audit trail, which otherwise mix in with real signal_detection='signal'/'weak_signal' results. false: only the suppressed/audit rows. Use plain signal_detection ('signal'/'weak_signal'/'noise') for macro_signal's HIGH/WEAK/NOISE tier - same convention as every other domain, no separate macro-specific tier filter."),
     caller: dict[str, Any] = Depends(require_auth),
 ) -> dict[str, Any]:
     job = get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
-    return list_results(job_id=job_id, limit=limit, cursor=cursor, signal_detection=signal_detection, source_type=source_type, ticker=ticker, period=period, source_category=source_category, grade=grade, impacted_category=impacted_category, impacted_ticker=impacted_ticker, channel=channel, corroborated=corroborated, published_from=published_from, published_to=published_to)
+    return list_results(job_id=job_id, limit=limit, cursor=cursor, signal_detection=signal_detection, source_type=source_type, ticker=ticker, period=period, source_category=source_category, grade=grade, impacted_category=impacted_category, impacted_ticker=impacted_ticker, channel=channel, corroborated=corroborated, published_from=published_from, published_to=published_to, macro_series=macro_series, macro_suspect=macro_suspect, macro_interpreted_only=macro_interpreted_only)

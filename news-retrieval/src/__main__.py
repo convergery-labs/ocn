@@ -134,6 +134,62 @@ def backfill_korea_customs(max_pages: int | None) -> None:
     )
 
 
+@cli.command("fetch-macro-signals")
+@click.option(
+    "--incremental",
+    is_flag=True,
+    default=False,
+    help="Fetch only the last macro_signal_fetch.INCREMENTAL_LOOKBACK_DAYS "
+    "(1) day per series, instead of the full 3-year backfill window. "
+    "The mode for a scheduled run once the initial full backfill "
+    "has been run once - stateless, no watermark lookup, just a fixed "
+    "small window every run, upserted safely over whatever's stored.",
+)
+def fetch_macro_signals(incremental: bool) -> None:
+    """Fetch macro_signal series (FRED + Treasury Fiscal Data), construct
+    knowledge_time, upsert into macro_observations. Runs to completion
+    and exits - same shape as backfill-korea-customs.
+
+    Default (no --incremental): full 3-year lookback re-pull per series
+    (macro_signal_fetch.FETCH_LOOKBACK_DAYS) - run this once for the
+    initial backfill. --incremental: fixed 1-day fetch per series - run
+    this on the twice-daily schedule after the initial backfill is done.
+
+    Tracked in the same `runs` table every other domain uses (GET
+    /runs?domain=macro_signal) via controllers.macro_run - NOT routed
+    through POST /run's own create_run_record/run_pipeline (that path
+    assumes an article-shaped domain registered in the `domains` table,
+    which macro_signal is not), but the run lifecycle (create/complete/
+    fail) is the same as every other domain's, for consistency. Requires
+    FRED_API_KEY. See also: POST /macro/fetch, the HTTP-triggerable
+    equivalent of this command (routes/macro.py)."""
+    import os
+
+    from controllers.macro_run import create_macro_fetch_run, run_macro_fetch
+    from models.runs import get_run
+
+    init_db()
+
+    fred_api_key = os.environ.get("FRED_API_KEY")
+    if not fred_api_key:
+        logger.error("FRED_API_KEY is not set")
+        sys.exit(1)
+
+    run_id = create_macro_fetch_run(incremental=incremental)
+    logger.info("Starting macro_signal fetch run_id=%d (46 series, incremental=%s)", run_id, incremental)
+    run_macro_fetch(run_id, fred_api_key, incremental=incremental)
+
+    # run_macro_fetch itself never raises (fail_run absorbs the error so
+    # the run row always reaches a terminal status) - check that status
+    # here so this CLI invocation still exits non-zero on failure, same
+    # as every other one-shot fetch command in this file (CloudWatch/CI
+    # failure detection depends on the exit code, not just the DB row).
+    final_run = get_run(run_id)
+    if final_run and final_run["status"] == "failed":
+        logger.error("Macro signal fetch failed: %s", final_run.get("summary"))
+        sys.exit(1)
+
+
 @cli.command("expire-articles")
 @click.option("--domain", required=True, help="Domain slug to expire articles for, e.g. geopolitical_news.")
 @click.option("--days", default=7, show_default=True, help="Delete articles published more than this many days ago.")

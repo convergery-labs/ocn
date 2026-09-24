@@ -271,3 +271,43 @@ def init_db() -> None:
               END IF;
             END $$
         """)
+        # Macro Signal Backbone (macro_signal domain): raw FRED/Treasury
+        # Fiscal Data observations. Deliberately NOT the articles table -
+        # this needs full 2yr+ retention (no expire job, unlike every other
+        # domain), typed range queries per series for rolling z-score
+        # computation, and vintage tracking for ALFRED first-print revisions
+        # - none of which fit the article/runs shape. See CLAUDE.md's
+        # "Macro Signal Pipeline" section.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS macro_observations (
+                id                        SERIAL PRIMARY KEY,
+                series_id                 TEXT NOT NULL,
+                observation_date          DATE NOT NULL,
+                value                     NUMERIC,
+                knowledge_time            TIMESTAMPTZ NOT NULL,
+                knowledge_time_confidence TEXT NOT NULL
+                    CHECK (knowledge_time_confidence IN ('verified', 'known_lag')),
+                vintage                   DATE,
+                source                    TEXT NOT NULL
+                    CHECK (source IN ('fred', 'fred_alfred', 'treasury_fiscal')),
+                fetched_at                TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                raw_payload               JSONB
+            )
+        """)
+        # vintage is part of the uniqueness key (via COALESCE, since a
+        # never-revised series always has vintage NULL and plain UNIQUE
+        # treats NULL as distinct on every row) - a revised series can
+        # legitimately have multiple vintages of the same observation_date
+        # over time as ALFRED accumulates first-print revisions.
+        conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_macro_observations_series_date_vintage
+            ON macro_observations (series_id, observation_date, COALESCE(vintage, '0001-01-01'::date))
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_macro_observations_series_date
+            ON macro_observations (series_id, observation_date DESC)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_macro_observations_knowledge_time
+            ON macro_observations (knowledge_time DESC)
+        """)

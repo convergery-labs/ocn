@@ -123,6 +123,129 @@ def classify_taiwan_signals(from_date: str | None, to_date: str | None) -> None:
     logger.info("taiwan_market_signal job_id=%s finished", job_id)
 
 
+@cli.command("run-macro-signal-pipeline")
+@click.option(
+    "--from-date",
+    default=None,
+    help="Start date (YYYY-MM-DD) of observation dates to tier/collapse/"
+    "interpret this run. Defaults to yesterday (UTC), or today (UTC) if "
+    "--today is passed.",
+)
+@click.option(
+    "--to-date",
+    default=None,
+    help="End date (YYYY-MM-DD) of observation dates to tier/collapse/"
+    "interpret this run. Defaults to yesterday (UTC), or today (UTC) if "
+    "--today is passed.",
+)
+@click.option(
+    "--today",
+    is_flag=True,
+    default=False,
+    help="Evaluate today's UTC date instead of yesterday's (the plain "
+    "default) when --from-date/--to-date are omitted. Ignored if "
+    "--from-date/--to-date are given explicitly. For the twice-daily "
+    "schedule's after-close pass (~22:00 UTC) - by then a market-close "
+    "series' TODAY observation already exists (16:30 ET stamp), so "
+    "evaluating yesterday only would miss a same-day move until the "
+    "next day's run. The plain default (no flag) stays correct for the "
+    "next-morning catch-up pass, which still wants yesterday's tail-end "
+    "data, not the day that's only just started in UTC.",
+)
+def run_macro_signal_pipeline_cmd(from_date: str | None, to_date: str | None, today: bool) -> None:
+    """One-shot: pull macro_observations from news-retrieval (full
+    z-score window, not just [from_date, to_date] - see
+    run_macro_signal_pipeline's own docstring), run
+    Z-SCORE->TIER->SUPPRESS->COLLAPSE->INTERPRET for observation dates in
+    [from_date, to_date], persist. Entry point for the CloudWatch-triggered
+    scheduled task (twice daily - see infra's own schedule comments) -
+    runs to completion and exits.
+    """
+    import asyncio
+    from datetime import datetime, timedelta, timezone
+
+    import config
+    from controllers.run import run_macro_signal_pipeline
+    from models.jobs import create_job
+
+    logger.info("Initialising database...")
+    init_db()
+    seed()
+
+    default_offset_days = 0 if today else 1
+    default_date = (datetime.now(timezone.utc) - timedelta(days=default_offset_days)).strftime("%Y-%m-%d")
+    from_date = from_date or default_date
+    to_date = to_date or default_date
+
+    job_id = create_job(domain=config.MACRO_SIGNAL_DOMAIN)
+    logger.info(
+        "Created macro_signal job_id=%s from_date=%s to_date=%s",
+        job_id, from_date, to_date,
+    )
+    asyncio.run(run_macro_signal_pipeline(job_id, from_date, to_date))
+    logger.info("macro_signal job_id=%s finished", job_id)
+
+
+@cli.command("recheck-macro-signal-confirmations")
+@click.option(
+    "--since-date",
+    default=None,
+    help="Recheck already-stored macro_signal rows published on or after "
+    "this date (YYYY-MM-DD) for confirmation reversal. Defaults to 60 "
+    "days ago - generous enough to cover even a monthly series' full "
+    "confirmation window (its next print can land up to ~4 weeks after "
+    "the original event) with margin.",
+)
+def recheck_macro_signal_confirmations_cmd(since_date: str | None) -> None:
+    """One-shot: re-examines already-stored macro_signal events/audit
+    rows for weekly/monthly series against newly-arrived next-
+    observations, retroactively marks confirmation-reversed events as
+    suppressed (mechanism C - see pipeline/macro_signal_confirmation.py
+    and pipeline/macro_signal_frequency.py). Separate schedule from the
+    main daily pipeline since this is retroactive - a monthly series'
+    reversal can only be confirmed up to ~4 weeks after the original
+    event was stored. Runs to completion and exits.
+    """
+    import asyncio
+    from datetime import datetime, timedelta, timezone
+
+    import config
+    from controllers.run import run_macro_signal_confirmation_recheck
+    from models.jobs import create_job
+
+    logger.info("Initialising database...")
+    init_db()
+    seed()
+
+    since_date = since_date or (datetime.now(timezone.utc) - timedelta(days=60)).strftime("%Y-%m-%d")
+
+    job_id = create_job(domain=config.MACRO_SIGNAL_DOMAIN)
+    logger.info("Created macro_signal confirmation-recheck job_id=%s since_date=%s", job_id, since_date)
+    asyncio.run(run_macro_signal_confirmation_recheck(job_id, since_date))
+    logger.info("macro_signal confirmation-recheck job_id=%s finished", job_id)
+
+
+@cli.command("refresh-fomc-calendar")
+def refresh_fomc_calendar_cmd() -> None:
+    """One-shot: fetches the Fed's own published FOMC meeting calendar
+    (federalreserve.gov/json/calendar.json) and upserts it into
+    fomc_meeting_dates, so DFF's inter-meeting move detection (see
+    pipeline/macro_signal_fomc_calendar.py) always has a current, real
+    calendar to check against. Meant to run on its own recurring
+    schedule (CloudWatch), independent of the daily pipeline run -
+    the calendar itself only needs refreshing when the Fed publishes
+    new dates, not every pipeline run.
+    """
+    from pipeline.macro_signal_fomc_calendar import refresh_fomc_meeting_dates
+
+    logger.info("Initialising database...")
+    init_db()
+    seed()
+
+    count = refresh_fomc_meeting_dates()
+    logger.info("refresh-fomc-calendar: upserted %d FOMC meeting dates", count)
+
+
 @cli.command("classify-korea-signals")
 @click.option(
     "--from-date",
