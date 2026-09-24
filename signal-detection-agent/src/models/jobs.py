@@ -278,6 +278,235 @@ def get_existing_korea_signal_source_ids(source_ids: list[str]) -> set[str]:
     return {r["source_id"] for r in rows}
 
 
+def insert_macro_signal_event(
+    job_id: int, event: dict[str, Any], interpretation: dict[str, Any] | None,
+) -> None:
+    """Upsert one agent_classifications row for a macro_signal event
+    (source_type='macro_signal') - EITHER a collapsed event that survived
+    to INTERPRET (interpretation is not None, one row per member series'
+    release_id+knowledge_time group) OR a suppressed/NOISE candidate kept
+    only for audit (interpretation is None) - the spec's "nothing is ever
+    deleted, a suppressed row persists with the rule that suppressed it"
+    requirement (see macro_signal_suppress.py's suppressed_by field).
+
+    source_id is the deterministic natural key: f"{release_id}-{channel}-
+    {knowledge_time isoformat}" for a collapsed/interpreted event, or
+    f"{series_id}-{observation_date}" for a single suppressed/NOISE
+    observation (no release grouping applies to those - they never
+    reached COLLAPSE). channel is part of the key because release_id
+    alone is not unique per event - COLLAPSE groups survivors by
+    (release_id, channel), and some release_ids are shared across
+    channels (e.g. release_id=18 covers both DFF/DFEDTARU's policy_path
+    channel and DFII10/T10Y3M's discount_rate channel) - CONFIRMED LIVE
+    that omitting channel here silently dropped a real second-channel
+    event as a false duplicate of an already-inserted first-channel
+    event on the same release+date.
+
+    signal_detection: HIGH -> 'signal', WEAK -> 'weak_signal' (an
+    interpreted survivor is always HIGH or WEAK - NOISE never reaches
+    COLLAPSE/INTERPRET), or the observation's own tier value lowercased
+    for a suppressed/NOISE audit row written directly from TIER/SUPPRESS
+    output. signal_score is always NULL - deterministic tier/z-score
+    logic feeds this, not a model confidence, same convention as
+    korea/taiwan's non-LLM paths.
+
+    event['tier'] (HIGH/WEAK/NOISE) is used here only to COMPUTE
+    signal_detection - it is deliberately NOT stored in metadata.
+    macro_signal reads the same way every other domain does
+    (signal_detection alone; no domain-specific '_tier' field, no
+    macro_tier query param - explicit decision to keep the read/filter
+    surface consistent across domains rather than macro_signal having
+    its own parallel vocabulary for something signal_detection already
+    expresses one-to-one for this domain).
+
+    source ('fred' | 'fred_alfred' | 'treasury_fiscal') and
+    knowledge_time_confidence ('verified' | 'known_lag') are carried
+    through from news-retrieval's own macro_observations row (see
+    SuppressibleResult in macro_signal_suppress.py) - real provenance
+    about where a number came from and how certain its publication
+    timing is, previously computed at fetch time and then silently
+    dropped rather than stored. An interpreted event's members can each
+    come from a different series/release, so these are stored as
+    DEDUPLICATED ARRAYS (metadata.sources / metadata.knowledge_time_
+    confidences) - the distinct VALUES an event's members carry, not a
+    per-series map, since the value (which source, how confident) is
+    the real information here, not which specific series it came from.
+    Stays a real array rather than collapsing to one string so a
+    genuinely mixed-source event (e.g. a fred series collapsed
+    alongside close_today_bal) is never silently flattened to a single,
+    wrong-for-some-members value. A suppressed/NOISE audit row is
+    always exactly one series, so it gets a plain metadata.source /
+    metadata.knowledge_time_confidence value instead.
+    """
+    if interpretation is not None:
+        source_id = f"{event['release_id']}-{event.get('channel')}-{event['knowledge_time']}"
+        signal_detection = "signal" if event.get("tier") == "HIGH" else "weak_signal"
+        signal_reason = interpretation.get("transmission")
+        metadata = {
+            "channel": interpretation.get("channel"),
+            "entry_point": interpretation.get("entry_point"),
+            "assets": interpretation.get("assets"),
+            "transmission": interpretation.get("transmission"),
+            "suspect": interpretation.get("suspect"),
+            "suspect_reason": interpretation.get("suspect_reason"),
+            "member_series": event.get("member_series"),
+            "release_id": event.get("release_id"),
+            "z_scores": event.get("z_scores"),
+            "sources": event.get("sources"),
+            "knowledge_time_confidences": event.get("knowledge_time_confidences"),
+            "suppressed_by": None,
+        }
+    else:
+        source_id = f"{event['series_id']}-{event['observation_date']}"
+        # CONFIRMED LIVE: str(tier).lower() alone violates
+        # agent_classifications_signal_detection_check - the column's
+        # allowed values are 'signal'/'weak_signal'/'noise'/'waiting',
+        # not the tier vocabulary's own HIGH/WEAK/NOISE lowercased
+        # ('high'/'weak' are not allowed values). Map explicitly, same
+        # HIGH->'signal', WEAK->'weak_signal' convention the interpreted-
+        # event branch above already uses.
+        _AUDIT_TIER_TO_SIGNAL_DETECTION = {"HIGH": "signal", "WEAK": "weak_signal", "NOISE": "noise"}
+        signal_detection = _AUDIT_TIER_TO_SIGNAL_DETECTION.get(str(event.get("tier", "NOISE")).upper(), "noise")
+        suppressed_by = event.get("suppressed_by")
+        # signal_reason carries a human-readable explanation directly on
+        # the row (not just buried in metadata->>'suppressed_by') - the
+        # whole point of persisting a non-surfaced row is auditability
+        # ("why wasn't this on the page?" should be a plain read of this
+        # column, not a JSON-path query). Distinguishes a genuine NOISE
+        # observation (nothing worth flagging happened) from an
+        # observation that DID clear a HIGH/WEAK bar but was actively
+        # suppressed by a specific rule.
+        if suppressed_by is not None:
+            signal_reason = f"Suppressed by rule: {suppressed_by}"
+        else:
+            signal_reason = f"NOISE: did not clear the {event.get('tier', 'NOISE')} threshold"
+        metadata = {
+            "series_id": event.get("series_id"),
+            "observation_date": str(event.get("observation_date")),
+            "z_score": event.get("z_score"),
+            "suppressed_by": suppressed_by,
+            "source": event.get("source"),
+            "knowledge_time_confidence": event.get("knowledge_time_confidence"),
+        }
+
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO agent_classifications (
+                job_id, source_type, source_id,
+                signal_detection, signal_score, signal_reason,
+                published, metadata
+            ) VALUES (%s, 'macro_signal', %s, %s, NULL, %s, %s, %s)
+            ON CONFLICT DO NOTHING
+            """,
+            (
+                job_id,
+                source_id,
+                signal_detection,
+                signal_reason,
+                event.get("knowledge_time"),
+                json.dumps(metadata, ensure_ascii=False, default=str),
+            ),
+        )
+
+
+def list_macro_signal_events_for_confirmation_recheck(
+    eligible_series: list[str], since_date: str,
+) -> list[dict[str, Any]]:
+    """Returns macro_signal rows (both interpreted events and
+    suppressed/NOISE audit rows) that are candidates for mechanism C
+    (confirmation reversal, spec section 5) - not already suppressed,
+    not already NOISE (nothing to reverse), and involving at least one
+    series in eligible_series (weekly/monthly only - see
+    macro_signal_frequency.CONFIRMATION_REVERSAL_ELIGIBLE).
+
+    An interpreted event's series live in metadata.member_series (a
+    JSONB array); a suppressed/audit row's live in metadata.series_id
+    (a plain string) - checks both shapes, matching
+    list_all_results/list_results' own macro_series filter.
+
+    since_date bounds the query to recent rows only (a daily recheck
+    job has no reason to re-examine months-old, long-settled events
+    every run) - callers should pass something like 60 days back,
+    generous enough to cover even a slow-cadence monthly series'
+    confirmation window with margin.
+    """
+    if not eligible_series:
+        return []
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, source_id, signal_detection, metadata, published
+            FROM agent_classifications
+            WHERE source_type = 'macro_signal'
+              AND signal_detection != 'noise'
+              AND metadata->>'suppressed_by' IS NULL
+              AND published >= %s
+              AND (
+                  EXISTS (
+                      SELECT 1 FROM jsonb_array_elements_text(
+                          CASE WHEN jsonb_typeof(metadata->'member_series') = 'array'
+                               THEN metadata->'member_series' ELSE '[]'::jsonb END
+                      ) t WHERE t = ANY(%s)
+                  )
+                  OR metadata->>'series_id' = ANY(%s)
+              )
+            ORDER BY published ASC
+            """,
+            (since_date, eligible_series, eligible_series),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_existing_macro_signal_source_ids(source_ids: list[str]) -> set[str]:
+    """Same shape as get_existing_taiwan_source_ids - one batched query
+    across all prior jobs, so a re-run of the pipeline never reclassifies
+    an event or observation already stored."""
+    if not source_ids:
+        return set()
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT source_id FROM agent_classifications
+            WHERE source_type = 'macro_signal' AND source_id = ANY(%s)
+            """,
+            (source_ids,),
+        ).fetchall()
+    return {r["source_id"] for r in rows}
+
+
+def mark_macro_signal_event_suppressed(source_id: str, rule: str) -> bool:
+    """Retroactively marks an already-stored macro_signal event as
+    suppressed by mechanism C (confirmation reversal) - updates
+    metadata.suppressed_by AND signal_detection together. Returns True
+    if a row was updated, False if source_id wasn't found. This is the
+    one place macro_signal data is allowed to change after insert, same
+    exception pattern as update_taiwan_revenue_rank for
+    taiwan_market_signal.
+
+    signal_detection is forced to 'noise' here, not left at its
+    original 'signal'/'weak_signal' value - a confirmation-reversed
+    event is the spec's own "was measurement, not information" case
+    (section 5's Confirmation override), the same real outcome as a
+    NOISE audit row, just discovered later. Leaving signal_detection
+    unchanged while only updating metadata.suppressed_by would let a
+    signal_detection='signal'/'weak_signal' query still surface an
+    event the pipeline has since determined was not real - silently
+    stale in the one column every other filter actually reads.
+    """
+    with get_db() as conn:
+        cur = conn.execute(
+            """
+            UPDATE agent_classifications
+            SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{suppressed_by}', %s::jsonb),
+                signal_detection = 'noise'
+            WHERE source_type = 'macro_signal' AND source_id = %s
+            """,
+            (json.dumps(rule), source_id),
+        )
+        return cur.rowcount > 0
+
+
 def get_existing_taiwan_source_ids(source_ids: list[str]) -> set[str]:
     """Return the subset of source_ids already classified as
     source_type='taiwan_market_signal', across ALL prior jobs (not scoped
@@ -896,6 +1125,9 @@ def list_all_results(
     corroborated: bool | None = None,
     published_from: str | None = None,
     published_to: str | None = None,
+    macro_series: str | None = None,
+    macro_suspect: bool | None = None,
+    macro_interpreted_only: bool | None = None,
 ) -> dict[str, Any]:
     """Return cursor-paginated agent_classifications across all jobs, ordered
     by effective date (see _EFFECTIVE_DATE_EXPR), newest first - NOT by id,
@@ -982,6 +1214,53 @@ def list_all_results(
     publish date) - a digest wanting only "the last 7 days of real news"
     needs to filter published itself, not rely on when rows were
     classified.
+
+    macro_signal has no domain-specific tier/grade filter - it reads the
+    same way every other domain does, through signal_detection
+    ('signal'/'weak_signal'/'noise') alone. tier (HIGH/WEAK/NOISE) is
+    macro_signal's own internal threshold vocabulary (see
+    pipeline/macro_signal_thresholds.py) but maps one-to-one onto
+    signal_detection for this domain (HIGH->signal, WEAK->weak_signal,
+    NOISE->noise - see insert_macro_signal_event) and is deliberately
+    NOT stored in metadata or exposed as its own query param, to keep
+    the read/filter surface consistent with news/taiwan_market_signal/
+    geopolitical_signal, none of which have their own '_tier' field
+    either.
+
+    macro_series matches macro_signal's metadata.member_series (a JSONB
+    array, populated on interpreted events) OR metadata.series_id (a
+    plain string, populated on suppressed/audit rows) - the two
+    row-shapes macro_signal actually produces store "which series" two
+    different ways (see insert_macro_signal_event's two branches), so
+    this filter checks both rather than requiring callers to know which
+    shape a given row is before they can find it by series.
+
+    macro_suspect matches metadata->>'suspect' (a JSON boolean stored as
+    text, same boolean-as-text shape as `corroborated` above) - only
+    macro_signal's interpreted-event rows populate this field (the
+    model's own "does this coincide with something that mechanically
+    explains it" flag from Appendix A's one override).
+
+    macro_interpreted_only=True restricts to macro_signal rows that
+    actually reached and passed INTERPRET (a real LLM call, real
+    channel/entry_point/assets/transmission/suspect fields) - excluding
+    suppressed/NOISE audit rows kept only for the spec's "nothing is
+    ever deleted" requirement (see insert_macro_signal_event). Without
+    this, signal_detection='signal' alone returns BOTH genuinely-
+    interpreted events AND observations that cleared HIGH but were
+    suppressed before COLLAPSE/INTERPRET ever ran (confirmed live: DGS2
+    cleared HIGH on 2026-08-28 but was suppressed via the
+    {DGS3MO,DGS1,DGS2} collinear cluster - the audit-row branch of
+    insert_macro_signal_event mapped its original HIGH tier to
+    signal_detection='signal' too, but metadata.transmission was never
+    set, no LLM call was made for it). Implemented as
+    metadata->>'suppressed_by' IS NULL AND
+    source_type='macro_signal' AND signal_detection != 'noise' - an
+    interpreted survivor's suppressed_by is always explicitly null (see
+    insert_macro_signal_event's interpreted-event branch), while every
+    audit row's is either a rule name or absent-but-still-a-NOISE-row.
+    macro_interpreted_only=False (not None) is accepted symmetrically,
+    for a caller that explicitly wants ONLY the audit/suppressed rows.
     """
     params: list[Any] = []
     conditions = []
@@ -1031,6 +1310,23 @@ def list_all_results(
     if corroborated is not None:
         conditions.append("metadata->>'corroborated' = %s")
         params.append("true" if corroborated else "false")
+    if macro_series:
+        conditions.append(
+            """(
+                jsonb_exists(metadata->'member_series', %s)
+                OR metadata->>'series_id' = %s
+            )"""
+        )
+        params.append(macro_series)
+        params.append(macro_series)
+    if macro_suspect is not None:
+        conditions.append("metadata->>'suspect' = %s")
+        params.append("true" if macro_suspect else "false")
+    if macro_interpreted_only is not None:
+        if macro_interpreted_only:
+            conditions.append("(metadata->>'suppressed_by' IS NULL AND signal_detection != 'noise')")
+        else:
+            conditions.append("(metadata->>'suppressed_by' IS NOT NULL OR signal_detection = 'noise')")
     if published_from:
         conditions.append("published >= %s")
         params.append(published_from)
@@ -1089,6 +1385,9 @@ def list_results(
     corroborated: bool | None = None,
     published_from: str | None = None,
     published_to: str | None = None,
+    macro_series: str | None = None,
+    macro_suspect: bool | None = None,
+    macro_interpreted_only: bool | None = None,
 ) -> dict[str, Any]:
     """Return cursor-paginated agent_classifications for a job.
 
@@ -1149,6 +1448,21 @@ def list_results(
     if corroborated is not None:
         extra_conditions += " AND metadata->>'corroborated' = %s"
         params.append("true" if corroborated else "false")
+    if macro_series:
+        extra_conditions += """ AND (
+            jsonb_exists(metadata->'member_series', %s)
+            OR metadata->>'series_id' = %s
+        )"""
+        params.append(macro_series)
+        params.append(macro_series)
+    if macro_suspect is not None:
+        extra_conditions += " AND metadata->>'suspect' = %s"
+        params.append("true" if macro_suspect else "false")
+    if macro_interpreted_only is not None:
+        if macro_interpreted_only:
+            extra_conditions += " AND (metadata->>'suppressed_by' IS NULL AND signal_detection != 'noise')"
+        else:
+            extra_conditions += " AND (metadata->>'suppressed_by' IS NOT NULL OR signal_detection = 'noise')"
     if published_from:
         extra_conditions += " AND published >= %s"
         params.append(published_from)

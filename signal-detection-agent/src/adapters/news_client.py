@@ -49,6 +49,35 @@ async def trigger_run(domain: str, days_back: int = 7) -> int:
     )
 
 
+async def trigger_macro_fetch(*, incremental: bool) -> int:
+    """POST /macro/fetch to news-retrieval; return run_id.
+
+    Separate from trigger_run (POST /run) because macro_signal isn't an
+    article-shaped domain - news-retrieval's own /macro/fetch takes
+    `incremental` (not `domain`/`days_back`) and is tracked in the same
+    `runs` table via controllers.macro_run rather than the generic
+    create_run_record/run_pipeline path (see that module's own
+    docstring). poll_run_until_done works unchanged against the
+    returned run_id - GET /runs/{id} doesn't care which path created
+    the row.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{config.NEWS_RETRIEVAL_URL}/macro/fetch",
+                json={"incremental": incremental},
+                headers=_headers(),
+            )
+    except httpx.HTTPError as exc:
+        raise NewsRetrievalError(f"news-retrieval unreachable: {exc}") from exc
+
+    if resp.status_code == 202:
+        return int(resp.json()["run_id"])
+    raise NewsRetrievalError(
+        f"POST /macro/fetch returned {resp.status_code}: {resp.text}"
+    )
+
+
 async def fetch_latest_run(domain: str) -> int | None:
     """GET /runs?domain=<slug>&status=completed&limit=1; return run_id or None."""
     try:
@@ -250,3 +279,45 @@ async def get_run_articles(run_id: int) -> list[dict[str, Any]]:
             if not cursor:
                 break
     return articles
+
+
+async def get_macro_observations(
+    series_ids: list[str] | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+) -> list[dict[str, Any]]:
+    """Paginate GET /macro/observations; return ALL matching rows. Uses
+    _headers() (x-ocn-caller), not the no-auth /market/* pattern - this
+    route is not under /market/* (see news-retrieval's routes/macro.py
+    docstring for why: avoids api-gateway's forced-auth-for-market/*
+    special case while still being gateway-proxied normally)."""
+    observations: list[dict[str, Any]] = []
+    cursor: str | None = None
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        while True:
+            params: dict[str, Any] = {"limit": 2000}
+            if series_ids:
+                params["series"] = series_ids
+            if from_date:
+                params["from_date"] = from_date
+            if to_date:
+                params["to_date"] = to_date
+            if cursor:
+                params["cursor"] = cursor
+            try:
+                resp = await client.get(
+                    f"{config.NEWS_RETRIEVAL_URL}/macro/observations",
+                    params=params,
+                    headers=_headers(),
+                )
+                resp.raise_for_status()
+            except Exception as exc:
+                raise NewsRetrievalError(
+                    f"Failed to fetch macro observations: {exc}"
+                ) from exc
+            data = resp.json()
+            observations.extend(data.get("observations", []))
+            cursor = data.get("next_cursor")
+            if not cursor:
+                break
+    return observations

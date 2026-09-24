@@ -106,7 +106,17 @@ resource "aws_ecs_task_definition" "news_retrieval" {
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
   cpu                      = "512"
-  memory                   = "1024"
+  # Bumped from 1024 after two real crashes (2026-09-23, 2026-09-24) during
+  # geopolitical_news's title-dedup phase, confirmed via CloudWatch to climb
+  # to ~680MB before the process died with no traceback - traced to
+  # get_recent_articles_for_domain holding every embedding in its 7-day
+  # comparison window (1500+ rows, ~30KB of JSON per row) fully in memory
+  # for the whole dedup pass, growing as the domain's corpus grows. 2048
+  # gives real headroom over the observed peak while a cheaper fix
+  # (narrower window, more compact embedding storage) is still open -
+  # revisit if this domain's corpus keeps growing and 2048 stops being
+  # enough.
+  memory                   = "2048"
   execution_role_arn       = aws_iam_role.ecs_task_execution.arn
   task_role_arn            = aws_iam_role.ecs_task_exec_ssm.arn
 
@@ -176,6 +186,19 @@ resource "aws_ecs_task_definition" "news_retrieval" {
           # source_type) needs no credential at all - no-login scrape.
           name      = "DART_API_KEY"
           valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:ocn/${var.env}/news-retrieval:DART_API_KEY::"
+        },
+        {
+          # Required for fetch-macro-signals (macro_signal domain) - St.
+          # Louis Fed's FRED API key, free/self-service at
+          # fred.stlouisfed.org/docs/api/api_key.html. Used for both
+          # plain fred/series/observations calls and ALFRED first-print
+          # vintage calls (macro_signal_fetch.py) - Treasury Fiscal
+          # Data's own DTS endpoint (close_today_bal) needs no key. Must
+          # exist in Secrets Manager under this key before terraform
+          # apply, same requirement as every other secret above
+          # (infra/CLAUDE.md).
+          name      = "FRED_API_KEY"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:ocn/${var.env}/news-retrieval:FRED_API_KEY::"
         }
       ]
       logConfiguration = {
@@ -433,6 +456,60 @@ resource "aws_cloudwatch_event_target" "news_retrieval_korea_market_signal" {
       {
         name    = "news-retrieval"
         command = ["python", "__main__.py", "trigger", "--domain", "korea_market_signal", "--days-back", "1"]
+      }
+    ]
+  })
+}
+
+resource "aws_cloudwatch_event_rule" "news_retrieval_macro_signals_daily" {
+  name        = "${var.env}-news-retrieval-macro-signals-daily"
+  description = "Fetch macro_signal series (FRED + Treasury Fiscal Data) - --incremental (1-day window), twice daily"
+  # 6am / 2pm Pacific (explicit request), pinned to PST (UTC-8) as fixed
+  # UTC cron times - CloudWatch has no DST awareness, so this genuinely
+  # drifts to 7am/3pm Pacific during PDT (summer, ~8 months of the
+  # year). Accepted tradeoff (explicit choice over the PDT-pinned
+  # alternative) rather than building DST-aware scheduling.
+  # 14:00 UTC (6am PST) - morning fetch, ahead of US market open.
+  # 22:00 UTC (2pm PST) - afternoon fetch, after FOMC decisions (14:00
+  # ET / 18:00-19:00 UTC depending on DST) and market close (16:30 ET
+  # stamp), so same-day moves are captured before the day is done.
+  #
+  # --incremental only fetches the trailing 1 day per series
+  # (macro_signal_fetch.INCREMENTAL_LOOKBACK_DAYS) - stateless, upserted
+  # safely over whatever's stored, so running it twice a day is exactly
+  # as safe as running it once - no watermark to double-advance, no
+  # duplicate-insert risk. The FULL 3-year backfill (fetch-macro-signals
+  # with no flag) is NOT scheduled here - it is a one-time bootstrap,
+  # run manually once per environment before this daily schedule is
+  # ever enabled (see news-retrieval's CLI help text for
+  # fetch-macro-signals). Enabling this rule against a database that
+  # has never had the full backfill run leaves 728 of every series'
+  # trailing 730-day z-score window empty.
+  schedule_expression = "cron(0 14,22 * * ? *)"
+}
+
+resource "aws_cloudwatch_event_target" "news_retrieval_macro_signals_daily" {
+  rule     = aws_cloudwatch_event_rule.news_retrieval_macro_signals_daily.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+
+  ecs_target {
+    # Family-only ARN (no revision suffix) - see comment on the daily fetch
+    # target above for why this is unpinned rather than a specific revision.
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.news_retrieval.family}"
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets          = var.public_subnet_ids
+      security_groups  = [var.news_sg_id]
+      assign_public_ip = true
+    }
+  }
+
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "news-retrieval"
+        command = ["python", "__main__.py", "fetch-macro-signals", "--incremental"]
       }
     ]
   })
@@ -1221,6 +1298,175 @@ resource "aws_cloudwatch_event_target" "signal_detection_agent_geopolitical_sign
       {
         name    = "signal-detection-agent"
         command = ["python", "-m", "src", "run-geopolitical-signal-pipeline"]
+      }
+    ]
+  })
+}
+
+resource "aws_cloudwatch_event_rule" "signal_detection_agent_macro_signal_fomc_calendar_refresh_weekly" {
+  name        = "${var.env}-signal-detection-agent-macro-fomc-calendar-weekly"
+  description = "Refresh fomc_meeting_dates from federalreserve.gov/json/calendar.json - needed for DFF's inter-meeting move detection"
+  # Weekly (explicit request, downgraded from an original twice-daily
+  # schedule) - the Fed's own published meeting calendar is set months
+  # in advance and is effectively static day to day; refreshing more
+  # than weekly buys nothing real, since there is no plausible scenario
+  # where a same-day or even next-day refresh would catch something a
+  # week's delay would miss. The pipeline's own staleness guard
+  # (calendar_staleness_warning, see pipeline/macro_signal_fomc_
+  # calendar.py) only warns after 30 days without a refresh, which
+  # itself implies weekly is generous margin, not a risk.
+  # Sunday 14:30 UTC (6:30am PST, pinned to PST - see
+  # news_retrieval_macro_signals_daily's own comment on the DST
+  # tradeoff) - ahead of Monday's first pipeline pass, same "land
+  # before the run that consumes it" reasoning as the old daily
+  # schedule, just no longer duplicated across every single day.
+  schedule_expression = "cron(30 14 ? * SUN *)"
+  state                = "ENABLED"
+}
+
+resource "aws_cloudwatch_event_target" "signal_detection_agent_macro_signal_fomc_calendar_refresh_weekly" {
+  rule     = aws_cloudwatch_event_rule.signal_detection_agent_macro_signal_fomc_calendar_refresh_weekly.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+  ecs_target {
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.signal_detection_agent.family}"
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets         = var.private_subnet_ids
+      security_groups = [var.signal_detection_agent_sg_id]
+    }
+  }
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "signal-detection-agent"
+        command = ["python", "-m", "src", "refresh-fomc-calendar"]
+      }
+    ]
+  })
+}
+
+# Two SEPARATE rules (not one twice-daily cron) because each pass needs a
+# DIFFERENT date argument - run-macro-signal-pipeline_cmd's default is
+# always "yesterday" (UTC), which is right for the morning pass but wrong
+# for the afternoon pass (explicit request: catch a same-day FOMC/data/
+# market move THE SAME DAY, not the next day) - see
+# run_macro_signal_pipeline_cmd's own --today flag docstring in
+# __main__.py for why a plain twice-daily default-args schedule would not
+# actually deliver same-day latency.
+resource "aws_cloudwatch_event_rule" "signal_detection_agent_macro_signal_pipeline_after_close" {
+  name        = "${var.env}-signal-detection-agent-macro-signal-pipeline-after-close"
+  description = "Z-SCORE -> TIER -> SUPPRESS -> COLLAPSE -> INTERPRET for macro_signal, evaluating TODAY's date - the same-day-latency pass"
+  # 23:00 UTC (3pm PST) - 1 hour after news-retrieval's own afternoon
+  # macro fetch (22:00 UTC), giving that fetch (46 series, hundreds of
+  # real FRED/Treasury HTTP calls with rate-limit backoff - see
+  # macro_signal_fetch.py's own _fred_get retry comment) generous
+  # margin to finish before this reads from it. --today makes this
+  # evaluate TODAY's UTC date rather than the plain "yesterday" default
+  # - by 23:00 UTC, a market-close series' today observation already
+  # exists (16:30 ET / 20:30-21:30 UTC stamp), and FOMC/most 8:30 ET
+  # data releases have long since landed, so this is the pass that
+  # actually catches a same-day event on the day it happened.
+  schedule_expression = "cron(0 23 * * ? *)"
+  state                = "ENABLED"
+}
+
+resource "aws_cloudwatch_event_target" "signal_detection_agent_macro_signal_pipeline_after_close" {
+  rule     = aws_cloudwatch_event_rule.signal_detection_agent_macro_signal_pipeline_after_close.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+  ecs_target {
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.signal_detection_agent.family}"
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets         = var.private_subnet_ids
+      security_groups = [var.signal_detection_agent_sg_id]
+    }
+  }
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "signal-detection-agent"
+        command = ["python", "-m", "src", "run-macro-signal-pipeline", "--today"]
+      }
+    ]
+  })
+}
+
+resource "aws_cloudwatch_event_rule" "signal_detection_agent_macro_signal_pipeline_morning" {
+  name        = "${var.env}-signal-detection-agent-macro-signal-pipeline-morning"
+  description = "Z-SCORE -> TIER -> SUPPRESS -> COLLAPSE -> INTERPRET for macro_signal, evaluating YESTERDAY's date - the morning catch-up pass"
+  # 15:00 UTC (7am PST) - 1 hour after news-retrieval's own morning
+  # macro fetch (14:00 UTC), same margin reasoning as the afternoon
+  # pass above. Uses the plain default (no --today) - by design this
+  # pass still evaluates YESTERDAY's UTC date, covering the tail end of
+  # the prior US day that the 23:00 UTC pass's own knowledge_time
+  # cutoff may have missed, and safely re-confirming anything the
+  # 23:00 UTC pass already caught (dedup'd by source_id - see
+  # insert_macro_signal_event's own docstring, harmless to re-evaluate
+  # the same date twice).
+  schedule_expression = "cron(0 15 * * ? *)"
+  state                = "ENABLED"
+}
+
+resource "aws_cloudwatch_event_target" "signal_detection_agent_macro_signal_pipeline_morning" {
+  rule     = aws_cloudwatch_event_rule.signal_detection_agent_macro_signal_pipeline_morning.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+  ecs_target {
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.signal_detection_agent.family}"
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets         = var.private_subnet_ids
+      security_groups = [var.signal_detection_agent_sg_id]
+    }
+  }
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "signal-detection-agent"
+        command = ["python", "-m", "src", "run-macro-signal-pipeline"]
+      }
+    ]
+  })
+}
+
+resource "aws_cloudwatch_event_rule" "signal_detection_agent_macro_signal_confirmation_recheck_daily" {
+  name        = "${var.env}-signal-detection-agent-macro-confirmation-recheck-daily"
+  description = "Suppression mechanism C - retroactively suppress weekly/monthly macro_signal events that have since fully reversed at their next observation"
+  # Once daily (not twice) - unlike the main pipeline, this pass is
+  # retroactive by nature (see run_macro_signal_confirmation_recheck's
+  # own docstring: checking already-stored events against a next
+  # observation that usually doesn't exist yet for hours-to-weeks after
+  # the original event), so there is no same-day-latency argument for
+  # running it twice - a weekly/monthly series' next print isn't going
+  # to arrive in the hours between the morning and afternoon passes.
+  # 16:00 UTC (8am PST) - 1 hour after the morning pipeline pass (15:00
+  # UTC above), the same relative offset the original single-daily
+  # schedule used. default --since-date is 60 days ago when omitted,
+  # generous enough to cover even a monthly series' full confirmation
+  # window with margin.
+  schedule_expression = "cron(0 16 * * ? *)"
+  state                = "ENABLED"
+}
+
+resource "aws_cloudwatch_event_target" "signal_detection_agent_macro_signal_confirmation_recheck_daily" {
+  rule     = aws_cloudwatch_event_rule.signal_detection_agent_macro_signal_confirmation_recheck_daily.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+  ecs_target {
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.signal_detection_agent.family}"
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets         = var.private_subnet_ids
+      security_groups = [var.signal_detection_agent_sg_id]
+    }
+  }
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "signal-detection-agent"
+        command = ["python", "-m", "src", "recheck-macro-signal-confirmations"]
       }
     ]
   })

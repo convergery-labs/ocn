@@ -129,7 +129,7 @@ def init_db() -> None:
         conn.execute("""
             ALTER TABLE agent_classifications
                 ADD CONSTRAINT agent_classifications_source_type_check
-                    CHECK (source_type IN ('news', 'sec_filing', 'company_specific', 'taiwan_market_signal', 'geopolitical_signal', 'korea_market_signal'))
+                    CHECK (source_type IN ('news', 'sec_filing', 'company_specific', 'taiwan_market_signal', 'geopolitical_signal', 'korea_market_signal', 'macro_signal'))
         """)
         # signal_detection's allowed set is widened (same drop/recreate
         # pattern as source_type above) to add 'waiting' - geopolitical_signal
@@ -225,6 +225,18 @@ def init_db() -> None:
                 ON agent_classifications (source_type, source_id)
                 WHERE source_type = 'korea_market_signal'
         """)
+        # macro_signal: source_id is a deterministic natural key built from
+        # (release_id, knowledge_time) - one row per collapsed event (or
+        # per suppressed/non-surfaced candidate, stored for audit per the
+        # spec's "nothing is ever deleted" rule - see
+        # insert_macro_signal_event's docstring). Same fix as
+        # taiwan_market_signal/korea_market_signal above.
+        conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS
+                idx_agent_classifications_macro_signal_source_id
+                ON agent_classifications (source_type, source_id)
+                WHERE source_type = 'macro_signal'
+        """)
         # metadata->>'ticker' filtering (list_all_results/list_results) would
         # otherwise sequential-scan the whole table on every ticker-filtered
         # call - a partial index scoped to sec_filing (the only source_type
@@ -272,4 +284,19 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS
                 idx_geopolitical_signal_companies_name_length
                 ON geopolitical_signal_companies (length(company_name) DESC)
+        """)
+        # FOMC scheduled meeting dates, for DFF's inter-meeting move
+        # detection (spec section 7, Note A). Refreshed from the Fed's own
+        # calendar.json feed (real, structured, fetchable - see
+        # pipeline/macro_signal_fomc_calendar.py's docstring for why FRED's
+        # own release-dates endpoint could NOT be used instead) by a
+        # scheduled job (refresh-fomc-calendar CLI command), not hand-typed
+        # SQL - same refresh-cache shape as geopolitical_signal_companies
+        # above, not a source of truth someone edits directly.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS fomc_meeting_dates (
+                meeting_date  DATE PRIMARY KEY,
+                source        TEXT NOT NULL DEFAULT 'federalreserve.gov/json/calendar.json',
+                refreshed_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
         """)

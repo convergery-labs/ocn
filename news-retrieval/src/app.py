@@ -7,6 +7,7 @@ from routes import (
     frequencies,
     grants,
     health,
+    macro,
     market,
     run,
     runs,
@@ -26,6 +27,7 @@ def create_app() -> FastAPI:
     application.include_router(sources.router)
     application.include_router(grants.router)
     application.include_router(market.router)
+    application.include_router(macro.router)
 
     return application
 

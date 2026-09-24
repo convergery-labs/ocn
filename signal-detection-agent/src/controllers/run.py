@@ -12,9 +12,11 @@ from adapters.news_client import (
     NewsRetrievalError,
     fetch_latest_run,
     get_article,
+    get_macro_observations,
     get_run_articles,
     list_completed_runs,
     poll_run_until_done,
+    trigger_macro_fetch,
     trigger_run,
 )
 from models.geopolitical_signal_companies import (
@@ -28,6 +30,7 @@ from models.jobs import (
     get_completed_job_for_run,
     get_existing_geopolitical_signal_article_ids,
     get_existing_korea_signal_source_ids,
+    get_existing_macro_signal_source_ids,
     get_existing_taiwan_source_ids,
     get_taiwan_revenue_rows_for_periods,
     get_ungraded_geopolitical_signal_tagged_articles,
@@ -35,8 +38,11 @@ from models.jobs import (
     get_waiting_geopolitical_signal_articles,
     insert_geopolitical_signal_classification,
     insert_korea_signal_classification,
+    insert_macro_signal_event,
     insert_taiwan_signal_classification,
     list_all_results,
+    list_macro_signal_events_for_confirmation_recheck,
+    mark_macro_signal_event_suppressed,
     update_geopolitical_signal_classification,
     update_geopolitical_signal_stage_c_tags,
     update_geopolitical_signal_stage_d_grade,
@@ -57,6 +63,32 @@ from pipeline.geopolitical_signal_stage_d import grade_geopolitical_signal_artic
 from pipeline.korea_signal_classifier import classify_korea_signal_batch
 from pipeline.korea_signal_summary import generate_korea_signal_summary
 from pipeline.korea_ticker_universe import KOREA_TICKER_UNIVERSE
+from pipeline.macro_signal_collapse import collapse_events
+from pipeline.macro_signal_confirmation import check_confirmation_reversal
+from pipeline.macro_signal_fedtarmd import compute_sep_median_shift_bp
+from pipeline.macro_signal_fomc_calendar import (
+    calendar_staleness_warning,
+    is_scheduled_fomc_date,
+    is_within_known_calendar_horizon,
+    refresh_fomc_meeting_dates,
+)
+from pipeline.macro_signal_frequency import CONFIRMATION_REVERSAL_ELIGIBLE
+from pipeline.macro_signal_fetch_universe import MACRO_SERIES_TO_RELEASE_ID
+from pipeline.macro_signal_interpret import interpret_events_batch
+from pipeline.macro_signal_suppress import (
+    apply_collinear_suppression,
+    apply_derived_suppression,
+    from_tier_result,
+)
+from pipeline.macro_signal_thresholds import (
+    Channel,
+    EXCLUDED_FROM_TIERING,
+    SeriesMove,
+    THRESHOLDS,
+    Tier,
+    tier_series_move,
+)
+from pipeline.macro_signal_zscore import compute_daily_changes, compute_series_zscores
 from pipeline.taiwan_signal_classifier import classify_taiwan_signal_batch
 
 logger = logging.getLogger(__name__)
@@ -249,6 +281,496 @@ async def run_taiwan_signal_classification(job_id: int, from_date: str, to_date:
         len(already_done), inserted, len(context_wrapped), revised,
     )
     update_job_status(job_id, "completed", article_count=inserted, set_completed_at=True)
+
+
+# DFF and FEDTARMD need inputs (inter-meeting date detection, SEP median
+# shift) that aren't derivable via the generic z-score/tier path every
+# other series uses - the spec documents these as genuinely special
+# cases (an emergency Fed move date-matched against the FOMC calendar; a
+# quarterly dot-plot comparison against the PRIOR SEP release, not a
+# rolling window). Both are handled by their own tiering branches below
+# (_tier_dff / _tier_fedtarmd), driven by the real FOMC calendar
+# (fomc_meeting_dates table) and news-retrieval's per-(release,
+# target_year) FEDTARMD rows, respectively - not skipped.
+_GENERIC_TIER_SKIP_SERIES = frozenset({"DFF", "FEDTARMD"})
+
+
+async def run_macro_signal_pipeline(job_id: int, from_date: str, to_date: str) -> None:
+    """Runs the Macro Signal Backbone's deterministic core (Z-SCORE ->
+    TIER -> SUPPRESS -> COLLAPSE) plus INTERPRET, end to end, for every
+    tracked series with data in news-retrieval's macro_observations table.
+
+    Pulls the FULL z-score window (config.MACRO_SIGNAL_ZSCORE_WINDOW_DAYS,
+    default 730 days) per series on every run rather than maintaining an
+    incremental watermark - simpler, and 46 series x ~2 years is a small
+    enough pull that re-fetching daily isn't a real cost (see project
+    plan history for this tradeoff).
+
+    from_date/to_date bound which DATES' events get evaluated and
+    persisted this run (typically "yesterday" for a daily scheduled
+    run) - they do NOT bound how much history is pulled for z-score
+    computation, which always goes back the full window regardless.
+
+    DFEDTARU is fetched (news-retrieval stores it) but never tiered here
+    - it's excluded from tiering per the spec, used only as a context
+    field (dfedtaru_ctx_bp) attached to same-date events. Not yet wired
+    into the interpret payload in this first pass - a real but narrow
+    gap, tracked separately from the DFF/FEDTARMD wiring below.
+    """
+    update_job_status(job_id, "running")
+
+    from datetime import date as _date, timedelta as _timedelta
+
+    # Surfaces in ordinary operational logs on every run, well ahead of
+    # the horizon guard actually dropping rows - see
+    # macro_signal_fomc_calendar.calendar_staleness_warning's own
+    # docstring for why this can't just be a one-time manual check.
+    staleness_warning = calendar_staleness_warning(_date.today())
+    if staleness_warning:
+        logger.warning(staleness_warning)
+
+    try:
+        to_dt = _date.fromisoformat(to_date)
+        window_start = to_dt - _timedelta(days=config.MACRO_SIGNAL_ZSCORE_WINDOW_DAYS + 30)
+        all_observations = await get_macro_observations(
+            from_date=window_start.isoformat(), to_date=to_date,
+        )
+        # FEDTARMD's observation_date is the PROJECTED TARGET YEAR (e.g.
+        # 2029-01-01), not the real event date (the SEP release itself,
+        # stored separately as vintage) - see macro_signal_fedtarmd.py's
+        # own docstring. A target year can be several years past
+        # `to_date`, so the bounded pull above silently excludes rows
+        # for a release that itself happened well within window - e.g.
+        # the 2026-09-16 release's own 2029 projection falls outside any
+        # to_date<2029 bound despite the release being current. Fetched
+        # separately, unbounded by observation_date (bounded only by
+        # series), and merged in below.
+        fedtarmd_observations = await get_macro_observations(series_ids=["FEDTARMD"])
+    except NewsRetrievalError:
+        logger.exception("Failed to fetch macro observations for job %d", job_id)
+        update_job_status(job_id, "failed", set_completed_at=True)
+        return
+
+    all_observations = [o for o in all_observations if o["series_id"] != "FEDTARMD"] + fedtarmd_observations
+
+    if not all_observations:
+        update_job_status(job_id, "completed", article_count=0, set_completed_at=True)
+        return
+
+    # CONFIRMED LIVE: news-retrieval's /macro/observations JSON response
+    # serializes observation_date as an ISO string (FastAPI's default
+    # date->JSON encoding) - it does NOT come back as a Python date
+    # object the way it is inside news-retrieval's own Postgres reads.
+    # Re-parse here, once, at the HTTP boundary, so every downstream
+    # module (macro_signal_zscore's date arithmetic, tiered_by_date's
+    # dict keys, etc.) can rely on a real date object without each
+    # having to guard against a string.
+    for obs in all_observations:
+        if isinstance(obs.get("observation_date"), str):
+            obs["observation_date"] = _date.fromisoformat(obs["observation_date"])
+        if isinstance(obs.get("vintage"), str):
+            obs["vintage"] = _date.fromisoformat(obs["vintage"])
+
+    by_series: dict[str, list[dict[str, Any]]] = {}
+    for obs in all_observations:
+        by_series.setdefault(obs["series_id"], []).append(obs)
+
+    from_dt = _date.fromisoformat(from_date)
+
+    # --- Z-SCORE + TIER ---
+    tiered_by_date: dict[Any, dict[str, Any]] = {}  # date -> {series_id: SuppressibleResult}
+    for series_id, observations in by_series.items():
+        if series_id in EXCLUDED_FROM_TIERING or series_id in _GENERIC_TIER_SKIP_SERIES:
+            continue
+        if series_id not in THRESHOLDS:
+            continue  # tracked in news-retrieval's universe but not yet wired into THRESHOLDS
+        zscores = compute_series_zscores(observations)
+        for obs_date, (change_bp, z) in zscores.items():
+            if not (from_dt <= obs_date <= to_dt):
+                continue
+            move = SeriesMove(series_id, d1d_bp=change_bp, z=z)
+            tier_result = tier_series_move(move)
+            obs_for_date = next((o for o in observations if o["observation_date"] == obs_date), None)
+            tiered_by_date.setdefault(obs_date, {})[series_id] = from_tier_result(
+                tier_result,
+                value=obs_for_date["value"] if obs_for_date else None,
+                source=obs_for_date.get("source") if obs_for_date else None,
+                knowledge_time_confidence=obs_for_date.get("knowledge_time_confidence") if obs_for_date else None,
+            )
+
+    # --- DFF: inter-meeting move detection (spec's own z-gate exception) ---
+    # DFF's own observation_date is the daily rate itself - unlike
+    # DFEDTARU (the target UPPER BOUND, whose value changes land on the
+    # calendar day AFTER the actual meeting - see
+    # macro_signal_fomc_calendar.is_scheduled_fomc_date's own docstring
+    # for the confirmed +1-day offset), DFF (the daily EFFECTIVE rate)
+    # drifts continuously and a real target move shows up as a large
+    # jump on the same +1-day-after-meeting date DFEDTARU uses - so the
+    # same offset applies here, checked against the real, DB-backed FOMC
+    # calendar (fomc_meeting_dates table).
+    if "DFF" in by_series:
+        dff_observations = by_series["DFF"]
+        dff_zscores = compute_series_zscores(dff_observations)
+        for obs_date, (change_bp, z) in dff_zscores.items():
+            if not (from_dt <= obs_date <= to_dt):
+                continue
+            if not is_within_known_calendar_horizon(obs_date):
+                logger.warning(
+                    "[MACRO_SIGNAL] DFF %s is past the known FOMC calendar horizon - "
+                    "cannot determine inter-meeting status, skipping this date's DFF tiering",
+                    obs_date,
+                )
+                continue
+            # CONFIRMED LIVE (2026-09-24 real 30-day classify run):
+            # is_inter_meeting_date must NOT be "just not a scheduled
+            # date" - that flagged every quiet, unchanged day between
+            # meetings as an inter-meeting MOVE (change_bp==0, still
+            # fired the no-gate HIGH path in _dff_rule), producing 4
+            # consecutive days of fabricated HIGH events off a flat
+            # rate. An inter-meeting move requires a REAL change on a
+            # non-scheduled date - both conditions, not one.
+            move = SeriesMove(
+                "DFF", d1d_bp=change_bp, z=z,
+                is_inter_meeting_date=(change_bp != 0 and not is_scheduled_fomc_date(obs_date)),
+            )
+            tier_result = tier_series_move(move)
+            dff_obs_for_date = next((o for o in dff_observations if o["observation_date"] == obs_date), None)
+            tiered_by_date.setdefault(obs_date, {})["DFF"] = from_tier_result(
+                tier_result,
+                value=dff_obs_for_date["value"] if dff_obs_for_date else None,
+                source=dff_obs_for_date.get("source") if dff_obs_for_date else None,
+                knowledge_time_confidence=dff_obs_for_date.get("knowledge_time_confidence") if dff_obs_for_date else None,
+            )
+
+    # --- FEDTARMD: SEP median shift (spec's own no-z-gate exception) ---
+    # news-retrieval stores one row per (SEP release, projected target
+    # year) - see macro_signal_fedtarmd.py's own docstring. Tier once
+    # per real SEP release (vintage), keyed by the release date itself
+    # (not a projection-year observation_date, which isn't a real event
+    # date) so downstream SUPPRESS/COLLAPSE treat it the same as every
+    # other series' obs_date-keyed dict.
+    if "FEDTARMD" in by_series:
+        fedtarmd_observations = by_series["FEDTARMD"]
+        release_dates = sorted({o["vintage"] for o in fedtarmd_observations if o.get("vintage")})
+        for release_date in release_dates:
+            if not (from_dt <= release_date <= to_dt):
+                continue
+            shift_bp = compute_sep_median_shift_bp(fedtarmd_observations, release_date)
+            move = SeriesMove("FEDTARMD", sep_median_shift_bp=shift_bp)
+            tier_result = tier_series_move(move)
+            representative_obs = next(
+                (o for o in fedtarmd_observations if o.get("vintage") == release_date),
+                None,
+            )
+            tiered_by_date.setdefault(release_date, {})["FEDTARMD"] = from_tier_result(
+                tier_result,
+                value=representative_obs["value"] if representative_obs else None,
+                source=representative_obs.get("source") if representative_obs else None,
+                knowledge_time_confidence=representative_obs.get("knowledge_time_confidence") if representative_obs else None,
+            )
+
+    # --- SUPPRESS (A then B) ---
+    for obs_date, results in tiered_by_date.items():
+        apply_derived_suppression(results)
+        apply_collinear_suppression(results)
+
+    # --- COLLAPSE ---
+    release_id_of = {sid: MACRO_SERIES_TO_RELEASE_ID.get(sid, -1) for sid in by_series}
+    all_events = []
+    for obs_date, results in tiered_by_date.items():
+        survivors = [r for r in results.values() if r.tier != Tier.NOISE]
+        if not survivors:
+            continue
+        knowledge_time_of = {sid: obs_date for sid in results}
+        events = collapse_events(survivors, release_id_of, knowledge_time_of)
+        all_events.extend(events)
+
+    # --- Persist suppressed/NOISE rows for audit (never deleted, per spec) ---
+    audit_candidate_ids = []
+    audit_rows = []
+    for obs_date, results in tiered_by_date.items():
+        for series_id, r in results.items():
+            if r.suppressed_by is not None or r.tier == Tier.NOISE:
+                source_id = f"{series_id}-{obs_date}"
+                audit_candidate_ids.append(source_id)
+                audit_rows.append({
+                    "series_id": series_id, "observation_date": obs_date,
+                    "tier": r.tier.value, "z_score": r.z_score,
+                    "suppressed_by": r.suppressed_by, "knowledge_time": None,
+                    "source": r.source, "knowledge_time_confidence": r.knowledge_time_confidence,
+                })
+    already_audited = get_existing_macro_signal_source_ids(audit_candidate_ids)
+    audited = 0
+    for row in audit_rows:
+        source_id = f"{row['series_id']}-{row['observation_date']}"
+        if source_id in already_audited:
+            continue
+        try:
+            insert_macro_signal_event(job_id, row, None)
+            audited += 1
+        except Exception:
+            logger.exception("Failed to insert macro_signal audit row for %s (job %d)", source_id, job_id)
+
+    # DFEDTARU context (spec section 7: excluded from tiering entirely,
+    # but its own current level is real grounding context for a
+    # policy_path event - "the funds rate target is currently 4.00-
+    # 4.25%" - not itself a signal). {date: value} for O(1) lookup below;
+    # value is the target UPPER BOUND in percent, converted to bp at
+    # attach time to match every other series' native unit convention
+    # in this pipeline.
+    dfedtaru_by_date: dict[Any, float] = {
+        o["observation_date"]: float(o["value"])
+        for o in by_series.get("DFEDTARU", []) if o.get("value") is not None
+    }
+    dfedtaru_dates_sorted = sorted(dfedtaru_by_date)
+
+    def _dfedtaru_ctx_bp(as_of: Any) -> float | None:
+        """Most recent DFEDTARU value on or before `as_of` (its own
+        daily series can lag a same-day event by the market-close
+        knowledge_time convention every daily series uses - looking
+        backward for the nearest known value is always safe here,
+        this is context, not a timed observation)."""
+        candidates = [d for d in dfedtaru_dates_sorted if d <= as_of]
+        if not candidates:
+            return None
+        return dfedtaru_by_date[candidates[-1]] * 100
+
+    # --- INTERPRET + persist survivors ---
+    interpret_payloads = []
+    for event in all_events:
+        payload: dict[str, Any] = {
+            "release_id": event.release_id,
+            "knowledge_time": event.knowledge_time.isoformat() if hasattr(event.knowledge_time, "isoformat") else str(event.knowledge_time),
+            "channel": event.channel.value,
+            "members": [
+                {"series_id": m.series_id, "value": m.value, "z_score": m.z_score, "tier": m.tier.value}
+                for m in event.members
+            ],
+        }
+        if event.channel == Channel.POLICY_PATH:
+            ctx_bp = _dfedtaru_ctx_bp(event.knowledge_time)
+            if ctx_bp is not None:
+                payload["dfedtaru_ctx_bp"] = ctx_bp
+        interpret_payloads.append(payload)
+
+    interpreted = interpret_events_batch(interpret_payloads) if interpret_payloads else []
+
+    # event.members (real SuppressibleResult objects, not yet flattened to
+    # the plain dicts interpret_payloads carries) is where source/
+    # knowledge_time_confidence still live - looked up back by
+    # (release_id, channel, knowledge_time) below since interpret_payloads
+    # and all_events share index order but interpreted's own order can
+    # differ after the ThreadPoolExecutor fan-out.
+    members_by_event_key = {
+        (e.release_id, e.channel.value, e.knowledge_time.isoformat() if hasattr(e.knowledge_time, "isoformat") else str(e.knowledge_time)): e.members
+        for e in all_events
+    }
+
+    inserted = 0
+    for item in interpreted:
+        event_payload = item["event"]
+        interpretation = item["interpretation"]
+        event_key = (event_payload["release_id"], event_payload["channel"], event_payload["knowledge_time"])
+        real_members = members_by_event_key.get(event_key, [])
+        macro_event = {
+            "release_id": event_payload["release_id"],
+            "channel": event_payload["channel"],
+            "knowledge_time": event_payload["knowledge_time"],
+            "tier": max((m["tier"] for m in event_payload["members"]), key=lambda t: t == "HIGH"),
+            "member_series": [m["series_id"] for m in event_payload["members"]],
+            "z_scores": {m["series_id"]: m["z_score"] for m in event_payload["members"]},
+            # Deduplicated arrays, not a per-series map - the VALUE (which
+            # source/confidence) is what matters here, and every member of
+            # a collapsed event shares the same value in practice today,
+            # but this stays a real array (not a single string) rather than
+            # silently collapsing to one value if a genuinely mixed-source
+            # event (e.g. a fred series collapsed alongside close_today_bal)
+            # ever occurs - never guess, never quietly drop a real distinct
+            # value, same principle as KnowledgeTimeDropped's own fail-loud
+            # contract elsewhere in this pipeline.
+            "sources": sorted({m.source for m in real_members if m.source}),
+            "knowledge_time_confidences": sorted({m.knowledge_time_confidence for m in real_members if m.knowledge_time_confidence}),
+        }
+        # CONFIRMED LIVE: release_id alone is not a unique event key - some
+        # release_ids are shared across channels (e.g. release_id=18 covers
+        # both DFF/DFEDTARU's policy_path channel and DFII10/T10Y3M's
+        # discount_rate channel, since COLLAPSE groups survivors by
+        # (release_id, channel), not release_id alone). Without channel in
+        # source_id, a second channel's real event on the same release+date
+        # silently collided with an already-inserted event and was dropped
+        # as a false "duplicate" - found live: a real DFF WEAK event on
+        # 2026-09-17 was lost this way because release_id=18's
+        # discount_rate event for the same date had already claimed
+        # "18-2026-09-17".
+        source_id = f"{macro_event['release_id']}-{macro_event['channel']}-{macro_event['knowledge_time']}"
+        if source_id in get_existing_macro_signal_source_ids([source_id]):
+            continue
+        try:
+            insert_macro_signal_event(job_id, macro_event, interpretation)
+            inserted += 1
+        except Exception:
+            logger.exception("Failed to insert macro_signal event for source_id=%s (job %d)", source_id, job_id)
+
+    logger.info(
+        "[MACRO_SIGNAL] job=%d series=%d dates_evaluated=%d events_collapsed=%d"
+        " interpreted=%d inserted=%d audited=%d",
+        job_id, len(by_series), len(tiered_by_date), len(all_events),
+        len(interpreted), inserted, audited,
+    )
+    update_job_status(job_id, "completed", article_count=inserted, set_completed_at=True)
+
+
+async def run_macro_signal_full_chain(
+    job_id: int, from_date: str, to_date: str, *, incremental: bool,
+) -> None:
+    """The full 'store the backfill, then classify' chain, as one
+    agent_jobs-tracked background job: trigger news-retrieval's real
+    macro fetch (POST /macro/fetch, itself tracked in news-retrieval's
+    OWN runs table - GET /runs?domain=macro_signal) -> wait for it to
+    complete -> refresh the FOMC calendar -> run the deterministic
+    pipeline (Z-SCORE -> TIER -> SUPPRESS -> COLLAPSE -> INTERPRET) over
+    [from_date, to_date].
+
+    Two DIFFERENT run-tracking records are created by one call to this
+    function - a real, deliberate consequence of macro_signal spanning
+    two services that each track their own work in their own `runs`/
+    `agent_jobs` table (see controllers.macro_run's own docstring in
+    news-retrieval for why the fetch isn't tracked here instead). This
+    function's own job_id (passed in, already created by the caller -
+    routes/macro.py) is signal-detection-agent's job; the fetch's own
+    run_id (returned by trigger_macro_fetch, logged below) is
+    news-retrieval's - both are real, both queryable, neither
+    fabricated to look unified.
+    """
+    update_job_status(job_id, "running")
+    try:
+        fetch_run_id = await trigger_macro_fetch(incremental=incremental)
+        logger.info(
+            "[MACRO_SIGNAL_CHAIN] job=%d triggered news-retrieval fetch run_id=%d (incremental=%s), waiting...",
+            job_id, fetch_run_id, incremental,
+        )
+        await poll_run_until_done(fetch_run_id)
+    except NewsRetrievalError:
+        logger.exception("[MACRO_SIGNAL_CHAIN] job=%d news-retrieval fetch failed or timed out", job_id)
+        update_job_status(job_id, "failed", set_completed_at=True)
+        return
+
+    logger.info("[MACRO_SIGNAL_CHAIN] job=%d fetch complete, refreshing FOMC calendar...", job_id)
+    try:
+        await asyncio.to_thread(refresh_fomc_meeting_dates)
+    except Exception:
+        # A stale/unrefreshed calendar degrades DFF's inter-meeting
+        # detection (calendar_staleness_warning inside
+        # run_macro_signal_pipeline below will surface this in logs) but
+        # does not block every other series' tiering - not fatal to the
+        # whole chain, logged and continued rather than aborting a real
+        # fetch+backfill over a calendar refresh hiccup.
+        logger.exception("[MACRO_SIGNAL_CHAIN] job=%d FOMC calendar refresh failed - continuing anyway", job_id)
+
+    logger.info("[MACRO_SIGNAL_CHAIN] job=%d running pipeline for [%s, %s]...", job_id, from_date, to_date)
+    await run_macro_signal_pipeline(job_id, from_date, to_date)
+
+
+async def run_macro_signal_confirmation_recheck(job_id: int, since_date: str) -> None:
+    """Suppression mechanism C (spec section 5, Confirmation override):
+    re-examines already-stored macro_signal rows for weekly/monthly
+    series (CONFIRMATION_REVERSAL_ELIGIBLE - see
+    macro_signal_frequency.py) and retroactively marks any whose move
+    has since FULLY reversed at the next observation as suppressed,
+    per check_confirmation_reversal's own definition of "fully
+    reverses" (opposite sign, magnitude >= the original).
+
+    Retroactive by nature - this is a SEPARATE pass from
+    run_macro_signal_pipeline, not folded into it, because the
+    confirming next observation usually does not exist yet at the time
+    the original event was tiered/collapsed/interpreted (a monthly
+    series' next print is up to ~4 weeks later). Safe to run daily:
+    re-checking an event that has no new next-observation yet is a
+    cheap no-op (see_next_change is None -> not reversed, per
+    check_confirmation_reversal), and an already-suppressed row is
+    excluded from the candidate query entirely.
+
+    Only re-derives the ORIGINAL row's own change from a fresh
+    observations pull (not from metadata.z_scores, which stores a
+    z-score, not the raw native-unit change) - same compute_daily_
+    changes function the main pipeline uses, so "the move" means the
+    identical thing in both passes.
+    """
+    update_job_status(job_id, "running")
+    eligible_series = sorted(CONFIRMATION_REVERSAL_ELIGIBLE)
+
+    candidates = list_macro_signal_events_for_confirmation_recheck(eligible_series, since_date)
+    if not candidates:
+        update_job_status(job_id, "completed", article_count=0, set_completed_at=True)
+        logger.info("[MACRO_SIGNAL_RECHECK] job=%d no candidates since %s", job_id, since_date)
+        return
+
+    try:
+        observations = await get_macro_observations(series_ids=eligible_series, from_date=since_date)
+    except NewsRetrievalError:
+        logger.exception("Failed to fetch macro observations for confirmation recheck job %d", job_id)
+        update_job_status(job_id, "failed", set_completed_at=True)
+        return
+
+    from datetime import date as _date
+    for obs in observations:
+        if isinstance(obs.get("observation_date"), str):
+            obs["observation_date"] = _date.fromisoformat(obs["observation_date"])
+
+    by_series: dict[str, list[dict[str, Any]]] = {}
+    for obs in observations:
+        by_series.setdefault(obs["series_id"], []).append(obs)
+    changes_by_series = {sid: compute_daily_changes(obs_list) for sid, obs_list in by_series.items()}
+
+    reversed_count = 0
+    checked_count = 0
+    for row in candidates:
+        metadata = row["metadata"]
+        row_date = row["published"].date() if hasattr(row["published"], "date") else row["published"]
+        member_series = metadata.get("member_series") or (
+            [metadata["series_id"]] if metadata.get("series_id") else []
+        )
+        eligible_members = [s for s in member_series if s in CONFIRMATION_REVERSAL_ELIGIBLE]
+        if not eligible_members:
+            continue
+
+        any_reversed = False
+        reversing_series = None
+        for series_id in eligible_members:
+            changes = changes_by_series.get(series_id, {})
+            original_change = changes.get(row_date)
+            if original_change is None:
+                continue  # this row's own date isn't in the re-fetched window - can't recheck
+            future_dates = sorted(d for d in changes if d > row_date)
+            next_change = changes[future_dates[0]] if future_dates else None
+            checked_count += 1
+            result = check_confirmation_reversal(series_id, original_change, next_change)
+            if result.reversed:
+                any_reversed = True
+                reversing_series = series_id
+                break
+
+        if any_reversed:
+            rule = f"confirmation_reversal:{reversing_series}"
+            try:
+                updated = mark_macro_signal_event_suppressed(row["source_id"], rule)
+                if updated:
+                    reversed_count += 1
+                    logger.info(
+                        "[MACRO_SIGNAL_RECHECK] job=%d suppressed source_id=%s via %s",
+                        job_id, row["source_id"], rule,
+                    )
+            except Exception:
+                logger.exception(
+                    "Failed to mark confirmation-reversed macro_signal row source_id=%s (job %d)",
+                    row["source_id"], job_id,
+                )
+
+    logger.info(
+        "[MACRO_SIGNAL_RECHECK] job=%d candidates=%d checked=%d reversed=%d",
+        job_id, len(candidates), checked_count, reversed_count,
+    )
+    update_job_status(job_id, "completed", article_count=reversed_count, set_completed_at=True)
 
 
 async def run_korea_signal_classification(job_id: int, from_date: str, to_date: str) -> None:
