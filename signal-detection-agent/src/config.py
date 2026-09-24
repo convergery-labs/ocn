@@ -34,9 +34,16 @@ NEWS_DOMAIN: str = os.environ.get("NEWS_DOMAIN", "ai_news")
 GEOPOLITICAL_SIGNAL_DOMAIN: str = os.environ.get("GEOPOLITICAL_SIGNAL_DOMAIN", "geopolitical_news")
 # Stage B is a forced one-word HIGH/WEAK call, same shape/cost tier as
 # Taiwan's GDELT relevance check (_classify_gdelt_relevance) - defaults to
-# the same cheaper second-pass model rather than the full OPENAI_MODEL,
-# independently tunable via its own env var.
-GEOPOLITICAL_SIGNAL_MODEL: str = os.environ.get("GEOPOLITICAL_SIGNAL_MODEL") or OPENAI_MODEL_V2
+# SIGNAL_DETECTION_MODEL_V2 directly (not OPENAI_MODEL_V2, which would
+# chain further to OPENAI_MODEL/SIGNAL_DETECTION_MODEL - the Sonnet base
+# model - if SIGNAL_DETECTION_MODEL_V2 were ever unset), so this always
+# matches the same second-pass model configured in AWS, never silently
+# upgrades to the base model. Independently tunable via its own env var.
+GEOPOLITICAL_SIGNAL_MODEL: str = (
+    os.environ.get("GEOPOLITICAL_SIGNAL_MODEL")
+    or os.environ.get("SIGNAL_DETECTION_MODEL_V2")
+    or OPENAI_MODEL_V2
+)
 GEOPOLITICAL_SIGNAL_STAGE_B_DAILY_CAP: int = int(
     os.environ.get("GEOPOLITICAL_SIGNAL_STAGE_B_DAILY_CAP", "1000")
 )
@@ -69,3 +76,28 @@ GEOPOLITICAL_SIGNAL_STAGE_C_PROMPT: Path = PROMPTS_DIR / "geopolitical_signal_st
 GEOPOLITICAL_SIGNAL_STAGE_C_MODEL: str = (
     os.environ.get("GEOPOLITICAL_SIGNAL_STAGE_C_MODEL") or GEOPOLITICAL_SIGNAL_MODEL
 )
+
+# Macro Signal Backbone: INTERPRET is one short structured call per
+# collapsed event (not per series/article). CONFIRMED LIVE over a real
+# 2-week run: OPENAI_MODEL_V2 (gpt-4o-mini) produced a malformed/empty
+# "assets" array on ~28% of real calls (5 of 18 collapsed events),
+# intermittent rather than reproducible from the event shape alone - the
+# validator correctly rejects it, but the event is then silently
+# dropped with no fallback (see interpret_event's own no-retry
+# rationale). Falls back to SEC_FILING_MODEL instead - a stronger model
+# already proven reliable for this codebase's other structured-JSON
+# extraction call, not the cheaper V2 tier Taiwan's forced-one-word
+# calls use (a wrong word there just means "safely defaults to WEAK";
+# a malformed macro event here means the event is lost entirely, a
+# real cost this domain isn't willing to pay for the cheaper model).
+MACRO_SIGNAL_DOMAIN: str = os.environ.get("MACRO_SIGNAL_DOMAIN", "macro_signal")
+MACRO_SIGNAL_MODEL: str = os.environ.get("MACRO_SIGNAL_MODEL") or SEC_FILING_MODEL
+MACRO_SIGNAL_PROMPT: Path = PROMPTS_DIR / "macro_signal_interpret_v1.txt"
+# One blocking HTTP call per collapsed event, same shape as
+# TAIWAN_CLASSIFY_CONCURRENCY - independently tunable since event volume
+# (a handful/day) differs a lot from Taiwan's per-article volume.
+MACRO_SIGNAL_CLASSIFY_CONCURRENCY: int = int(os.environ.get("MACRO_SIGNAL_CLASSIFY_CONCURRENCY", "5"))
+# Rolling 2-year window per spec - each pipeline run re-pulls this much
+# history per series rather than maintaining an incremental watermark
+# (v1 simplicity tradeoff, see plan history).
+MACRO_SIGNAL_ZSCORE_WINDOW_DAYS: int = int(os.environ.get("MACRO_SIGNAL_ZSCORE_WINDOW_DAYS", "730"))

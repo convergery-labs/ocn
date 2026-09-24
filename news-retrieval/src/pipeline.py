@@ -22,8 +22,8 @@ from dart_corp_code import resolve_corp_codes
 from models.articles import (
     append_also_reported_by,
     get_already_stored_urls,
-    get_recent_articles_for_domain,
     get_recent_gdelt_articles_for_ticker,
+    iter_recent_articles_for_domain,
 )
 from models.sources import load_sources
 
@@ -824,7 +824,12 @@ _GDELT_MIN_INTERVAL = 15.0  # GDELT's documented floor is 5s; observed to tighte
 # reliably at the same interval) - this alone won't fix the separate, larger loss from
 # the company-name-in-title filter (Path 3 Stage A) dropping most surviving results.
 _GDELT_MAXRECORDS = 250
-_GDELT_MAX_ROUNDS = 3  # round-robin passes over rate-limited queries before giving up
+_GDELT_MAX_ROUNDS = 2  # round-robin passes over rate-limited queries before giving up -
+# lowered from 3 after a real run (2026-09-24) showed GDELT rate-limiting every single
+# query through round 2, with round 3 recovering nothing - a third round only adds
+# runtime (up to 27 queries * _GDELT_MIN_INTERVAL each) with no evidence it typically
+# helps; if a future run shows round 3 reliably recovering a meaningful number of
+# queries, revisit this rather than assuming today's outlier is representative.
 _GDELT_USER_AGENT = (
     "Mozilla/5.0 (compatible; ocn-news-retrieval/1.0;"
     " +https://opengrowthventures.com)"
@@ -996,6 +1001,7 @@ _SAME_EVENT_LLM_CONCURRENCY = 10
 
 def _resolve_db_borderline_matches_parallel(
     pending: list[tuple[int, str, str, Any]], api_key: str | None,
+    cache: dict[tuple[str, str], bool | None] | None = None,
 ) -> dict[int, bool | None]:
     """Resolve a batch of DB-history borderline same-event checks concurrently.
 
@@ -1020,9 +1026,31 @@ def _resolve_db_borderline_matches_parallel(
     if not pending:
         return {}
 
+    # Real runs show the exact same (article_title, candidate_title) pair
+    # recurring dozens of times in one batch - GDELT/SerpAPI/RSS pulling
+    # the same wire story from many outlets, several of which produce
+    # identical or near-identical raw titles that each land their own
+    # "pending" entry against the same DB candidate. The LLM verdict for
+    # a given pair is a pure function of the two title strings, so an
+    # exact-pair cache is always correct and cuts real, measured repeat
+    # calls (confirmed live 2026-09-24: one pair alone repeated 30x in a
+    # single run) without changing any dedup outcome. Caller may pass a
+    # cache shared with phase 3's sequential same-batch checks too, since
+    # the same (article_title, candidate_title) pair can recur there.
+    if cache is None:
+        cache = {}
+    cache_lock = threading.Lock()
+
     def _check_one(item):
         idx, article_title, candidate_title, _candidate_db_id = item
-        return idx, _titles_describe_same_event(article_title, candidate_title, api_key)
+        key = (article_title, candidate_title)
+        with cache_lock:
+            if key in cache:
+                return idx, cache[key]
+        same_event = _titles_describe_same_event(article_title, candidate_title, api_key)
+        with cache_lock:
+            cache[key] = same_event
+        return idx, same_event
 
     results: dict[int, bool | None] = {}
     with ThreadPoolExecutor(max_workers=_SAME_EVENT_LLM_CONCURRENCY) as executor:
@@ -1585,54 +1613,77 @@ def _dedup_by_title_similarity_for_domain(
     api_key = os.environ.get("OPENROUTER_API_KEY")
     new_embeddings = _embed_titles([a["title"] for a in articles], api_key)
 
-    recent = get_recent_articles_for_domain(
-        domain_slug, hours=_DOMAIN_TITLE_DEDUP_WINDOW_HOURS[domain_slug],
-    )
-    if excluded_categories:
-        recent = [
-            c for c in recent
-            if (c.get("metadata") or {}).get("source_category") not in excluded_categories
-        ]
-    candidates = [
-        (c.get("title"), (c.get("metadata") or {}).get("title_embedding"),
-         c.get("id"), None)
-        for c in recent
-    ]
     threshold = _DOMAIN_TITLE_DEDUP_SIMILARITY_THRESHOLD.get(
         domain_slug, _TITLE_DEDUP_SIMILARITY_THRESHOLD,
     )
     same_event_domain = domain_slug in _SAME_EVENT_LLM_DOMAINS
 
-    # Phase 1 (sequential, no I/O): resolve each article's DB-history-only
-    # hard match and best DB-history-only borderline candidate. DB history
-    # (``candidates``) is fixed before this loop starts - unlike same-batch
-    # candidates (which grow as earlier articles in THIS batch survive),
-    # comparing against it never depends on what order articles are
-    # processed in, so this pass is safe to resolve out of order (which
-    # phase 2 then does, concurrently).
+    # Phase 1 (sequential, no I/O beyond the paginated fetch itself):
+    # resolve each article's DB-history-only hard match and best
+    # DB-history-only borderline candidate. DB history is fixed before
+    # this loop starts - unlike same-batch candidates (which grow as
+    # earlier articles in THIS batch survive), comparing against it never
+    # depends on what order articles are processed in, so this pass is
+    # safe to resolve out of order (which phase 2 then does, concurrently).
+    #
+    # Candidates are streamed in bounded-size pages via
+    # iter_recent_articles_for_domain rather than loaded all at once via
+    # get_recent_articles_for_domain - confirmed live 2026-09-24 that
+    # holding the full window (2127+ rows, ~30KB each, dominated by the
+    # stored title_embedding) in memory for the whole dedup pass was a
+    # real cost during the exact phase a production run died with no
+    # traceback. Chunking trades that for more DB round-trips, with zero
+    # loss of dedup coverage - every candidate in the window is still
+    # compared, just one page at a time. best_borderline_by_article
+    # persists across pages so a later page can still beat an earlier
+    # page's borderline candidate; articles already hard-matched are
+    # skipped on subsequent pages instead of re-scanned.
     db_hard_match: dict[int, Any] = {}
-    db_borderline: dict[int, tuple[float, str, Any]] = {}
-    for i, (article, embedding) in enumerate(zip(articles, new_embeddings)):
+    best_borderline_by_article: dict[int, tuple[float, str, Any]] = {}
+    for article in articles:
         article.setdefault("metadata", {})
-        if embedding is None:
-            continue
-        best_borderline: tuple[float, str, Any] | None = None
-        for candidate_title, candidate_embedding, db_id, _batch_article in candidates:
-            if not candidate_embedding:
-                continue
-            similarity = _cosine_similarity(embedding, candidate_embedding)
-            if similarity >= threshold:
-                db_hard_match[i] = db_id
-                break
-            if (
-                same_event_domain
-                and similarity >= _SAME_EVENT_SIMILARITY_FLOOR
-                and (best_borderline is None or similarity > best_borderline[0])
-            ):
-                best_borderline = (similarity, candidate_title, db_id)
-        else:
-            if best_borderline is not None:
-                db_borderline[i] = best_borderline
+
+    pending_indices = {
+        i for i, embedding in enumerate(new_embeddings) if embedding is not None
+    }
+    for chunk in iter_recent_articles_for_domain(
+        domain_slug, hours=_DOMAIN_TITLE_DEDUP_WINDOW_HOURS[domain_slug],
+    ):
+        if not pending_indices:
+            break
+        if excluded_categories:
+            chunk = [
+                c for c in chunk
+                if (c.get("metadata") or {}).get("source_category") not in excluded_categories
+            ]
+        chunk_candidates = [
+            (c.get("title"), (c.get("metadata") or {}).get("title_embedding"), c.get("id"))
+            for c in chunk
+        ]
+        for i in list(pending_indices):
+            embedding = new_embeddings[i]
+            best_borderline = best_borderline_by_article.get(i)
+            for candidate_title, candidate_embedding, db_id in chunk_candidates:
+                if not candidate_embedding:
+                    continue
+                similarity = _cosine_similarity(embedding, candidate_embedding)
+                if similarity >= threshold:
+                    db_hard_match[i] = db_id
+                    best_borderline = None
+                    break
+                if (
+                    same_event_domain
+                    and similarity >= _SAME_EVENT_SIMILARITY_FLOOR
+                    and (best_borderline is None or similarity > best_borderline[0])
+                ):
+                    best_borderline = (similarity, candidate_title, db_id)
+            if i in db_hard_match:
+                pending_indices.discard(i)
+                best_borderline_by_article.pop(i, None)
+            elif best_borderline is not None:
+                best_borderline_by_article[i] = best_borderline
+
+    db_borderline: dict[int, tuple[float, str, Any]] = best_borderline_by_article
 
     # Phase 2 (parallel): resolve every DB-history borderline check
     # concurrently - each pair is independent (see
@@ -1647,7 +1698,13 @@ def _dedup_by_title_similarity_for_domain(
         (i, articles[i]["title"], title, db_id)
         for i, (sim, title, db_id) in db_borderline.items()
     ]
-    db_same_event_results = _resolve_db_borderline_matches_parallel(pending, api_key)
+    # Shared with phase 3 below - the same (new title, candidate title)
+    # pair can recur there too (e.g. two same-batch outlets both compared
+    # against a title already resolved in phase 2).
+    same_event_cache: dict[tuple[str, str], bool | None] = {}
+    db_same_event_results = _resolve_db_borderline_matches_parallel(
+        pending, api_key, cache=same_event_cache,
+    )
 
     # Phase 3 (sequential): walk the batch in order exactly as before,
     # but hard matches and DB-borderline same-event checks are already
@@ -1706,9 +1763,14 @@ def _dedup_by_title_similarity_for_domain(
                     best_batch_borderline = (similarity, candidate_title, batch_article)
             if match is None and best_batch_borderline is not None:
                 similarity, candidate_title, batch_article = best_batch_borderline
-                same_event = _titles_describe_same_event(
-                    article["title"], candidate_title, api_key,
-                )
+                cache_key = (article["title"], candidate_title)
+                if cache_key in same_event_cache:
+                    same_event = same_event_cache[cache_key]
+                else:
+                    same_event = _titles_describe_same_event(
+                        article["title"], candidate_title, api_key,
+                    )
+                    same_event_cache[cache_key] = same_event
                 if same_event:
                     logger.info(
                         "[%s] near-duplicate title via same-event check"

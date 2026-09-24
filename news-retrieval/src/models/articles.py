@@ -154,6 +154,12 @@ def get_recent_articles_for_domain(
     this field existed, or where the embedding call failed, have it absent
     and are skipped by the caller's similarity check, not treated as
     errors).
+
+    Loads the entire window in one round-trip - fine for callers that need
+    every candidate in memory at once. ``iter_recent_articles_for_domain``
+    below covers the case (title-similarity dedup) where the caller only
+    ever needs one candidate at a time and holding the full window in
+    memory is the actual memory cost, not a per-row field.
     """
     with get_db() as conn:
         cur = conn.execute(
@@ -168,6 +174,79 @@ def get_recent_articles_for_domain(
             {"domain": domain, "hours": hours},
         )
         return [dict(row) for row in cur.fetchall()]
+
+
+_RECENT_ARTICLES_CHUNK_SIZE = 250
+
+
+def iter_recent_articles_for_domain(
+    domain: str, hours: int = 24, chunk_size: int = _RECENT_ARTICLES_CHUNK_SIZE,
+):
+    """Yield recently-stored articles for one domain in bounded-size pages,
+    instead of loading the entire window into memory at once like
+    ``get_recent_articles_for_domain`` does.
+
+    For title-similarity dedup, the caller (``_dedup_by_title_similarity_
+    for_domain`` in pipeline.py) only ever needs to compare the new batch
+    against one candidate at a time - it never needs the whole window held
+    in memory simultaneously. Confirmed live 2026-09-24: geopolitical_news's
+    168h window held 2127+ rows at once (~30KB each, dominated by the
+    stored title_embedding, not by other metadata fields - narrowing the
+    SELECT to fewer columns was tried and measured to save only ~124
+    bytes/row out of ~31KB, i.e. not the real cost) during the exact phase
+    a production run died with no traceback. Paginating the fetch caps
+    memory to one page's worth of rows regardless of how large the domain's
+    total window grows, with no loss of dedup coverage (every candidate in
+    the window is still compared, just not all at once) - unlike shortening
+    the window, which would permanently stop catching duplicates published
+    further back.
+
+    Keyset-paginated on ``a.id`` (not OFFSET) so later pages don't degrade
+    in query cost as the scan progresses, and so a page boundary can't
+    duplicate or skip a row the way OFFSET can under concurrent writes -
+    not a concern here since these are already-stored historical rows, but
+    keyset pagination costs nothing extra and is the safer default.
+    """
+    last_id: int | None = None
+    while True:
+        with get_db() as conn:
+            if last_id is None:
+                cur = conn.execute(
+                    """
+                    SELECT a.id, a.title, a.url, a.metadata
+                    FROM articles a
+                    JOIN runs r ON r.id = a.run_id
+                    WHERE r.domain = :domain
+                      AND a.created_at > NOW() - (:hours || ' hours')::INTERVAL
+                    ORDER BY a.id DESC
+                    LIMIT :chunk_size
+                    """,
+                    {"domain": domain, "hours": hours, "chunk_size": chunk_size},
+                )
+            else:
+                cur = conn.execute(
+                    """
+                    SELECT a.id, a.title, a.url, a.metadata
+                    FROM articles a
+                    JOIN runs r ON r.id = a.run_id
+                    WHERE r.domain = :domain
+                      AND a.created_at > NOW() - (:hours || ' hours')::INTERVAL
+                      AND a.id < :last_id
+                    ORDER BY a.id DESC
+                    LIMIT :chunk_size
+                    """,
+                    {
+                        "domain": domain, "hours": hours,
+                        "last_id": last_id, "chunk_size": chunk_size,
+                    },
+                )
+            rows = [dict(row) for row in cur.fetchall()]
+        if not rows:
+            return
+        yield rows
+        if len(rows) < chunk_size:
+            return
+        last_id = rows[-1]["id"]
 
 
 def append_also_reported_by(article_id: int, domain: str) -> None:
