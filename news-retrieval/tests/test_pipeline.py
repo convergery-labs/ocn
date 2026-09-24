@@ -430,6 +430,13 @@ def _article(title: str, url: str, source: str = "Test Feed") -> dict:
     }
 
 
+def _one_chunk(rows: list[dict]):
+    """Wrap a flat row list as a single-page iter_recent_articles_for_domain
+    result, for tests that don't care about multi-chunk pagination."""
+    if rows:
+        yield rows
+
+
 def test_title_dedup_drops_cross_run_near_duplicate() -> None:
     """A new article whose title is a near-duplicate (by embedding
     similarity) of an already-stored ai_news article is dropped, and the
@@ -455,13 +462,13 @@ def test_title_dedup_drops_cross_run_near_duplicate() -> None:
             return_value=[[1.0, 0.0]],
         ),
         patch(
-            "pipeline.get_recent_articles_for_domain",
-            return_value=[{
+            "pipeline.iter_recent_articles_for_domain",
+            side_effect=lambda *a, **k: _one_chunk([{
                 "id": 42,
                 "title": "OpenAI Releases GPT-5",
                 "url": "http://example.com/original-story",
                 "metadata": {"title_embedding": [1.0, 0.0]},
-            }],
+            }]),
         ),
         patch("pipeline.append_also_reported_by") as mock_append,
     ):
@@ -471,6 +478,97 @@ def test_title_dedup_drops_cross_run_near_duplicate() -> None:
 
     assert result == []
     mock_append.assert_called_once_with(42, "example-outlet-b.com")
+
+
+def test_title_dedup_hard_match_found_in_later_chunk() -> None:
+    """A hard match that only appears in the SECOND page of DB history
+    candidates is still caught - proving the chunked/paginated scan
+    (iter_recent_articles_for_domain) doesn't stop early or miss later
+    pages, the way a bug in the chunking loop's early-break/pending-set
+    handling could silently do.
+    """
+    new_article = _article(
+        "OpenAI Releases GPT-5", "https://www.example-outlet-b.com/new-story",
+        source="Outlet B",
+    )
+
+    def _two_chunks(*args, **kwargs):
+        yield [{
+            "id": 1,
+            "title": "Unrelated Story",
+            "url": "http://example.com/unrelated",
+            "metadata": {"title_embedding": [0.0, 1.0]},
+        }]
+        yield [{
+            "id": 42,
+            "title": "OpenAI Releases GPT-5",
+            "url": "http://example.com/original-story",
+            "metadata": {"title_embedding": [1.0, 0.0]},
+        }]
+
+    with (
+        patch("pipeline._embed_titles", return_value=[[1.0, 0.0]]),
+        patch(
+            "pipeline.iter_recent_articles_for_domain",
+            side_effect=_two_chunks,
+        ),
+        patch("pipeline.append_also_reported_by") as mock_append,
+    ):
+        result = pipeline_module._dedup_by_title_similarity_for_domain(
+            [new_article], "ai_news",
+        )
+
+    assert result == []
+    mock_append.assert_called_once_with(42, "example-outlet-b.com")
+
+
+def test_title_dedup_later_chunk_hard_match_clears_earlier_borderline() -> None:
+    """A borderline candidate recorded from chunk 1 must not linger and
+    trigger a wasted same-event LLM call once a later chunk produces a
+    hard match for that same article - the hard match should win outright
+    with no LLM call at all, same as if hard and borderline candidates
+    had been in one unchunked scan.
+    """
+    new_article = _article(
+        "Iran president gives a wartime speech",
+        "https://www.example-outlet-b.com/new-story",
+    )
+
+    def _two_chunks(*args, **kwargs):
+        # Borderline-only candidate (similarity ~0.71, below the 0.82
+        # geopolitical_news threshold but above the 0.50 same-event floor).
+        yield [{
+            "id": 1,
+            "title": "Iran president delivers defiant UN speech",
+            "url": "http://example.com/borderline",
+            "metadata": {"title_embedding": [1.0, 0.0]},
+        }]
+        # Hard match (identical embedding) in the second chunk.
+        yield [{
+            "id": 42,
+            "title": "Iran president gives a wartime speech",
+            "url": "http://example.com/exact",
+            "metadata": {"title_embedding": [1.0, 1.0]},
+        }]
+
+    with (
+        patch("pipeline._embed_titles", return_value=[[1.0, 1.0]]),
+        patch(
+            "pipeline.iter_recent_articles_for_domain",
+            side_effect=_two_chunks,
+        ),
+        patch(
+            "pipeline._titles_describe_same_event",
+        ) as mock_same_event,
+        patch("pipeline.append_also_reported_by") as mock_append,
+    ):
+        result = pipeline_module._dedup_by_title_similarity_for_domain(
+            [new_article], "geopolitical_news",
+        )
+
+    assert result == []
+    mock_append.assert_called_once_with(42, "example-outlet-b.com")
+    mock_same_event.assert_not_called()
 
 
 def test_title_dedup_keeps_distinct_titles() -> None:
@@ -485,7 +583,10 @@ def test_title_dedup_keeps_distinct_titles() -> None:
             "pipeline._embed_titles",
             return_value=[[1.0, 0.0], [0.0, 1.0]],
         ),
-        patch("pipeline.get_recent_articles_for_domain", return_value=[]),
+        patch(
+            "pipeline.iter_recent_articles_for_domain",
+            side_effect=lambda *a, **k: _one_chunk([]),
+        ),
     ):
         result = pipeline_module._dedup_by_title_similarity_for_domain(
             articles, "ai_news",
@@ -511,7 +612,10 @@ def test_title_dedup_same_batch_duplicate_merged_in_memory() -> None:
             "pipeline._embed_titles",
             return_value=[[1.0, 0.0], [1.0, 0.0]],
         ),
-        patch("pipeline.get_recent_articles_for_domain", return_value=[]),
+        patch(
+            "pipeline.iter_recent_articles_for_domain",
+            side_effect=lambda *a, **k: _one_chunk([]),
+        ),
         patch("pipeline.append_also_reported_by") as mock_append,
     ):
         result = pipeline_module._dedup_by_title_similarity_for_domain(
@@ -524,6 +628,51 @@ def test_title_dedup_same_batch_duplicate_merged_in_memory() -> None:
     mock_append.assert_not_called()
 
 
+def test_title_dedup_same_event_cache_avoids_repeat_llm_call_for_same_pair() -> None:
+    """Two different new articles that both land the exact same
+    (new_title, candidate_title) borderline pair against DB history
+    trigger only one _titles_describe_same_event call, not two.
+
+    Confirmed live 2026-09-24: GDELT/SerpAPI/RSS fan-out on one wire
+    story produced dozens of new articles with an identical raw title,
+    each independently landing the same borderline candidate from DB
+    history - one exact pair recurred 30 times in a single run, each a
+    separate real LLM call before this cache was added.
+    """
+    new_articles = [
+        _article("Wire Story Headline", "https://outlet-a.example.com/a"),
+        _article("Wire Story Headline", "https://outlet-b.example.com/b"),
+    ]
+
+    with (
+        patch(
+            "pipeline._embed_titles",
+            return_value=[[1.0, 1.0], [1.0, 1.0]],
+        ),
+        patch(
+            "pipeline.iter_recent_articles_for_domain",
+            side_effect=lambda *a, **k: _one_chunk([{
+                "id": 99,
+                "title": "Original Wire Story",
+                "url": "http://example.com/original",
+                "metadata": {"title_embedding": [1.0, 0.0]},
+            }]),
+        ),
+        patch(
+            "pipeline._titles_describe_same_event",
+            return_value=True,
+        ) as mock_same_event,
+        patch("pipeline.append_also_reported_by"),
+    ):
+        pipeline_module._dedup_by_title_similarity_for_domain(
+            new_articles, "geopolitical_news",
+        )
+
+    mock_same_event.assert_called_once_with(
+        "Wire Story Headline", "Original Wire Story", None,
+    )
+
+
 def test_title_dedup_fails_open_on_embedding_failure() -> None:
     """An article whose title embedding failed (None) is kept, not dropped
     or silently deduped."""
@@ -531,7 +680,10 @@ def test_title_dedup_fails_open_on_embedding_failure() -> None:
 
     with (
         patch("pipeline._embed_titles", return_value=[None]),
-        patch("pipeline.get_recent_articles_for_domain", return_value=[]),
+        patch(
+            "pipeline.iter_recent_articles_for_domain",
+            side_effect=lambda *a, **k: _one_chunk([]),
+        ),
     ):
         result = pipeline_module._dedup_by_title_similarity_for_domain(
             [article], "ai_news",
