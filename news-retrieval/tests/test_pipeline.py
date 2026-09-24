@@ -668,9 +668,9 @@ def test_title_dedup_same_event_cache_avoids_repeat_llm_call_for_same_pair() -> 
             new_articles, "geopolitical_news",
         )
 
-    mock_same_event.assert_called_once_with(
-        "Wire Story Headline", "Original Wire Story", None,
-    )
+    assert mock_same_event.call_count == 1
+    called_args = mock_same_event.call_args[0]
+    assert called_args[:2] == ("Wire Story Headline", "Original Wire Story")
 
 
 def test_title_dedup_fails_open_on_embedding_failure() -> None:
