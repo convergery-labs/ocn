@@ -118,7 +118,7 @@ def _extract_body(entry: Any, url: str, no_fetch: bool) -> str | None:
         return clean_body
     if no_fetch:
         return None
-    downloaded = trafilatura.fetch_url(url, config=_TRAFILATURA_CONFIG)
+    downloaded = trafilatura.fetch_url(url, config=_get_trafilatura_config())
     return trafilatura.extract(downloaded) if downloaded else None
 
 
@@ -146,8 +146,31 @@ _RSS_USER_AGENT = (
 # UA (confirmed live: reuters.com, bloomberg.com return 401/403 even with
 # this same browser UA) - those still fail open to a null body, same as
 # before.
-_TRAFILATURA_CONFIG = use_config()
-_TRAFILATURA_CONFIG.set("DEFAULT", "USER_AGENTS", _RSS_USER_AGENT)
+#
+# One ConfigParser instance PER THREAD, not a single shared module-level
+# object - every call site above runs inside a ThreadPoolExecutor(max_workers=10)
+# (RSS body fetch, SerpAPI body fetch, GDELT body fetch), so a shared
+# instance means up to 10 threads read the same ConfigParser concurrently
+# on every fetch. A real crash was observed in production the first time
+# this shared-instance version ran at GDELT's larger batch scale
+# (glibc "corrupted size vs. prev_size while consolidating" - a heap
+# corruption abort) - root cause not confirmed (a comparable-scale local
+# repro with the shared instance did not reproduce it, and nothing in
+# Trafilatura's own downloads.py appears to mutate the config object), but
+# building one instance per thread removes shared mutable state from this
+# code path entirely regardless of whether it was the actual cause, at
+# negligible cost (ConfigParser construction is cheap, done once per
+# thread's lifetime via threading.local, not once per URL).
+_trafilatura_config_local = threading.local()
+
+
+def _get_trafilatura_config():
+    config = getattr(_trafilatura_config_local, "config", None)
+    if config is None:
+        config = use_config()
+        config.set("DEFAULT", "USER_AGENTS", _RSS_USER_AGENT)
+        _trafilatura_config_local.config = config
+    return config
 
 
 def _parse_feed(source: dict, cutoff: datetime) -> list[dict]:
@@ -329,7 +352,7 @@ def _fetch_one_serpapi(source: dict, days_back: int, api_key: str) -> list[dict]
     def _fetch_body(url: str) -> str | None:
         if not url:
             return None
-        downloaded = trafilatura.fetch_url(url, config=_TRAFILATURA_CONFIG)
+        downloaded = trafilatura.fetch_url(url, config=_get_trafilatura_config())
         return trafilatura.extract(downloaded) if downloaded else None
 
     with ThreadPoolExecutor(max_workers=10) as executor:
@@ -1936,7 +1959,7 @@ def _fetch_gdelt(sources: list[dict], days_back: int, domain_slug: str = "") -> 
         )
 
     def _fetch_body(url: str) -> str | None:
-        downloaded = trafilatura.fetch_url(url, config=_TRAFILATURA_CONFIG)
+        downloaded = trafilatura.fetch_url(url, config=_get_trafilatura_config())
         return trafilatura.extract(downloaded) if downloaded else None
 
     with ThreadPoolExecutor(max_workers=10) as executor:
