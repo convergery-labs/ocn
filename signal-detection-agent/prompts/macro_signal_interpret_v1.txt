@@ -174,6 +174,18 @@ Return ONLY a JSON object with exactly these keys:
   what moved and the path from that move toward a US price. State
   only what the data says.
 
+"series_directions": an object with one key per member series id you
+  were given, each mapped to "up" or "down" - "up" if its move_bp is
+  positive (the series rose, widened, or steepened), "down" if
+  negative (fell, narrowed, or flattened). This is a literal readout
+  of each member's own move_bp sign, not a judgment call - it exists so
+  the exact series each part of your sentence describes is always
+  machine-checkable, even when two members happen to move by the same
+  number of basis points in opposite directions (e.g. one series +8bp
+  and another -8bp in the same event - the sentence's own wording must
+  still be checkable against the right one). Include every member you
+  were given, in any order.
+
 "suspect": true or false
 
 "suspect_reason": one clause if suspect is true, otherwise null

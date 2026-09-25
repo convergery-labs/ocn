@@ -17,7 +17,10 @@ from typing import Any
 
 import config
 from pipeline.classifier import classify_with_model
-from pipeline.macro_signal_factcheck import check_transmission_matches_real_numbers
+from pipeline.macro_signal_factcheck import (
+    check_series_directions_match_real_signs,
+    check_transmission_matches_real_numbers,
+)
 from pipeline.macro_signal_thresholds import Channel
 
 logger = logging.getLogger(__name__)
@@ -29,7 +32,7 @@ _ALLOWED_ASSETS = {
     "treasuries", "real_rates", "credit", "usd", "semis",
     "broad_equities", "duration_growth", "consumer", "housing",
 }
-_REQUIRED_FIELDS = ("channel", "entry_point", "assets", "transmission", "suspect", "suspect_reason")
+_REQUIRED_FIELDS = ("channel", "entry_point", "assets", "transmission", "series_directions", "suspect", "suspect_reason")
 _BANNED_TERMS = [
     "signals that", "suggests", "could mean", "investors fear", "markets are watching",
 ]
@@ -142,6 +145,23 @@ def validate_interpretation(
             f"transmission exceeds {_MAX_TRANSMISSION_WORDS} words ({len(transmission.split())}): {transmission!r}"
         )
 
+    # series_directions: real ask (frontend follow-up, 2026-09-25, job
+    # 271) - a free-text fact-check trying to reverse-engineer which
+    # series a written bp figure describes is fundamentally ambiguous
+    # whenever two members move by the same |bp| in opposite directions
+    # (confirmed live: DFII10 +8bp and T10Y2Y -8bp in one event -
+    # "steepening... by 8bp" matched DFII10's sign and passed, when the
+    # sentence's own wording ("the 2s10s curve") meant T10Y2Y). Fixed at
+    # the root: the model now states each member's own direction
+    # directly, so this is checked against real data, not parsed from
+    # prose.
+    series_directions = payload["series_directions"]
+    if not isinstance(series_directions, dict) or not series_directions:
+        raise InterpretationValidationError(f"series_directions must be a non-empty object, got {series_directions!r}")
+    bad_directions = {k: v for k, v in series_directions.items() if v not in ("up", "down")}
+    if bad_directions:
+        raise InterpretationValidationError(f"series_directions has non-up/down values: {bad_directions}")
+
     suspect = payload["suspect"]
     if not isinstance(suspect, bool):
         raise InterpretationValidationError(f"suspect must be a bool, got {suspect!r}")
@@ -169,6 +189,11 @@ def validate_interpretation(
         if not fact_check.ok:
             raise InterpretationValidationError(
                 f"transmission's numbers don't match the real event data: {fact_check.problems}"
+            )
+        direction_check = check_series_directions_match_real_signs(series_directions, members)
+        if not direction_check.ok:
+            raise InterpretationValidationError(
+                f"series_directions doesn't match the real event data: {direction_check.problems}"
             )
 
     return payload
