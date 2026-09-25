@@ -1165,6 +1165,63 @@ def test_transmission_bp_number_within_tolerance_of_slightly_rounded_move_bp_pas
     assert result == ok
 
 
+def test_transmission_wrong_direction_word_on_multimember_event_is_rejected():
+    """Regression test for a real bug found live (frontend follow-up,
+    2026-09-25, job 267): the ORIGINAL direction check only validated
+    single-member events, on the theory that a multi-member sentence
+    might legitimately describe just one member. That missed this exact
+    case: "steepening the 2s10s curve by 8bp" was stored for a real
+    T10Y2Y move of -8bp (0.47 -> 0.39, a FLATTENING) - the number (8bp)
+    was correct and matched a real member, but the direction word next
+    to it was backwards. Must now be rejected even though the event has
+    other members too (DFII5 +11bp, T5YIFR -3bp)."""
+    bad = {
+        **_VALID,
+        "transmission": "Real yields rose 11bp at the 5-year point, steepening the 2s10s curve by 8bp and raising the discount rate.",
+    }
+    members = [
+        {"series_id": "DFII5", "value": 2.5, "move_bp": 11.0, "z_score": 2.47, "tier": "HIGH"},
+        {"series_id": "T10Y2Y", "value": 0.39, "move_bp": -8.0, "z_score": -2.46, "tier": "HIGH"},
+        {"series_id": "T5YIFR", "value": 2.3, "move_bp": -3.0, "z_score": -1.19, "tier": "WEAK"},
+    ]
+    with pytest.raises(InterpretationValidationError, match="numbers don't match"):
+        validate_interpretation(bad, expected_channel="discount_rate", members=members)
+
+
+def test_transmission_wrong_direction_word_narrowing_for_positive_move_is_rejected():
+    """Second real reported case (same ticket): "narrowing the 2s10s
+    curve by 5bp" for a real T10Y2Y move of +5.0 (0.26 -> 0.31, a
+    STEEPENING) - the opposite-sign bug in the other direction."""
+    bad = {
+        **_VALID,
+        "transmission": "The 5-year forward inflation compensation fell 3bp, narrowing the 2s10s curve by 5bp and lowering the real discount rate.",
+    }
+    members = [
+        {"series_id": "T10Y2Y", "value": 0.31, "move_bp": 5.0, "z_score": 1.54, "tier": "WEAK"},
+        {"series_id": "T5YIFR", "value": 2.33, "move_bp": -3.0, "z_score": -1.21, "tier": "WEAK"},
+    ]
+    with pytest.raises(InterpretationValidationError, match="numbers don't match"):
+        validate_interpretation(bad, expected_channel="discount_rate", members=members)
+
+
+def test_transmission_correct_direction_per_member_on_multimember_event_passes():
+    """Same event shape as the two rejected tests above, but with the
+    real, correct direction words for each member - must pass. Confirms
+    the per-number check doesn't just reject everything multi-member,
+    only genuinely wrong pairings."""
+    ok = {
+        **_VALID,
+        "transmission": "Real yields rose 11bp at the 5-year point, flattening the 2s10s curve by 8bp and raising the discount rate.",
+    }
+    members = [
+        {"series_id": "DFII5", "value": 2.5, "move_bp": 11.0, "z_score": 2.47, "tier": "HIGH"},
+        {"series_id": "T10Y2Y", "value": 0.39, "move_bp": -8.0, "z_score": -2.46, "tier": "HIGH"},
+        {"series_id": "T5YIFR", "value": 2.3, "move_bp": -3.0, "z_score": -1.19, "tier": "WEAK"},
+    ]
+    result = validate_interpretation(ok, expected_channel="discount_rate", members=members)
+    assert result == ok
+
+
 def test_missing_required_field_raises():
     bad = dict(_VALID)
     del bad["assets"]
@@ -1669,6 +1726,12 @@ def test_run_macro_signal_pipeline_standard_series_event_carries_prior_and_curre
     reason = stored_event["classification_reason"]["T10Y2Y"]
     assert reason.startswith("1-day move of 5bp cleared the 4bp WEAK floor (z = ")
     assert reason.endswith(").")
+    # Real ask (frontend follow-up, 2026-09-25): series_tiers must
+    # reflect this series' OWN tier (WEAK here), not get silently
+    # dropped or defaulted - this is the field GET /results/summary now
+    # counts observations.* from, instead of the event's rolled-up
+    # signal_detection.
+    assert stored_event["series_tiers"]["T10Y2Y"] == "weak_signal"
 
 
 def test_run_macro_signal_pipeline_fedtarmd_event_carries_classification_basis_and_exact_move_bp():
@@ -1738,6 +1801,7 @@ def test_run_macro_signal_pipeline_fedtarmd_event_carries_classification_basis_a
     assert stored_event["classification_reason"]["FEDTARMD"] == (
         "The SEP median moved 50bp, above the 25bp HIGH threshold (no z-score check)."
     )
+    assert stored_event["series_tiers"]["FEDTARMD"] == "signal"
 
 
 def test_run_macro_signal_pipeline_dff_past_calendar_horizon_is_skipped_not_guessed():

@@ -421,20 +421,49 @@ _SUMMARY_WINDOW_TO = "2099-01-31"
 _SUMMARY_WINDOW_DATE = datetime(2099, 1, 15, tzinfo=timezone.utc)
 
 
-def test_summary_observations_expands_multi_member_events():
-    """Real ask: observations.* is "one per series per date", not one per
-    row - an interpreted event with 2 member_series must contribute 2 to
-    its tier bucket, not 1."""
+def test_summary_observations_counts_each_series_by_its_own_tier():
+    """Real ask, and a real reported bug fix (frontend follow-up,
+    2026-09-25): observations.* must count each series by ITS OWN tier
+    (metadata.series_tiers), not the event's rolled-up signal_detection
+    applied to every member. Confirmed live: the 2026-08-28
+    discount_rate event was signal_detection='signal' (DFII5/T10Y2Y are
+    HIGH) but DFII10/T5YIFR are WEAK per their own classification_reason
+    - counting them as "high" contradicted that sentence. This test
+    locks in the fix with the same real shape: 2 HIGH + 2 WEAK members
+    in one row must land as 2/2, not 4/0."""
     _insert_macro_row(
         source_id="TESTFIXTURE-18-2099-01-15", published=_SUMMARY_WINDOW_DATE,
+        metadata={
+            "member_series": ["DFII5", "DFII10", "T10Y2Y", "T5YIFR"],
+            "series_tiers": {"DFII5": "signal", "T10Y2Y": "signal", "DFII10": "weak_signal", "T5YIFR": "weak_signal"},
+            "transmission": "x", "suppressed_by": None,
+        },
+        signal_detection="signal",  # the event's own rolled-up tier - deliberately NOT what observations.* should use
+    )
+    summary = get_results_summary(
+        source_type="macro_signal", published_from=_SUMMARY_WINDOW_FROM, published_to=_SUMMARY_WINDOW_TO,
+    )
+    assert summary["observations"]["high"] == 2
+    assert summary["observations"]["weak"] == 2
+    assert summary["observations"]["total"] == 4
+
+
+def test_summary_observations_falls_back_to_row_level_tier_when_series_tiers_missing():
+    """An interpreted event inserted before the series_tiers fix (or any
+    row that genuinely has none) must still be counted, not silently
+    dropped - falls back to the row's own signal_detection applied to
+    the whole row, same as the old (less precise) behavior, until it's
+    re-interpreted."""
+    _insert_macro_row(
+        source_id="TESTFIXTURE-18-2099-01-20", published=_SUMMARY_WINDOW_DATE,
         metadata={"member_series": ["T10Y2Y", "T5YIFR"], "transmission": "x", "suppressed_by": None},
         signal_detection="signal",
     )
     summary = get_results_summary(
         source_type="macro_signal", published_from=_SUMMARY_WINDOW_FROM, published_to=_SUMMARY_WINDOW_TO,
     )
-    assert summary["observations"]["high"] == 2
-    assert summary["observations"]["total"] == 2
+    assert summary["observations"]["high"] == 1  # one row, no series_tiers -> counted once, not expanded
+    assert summary["observations"]["total"] == 1
 
 
 def test_summary_observations_counts_audit_rows_as_one_series_each():
