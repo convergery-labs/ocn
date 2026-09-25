@@ -575,6 +575,7 @@ async def run_macro_signal_pipeline(job_id: int, from_date: str, to_date: str) -
                     "target_year": m.target_year, "prior_value": m.prior_value,
                     "z_score": m.z_score, "tier": m.tier.value,
                     "classification_basis": m.reason,
+                    "classification_reason": m.plain_reason,
                 }
                 for m in event.members
             ],
@@ -653,6 +654,22 @@ async def run_macro_signal_pipeline(job_id: int, from_date: str, to_date: str) -
             # at TIER time for every series, just never persisted before.
             "classification_basis": {
                 m["series_id"]: m["classification_basis"] for m in event_payload["members"]
+            },
+            # Real ask (frontend ticket, 2026-09-25): classification_basis
+            # (above) is a machine-readable tag, not something the
+            # frontend can show verbatim in "Why did AlphaStreet flag
+            # it?" without parsing it. classification_reason is a real
+            # plain-English sentence per series, written inline by the
+            # exact rule branch that fired (TierResult.plain_reason - see
+            # macro_signal_thresholds.py's own rule functions), always
+            # naming the tier, the real threshold, and the z-score (or
+            # "no z-score check" when the rule has none) - never derived
+            # by parsing classification_basis, so it can't drift out of
+            # sync with the logic that actually ran. classification_basis
+            # itself is kept as-is for debugging, per explicit request.
+            "classification_reason": {
+                m["series_id"]: m["classification_reason"]
+                for m in event_payload["members"] if m.get("classification_reason") is not None
             },
             # Deduplicated arrays, not a per-series map - the VALUE (which
             # source/confidence) is what matters here, and every member of

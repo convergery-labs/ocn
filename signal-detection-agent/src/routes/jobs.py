@@ -6,9 +6,10 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from adapters.news_client import fetch_macro_series_total
 from auth import require_auth
 from controllers.run import generate_korea_signal_summary_for_date
-from models.jobs import get_job, list_all_results, list_jobs, list_results, list_taiwan_periods
+from models.jobs import get_job, get_results_summary, list_all_results, list_jobs, list_results, list_taiwan_periods
 
 router = APIRouter()
 
@@ -77,6 +78,35 @@ async def get_taiwan_periods(
     period_gregorian populated today.
     """
     return {"periods": list_taiwan_periods(source_category=source_category)}
+
+
+@router.get("/results/summary")
+async def get_results_summary_route(
+    source_type: str = Query(..., description="Required. e.g. 'macro_signal' - counted over exactly this source_type's rows"),
+    published_from: str | None = Query(default=None, description="Filter to rows with published >= this date (YYYY-MM-DD), inclusive - same field as /results' own published_from"),
+    published_to: str | None = Query(default=None, description="Filter to rows with published <= this date (YYYY-MM-DD), inclusive - same field as /results' own published_to"),
+    caller: dict[str, Any] = Depends(require_auth),
+) -> dict[str, Any]:
+    """Real ask (frontend ticket, 2026-09-25): counts for a date window,
+    so the frontend doesn't have to download every audit row just to
+    count them. Guaranteed to match /results for the same filters -
+    see get_results_summary's own docstring for the exact counting
+    rules (observations are per-series, expanded from member_series on
+    interpreted events; events are per-row, not expanded).
+
+    series_total is fetched from news-retrieval's /macro/series (the
+    real tracked-series-universe count) - best-effort, None if
+    news-retrieval is unreachable, since a missing series_total
+    shouldn't turn an otherwise-good summary into a 500. Only
+    meaningful for source_type='macro_signal' today (the only
+    source_type with a real "total tracked series" concept) - None for
+    every other source_type.
+    """
+    summary = get_results_summary(
+        source_type=source_type, published_from=published_from, published_to=published_to,
+    )
+    summary["series_total"] = await fetch_macro_series_total() if source_type == "macro_signal" else None
+    return summary
 
 
 @router.get("/jobs")

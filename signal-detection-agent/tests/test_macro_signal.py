@@ -292,6 +292,114 @@ def test_every_registered_series_handles_missing_data_gracefully():
         result = rule.evaluate(SeriesMove(series_id))
         assert result.tier == Tier.NOISE, f"{series_id} should be NOISE on empty data, got {result.tier}"
 
+
+# ============================================================================
+# plain_reason (real ask: frontend ticket, 2026-09-25 - classification_reason)
+# ============================================================================
+# Cross-checks the exact worked examples the frontend gave in their own
+# message, so a real regression here (a rule's sentence silently drifting
+# from what actually fired) is caught immediately, not just "some sentence
+# exists".
+
+def test_plain_reason_dfii10_high_names_tier_and_threshold():
+    r = THRESHOLDS["DFII10"].evaluate(SeriesMove("DFII10", d1d_bp=13.0, z=2.61))
+    assert r.tier == Tier.HIGH
+    assert r.plain_reason == "1-day move of 13bp cleared the 10bp HIGH floor (z = +2.61)."
+
+
+def test_plain_reason_t10y2y_weak_names_tier_and_threshold():
+    r = THRESHOLDS["T10Y2Y"].evaluate(SeriesMove("T10Y2Y", d1d_bp=5.0, z=1.54, sign_flip=False))
+    assert r.tier == Tier.WEAK
+    assert r.plain_reason == "1-day move of 5bp cleared the 4bp WEAK floor (z = +1.54)."
+
+
+def test_plain_reason_t10y3m_high_names_tier_and_threshold():
+    r = THRESHOLDS["T10Y3M"].evaluate(SeriesMove("T10Y3M", d1d_bp=12.0, z=2.51, sign_flip=False))
+    assert r.tier == Tier.HIGH
+    assert r.plain_reason == "1-day move of 12bp cleared the 10bp HIGH floor (z = +2.51)."
+
+
+def test_plain_reason_baa10y_weak_band_names_the_band_generically():
+    r = THRESHOLDS["BAA10Y"].evaluate(SeriesMove("BAA10Y", d1d_bp=6.0, z=-1.67))
+    assert r.tier == Tier.WEAK
+    assert r.plain_reason == "Move fell in this series' WEAK band (z = -1.67)."
+
+
+def test_plain_reason_dff_weak_drift_says_no_zscore_check():
+    r = THRESHOLDS["DFF"].evaluate(SeriesMove("DFF", is_inter_meeting_date=False, d1d_bp=25.0, z=0.1))
+    assert r.tier == Tier.WEAK
+    assert r.plain_reason == "1-day move of 25bp was within the 2-27bp WEAK range (no z-score check)."
+
+
+def test_plain_reason_dff_inter_meeting_names_no_gate_explicitly():
+    r = THRESHOLDS["DFF"].evaluate(SeriesMove("DFF", is_inter_meeting_date=True, d1d_bp=0.0, z=0.0))
+    assert r.tier == Tier.HIGH
+    assert "inter-meeting move" in r.plain_reason.lower()
+    assert "no size or z-score check" in r.plain_reason.lower()
+
+
+def test_plain_reason_t10y2y_sign_flip_names_it_explicitly():
+    """Real ask: sign flips must say so explicitly, e.g. "The spread
+    crossed zero (curve un-inverted)..." - distinct wording from the
+    plain bp-threshold branch, even though both are the HIGH gate."""
+    r = THRESHOLDS["T10Y2Y"].evaluate(SeriesMove("T10Y2Y", d1d_bp=1.0, z=2.1, sign_flip=True))
+    assert r.tier == Tier.HIGH
+    assert "crossed zero" in r.plain_reason.lower()
+    assert "curve un-inverted" in r.plain_reason.lower()
+    assert "z = +2.10" in r.plain_reason
+
+
+def test_plain_reason_fedtarmd_high_matches_ticket_example():
+    """Exact worked example from the frontend's own message: "The 2027
+    SEP median moved 50bp, above the 25bp HIGH threshold (no z-score
+    check).\""""
+    r = THRESHOLDS["FEDTARMD"].evaluate(SeriesMove("FEDTARMD", sep_median_shift_bp=50.0, z=None))
+    assert r.tier == Tier.HIGH
+    assert r.plain_reason == "The SEP median moved 50bp, above the 25bp HIGH threshold (no z-score check)."
+
+
+def test_plain_reason_is_none_on_noise_and_missing_data():
+    """Real ask: "If an event doesn't have the field, the page keeps
+    today's z-score sentence" - implies plain_reason is genuinely absent
+    (None), not an empty string, for NOISE/missing-data results, which
+    never reach INTERPRET anyway (see macro_signal_collapse.py) but
+    should still be well-formed if ever inspected directly."""
+    r = THRESHOLDS["DFII10"].evaluate(SeriesMove("DFII10"))
+    assert r.tier == Tier.NOISE
+    assert r.plain_reason is None
+
+    r2 = THRESHOLDS["DFII10"].evaluate(SeriesMove("DFII10", d1d_bp=1.0, z=0.1))
+    assert r2.tier == Tier.NOISE
+    assert r2.plain_reason is None
+
+
+def test_plain_reason_every_high_or_weak_result_has_one():
+    """Every registered series' rule must produce a plain_reason on both
+    its HIGH and WEAK branches - a systematic check across all 46
+    series, not just the ones spot-checked above, so a future rule
+    addition that forgets plain_reason fails loudly here instead of
+    silently shipping a null classification_reason."""
+    import inspect
+    for series_id, rule in THRESHOLDS.items():
+        # A move large enough to plausibly clear most series' HIGH floors,
+        # with a big z-score - not guaranteed to hit HIGH for every shape
+        # (e.g. VIXCLS needs specific signed d1d), so this only asserts
+        # when a HIGH/WEAK result actually comes back, not that one always
+        # does for this synthetic input.
+        move = SeriesMove(
+            series_id, d1d_bp=500.0, d1w_bp=500.0, d4w_bp=500.0, d4w_pct=50.0,
+            d3m_pct=50.0, dm_pp=50.0, dm_vs_trailing_pp=500.0, dq_pp=50.0,
+            level=500.0, prior_level=-500.0, z=10.0, net_revision_k=500.0,
+            sign_flip=True, is_inter_meeting_date=False, sep_median_shift_bp=500.0,
+            ratio=10.0, ratio_d1d_pct=500.0,
+        )
+        result = rule.evaluate(move)
+        if result.tier in (Tier.HIGH, Tier.WEAK):
+            assert result.plain_reason is not None, f"{series_id} tiered {result.tier} with no plain_reason"
+            assert result.tier.value in result.plain_reason.upper(), (
+                f"{series_id}'s plain_reason doesn't literally name its tier ({result.tier.value}): {result.plain_reason!r}"
+            )
+
 # ============================================================================
 # SUPPRESS (mechanisms A & B)  (from test_macro_signal_suppress.py)
 # ============================================================================
@@ -1554,6 +1662,13 @@ def test_run_macro_signal_pipeline_standard_series_event_carries_prior_and_curre
     assert stored_event["prior_values"]["T10Y2Y"] == "0.26"
     assert isinstance(stored_event["current_values"]["T10Y2Y"], str)
     assert isinstance(stored_event["prior_values"]["T10Y2Y"], str)
+    # Real ask (frontend follow-up, 2026-09-25): classification_reason
+    # reaches stored metadata for a STANDARD series too, not just
+    # FEDTARMD - "1-day move of 5bp cleared the 4bp WEAK floor" matches
+    # the ticket's own T10Y2Y worked example exactly.
+    reason = stored_event["classification_reason"]["T10Y2Y"]
+    assert reason.startswith("1-day move of 5bp cleared the 4bp WEAK floor (z = ")
+    assert reason.endswith(").")
 
 
 def test_run_macro_signal_pipeline_fedtarmd_event_carries_classification_basis_and_exact_move_bp():
@@ -1615,6 +1730,14 @@ def test_run_macro_signal_pipeline_fedtarmd_event_carries_classification_basis_a
     assert stored_event["prior_values"]["FEDTARMD"] == "3.6"
     assert isinstance(stored_event["current_values"]["FEDTARMD"], str)
     assert isinstance(stored_event["prior_values"]["FEDTARMD"], str)
+    # Real ask (frontend follow-up, 2026-09-25): classification_reason -
+    # a real plain-English sentence, not the machine-readable
+    # classification_basis tag - matches the ticket's own worked example
+    # exactly: "The 2027 SEP median moved 50bp, above the 25bp HIGH
+    # threshold (no z-score check)."
+    assert stored_event["classification_reason"]["FEDTARMD"] == (
+        "The SEP median moved 50bp, above the 25bp HIGH threshold (no z-score check)."
+    )
 
 
 def test_run_macro_signal_pipeline_dff_past_calendar_horizon_is_skipped_not_guessed():
@@ -1971,3 +2094,80 @@ def test_post_macro_run_defaults_to_yesterday_when_today_false():
     expected_yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
     assert captured["from_date"] == expected_yesterday
     assert captured["to_date"] == expected_yesterday
+
+
+# ============================================================================
+# GET /results/summary route wiring (real ask: frontend ticket, 2026-09-25)
+# ============================================================================
+
+def test_get_results_summary_requires_auth():
+    from fastapi.testclient import TestClient
+    import app as app_module
+
+    client = TestClient(app_module.create_app())
+    resp = client.get("/results/summary", params={"source_type": "macro_signal"})
+    assert resp.status_code == 401
+
+
+def test_get_results_summary_requires_source_type():
+    from fastapi.testclient import TestClient
+    import app as app_module
+
+    client = TestClient(app_module.create_app())
+    resp = client.get("/results/summary", headers={"x-ocn-caller": _admin_caller_header()})
+    assert resp.status_code == 422  # missing required query param
+
+
+def test_get_results_summary_fetches_series_total_for_macro_signal(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    fake_summary = {
+        "window": {"from": "2026-08-26", "to": "2026-09-25"},
+        "observations": {"total": 403, "high": 11, "weak": 60, "noise": 332, "suppressed": 9},
+        "events": {"high": 5, "weak": 24},
+        "series_reporting": 28,
+        "last_run_at": "2026-09-25T12:44:00Z",
+    }
+    with patch("routes.jobs.get_results_summary", return_value=fake_summary), \
+         patch("routes.jobs.fetch_macro_series_total", new=AsyncMock(return_value=46)):
+        import app as app_module
+        client = TestClient(app_module.create_app())
+        resp = client.get(
+            "/results/summary",
+            params={"source_type": "macro_signal", "published_from": "2026-08-26", "published_to": "2026-09-25"},
+            headers={"x-ocn-caller": _admin_caller_header()},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["series_total"] == 46
+    assert body["observations"]["noise"] == 332  # passes the model layer's numbers through unchanged
+
+
+def test_get_results_summary_series_total_none_for_non_macro_source_type():
+    """series_total is only a meaningful concept for macro_signal (the
+    only source_type with a real "total tracked series" universe) -
+    must be None for every other source_type, and must NOT call
+    news-retrieval at all for those (no wasted HTTP round-trip)."""
+    from fastapi.testclient import TestClient
+
+    fake_summary = {
+        "window": {"from": None, "to": None},
+        "observations": {"total": 0, "high": 0, "weak": 0, "noise": 0, "suppressed": 0},
+        "events": {"high": 0, "weak": 0},
+        "series_reporting": 0,
+        "last_run_at": None,
+    }
+    with patch("routes.jobs.get_results_summary", return_value=fake_summary), \
+         patch("routes.jobs.fetch_macro_series_total", new=AsyncMock(return_value=46)) as mock_fetch:
+        import app as app_module
+        client = TestClient(app_module.create_app())
+        resp = client.get(
+            "/results/summary",
+            params={"source_type": "geopolitical_signal"},
+            headers={"x-ocn-caller": _admin_caller_header()},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["series_total"] is None
+    mock_fetch.assert_not_called()

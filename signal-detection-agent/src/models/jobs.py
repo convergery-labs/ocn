@@ -355,7 +355,19 @@ def insert_macro_signal_event(
     already computed at TIER time for every series, just never
     persisted before. Answers "what rule/metric made this HIGH" for a
     series whose z_score is null by design (FEDTARMD's no-z-gate
-    exception being the one live case today).
+    exception being the one live case today). Kept as-is (a debugging
+    tag), per explicit request, alongside metadata.classification_reason
+    below - the two are not redundant.
+
+    metadata.classification_reason is a per-series map of TierResult.
+    plain_reason - a real plain-English sentence written inline by the
+    exact rule branch that fired (see macro_signal_thresholds.py),
+    always naming the tier and the real threshold cleared, and the
+    z-score when the rule uses one ("no z-score check" when it doesn't,
+    e.g. FEDTARMD/DFF's inter-meeting path). This is what the frontend
+    shows verbatim in "Why did AlphaStreet flag it?" - never derived by
+    parsing classification_basis, so it can't drift from the logic that
+    actually ran.
     """
     if interpretation is not None:
         source_id = f"{event['release_id']}-{event.get('channel')}-{event['knowledge_time']}"
@@ -376,6 +388,7 @@ def insert_macro_signal_event(
             "current_values": event.get("current_values"),
             "prior_values": event.get("prior_values"),
             "classification_basis": event.get("classification_basis"),
+            "classification_reason": event.get("classification_reason"),
             "sources": event.get("sources"),
             "knowledge_time_confidences": event.get("knowledge_time_confidences"),
             "suppressed_by": None,
@@ -1391,6 +1404,146 @@ def list_all_results(
             "id": last_row["id"],
         })
     return {"results": results, "next_cursor": next_cursor}
+
+
+def get_results_summary(
+    source_type: str, published_from: str | None = None, published_to: str | None = None,
+) -> dict[str, Any]:
+    """Real ask (frontend ticket, 2026-09-25): count HIGH/WEAK/NOISE/
+    suppressed observations and events for a date window, without the
+    frontend downloading every audit row just to count them.
+
+    Must match list_all_results EXACTLY for the same filters, per the
+    ticket's own requirement - so this reuses published (not
+    _EFFECTIVE_DATE_EXPR) as the window field, same as
+    published_from/published_to on /results, and the same published >=
+    X / published < (Y + 1 day) inclusive-date-range predicate.
+
+    "observations": one row PER SERIES per date, counted by the row's
+    OWN signal_detection - CONFIRMED LIVE this needs real unnesting, not
+    a plain row count: an interpreted event's metadata.member_series can
+    hold 2+ series (e.g. a collapsed discount_rate event with T10Y2Y and
+    T5YIFR in one row), and that whole row's signal_detection reflects
+    the event's rolled-up MAX tier across all members, not each
+    member's own (no per-member tier is stored today - see project plan
+    history for that scoping decision). An audit row's metadata.series_id
+    is always exactly one series, so it always contributes 1.
+    jsonb_array_length(member_series) - for the interpreted-event shape
+    - or 1 - for the audit-row shape, via jsonb_typeof to tell them apart
+    - summed per signal_detection bucket, so a 2-member "signal" event
+    contributes 2 to observations.high, not 1.
+
+    "suppressed": rows with metadata.suppressed_by set - these ALSO
+    count toward their own tier bucket above (an audit row can be both
+    HIGH-tier AND suppressed, e.g. a collinear duplicate) - the ticket's
+    own wording ("they also count toward their own tier") is explicit
+    that this is not a mutually-exclusive bucket.
+
+    "events": macro_interpreted_only=true rows (real surfaced events,
+    excluding suppressed/audit rows) - a plain row count, NOT expanded
+    by member_series, since one collapsed event is one event regardless
+    of how many series fed into it.
+
+    "series_reporting": distinct series_ids with ANY observation in the
+    window - unions member_series elements (interpreted rows) with
+    series_id (audit rows).
+
+    "series_total": macro_signal_fetch.MACRO_SERIES_UNIVERSE's own count
+    (news-retrieval), not queried here - the caller (routes/jobs.py)
+    fills this in, since this module has no news-retrieval access.
+
+    "last_run_at": latest completed agent_jobs.completed_at for
+    domain='macro_signal' - NOT scoped to the date window (the window
+    is about which OBSERVATIONS to count, not which job ran them; a run
+    can classify events spanning several days in one job).
+    """
+    date_conditions = ["source_type = %s"]
+    date_params: list[Any] = [source_type]
+    if published_from:
+        date_conditions.append("published >= %s")
+        date_params.append(published_from)
+    if published_to:
+        date_conditions.append("published < (%s::date + interval '1 day')")
+        date_params.append(published_to)
+    date_where = " AND ".join(date_conditions)
+
+    with get_db() as conn:
+        obs_rows = conn.execute(
+            f"""
+            SELECT
+                signal_detection,
+                metadata->>'suppressed_by' IS NOT NULL AS is_suppressed,
+                CASE
+                    WHEN jsonb_typeof(metadata->'member_series') = 'array'
+                        THEN jsonb_array_length(metadata->'member_series')
+                    ELSE 1
+                END AS series_count
+            FROM agent_classifications
+            WHERE {date_where}
+            """,
+            date_params,
+        ).fetchall()
+
+        events_rows = conn.execute(
+            f"""
+            SELECT signal_detection, COUNT(*) AS c
+            FROM agent_classifications
+            WHERE {date_where}
+              AND metadata->>'suppressed_by' IS NULL AND signal_detection != 'noise'
+            GROUP BY signal_detection
+            """,
+            date_params,
+        ).fetchall()
+
+        series_row = conn.execute(
+            f"""
+            SELECT COUNT(DISTINCT series_id) AS c FROM (
+                SELECT jsonb_array_elements_text(metadata->'member_series') AS series_id
+                FROM agent_classifications
+                WHERE {date_where} AND jsonb_typeof(metadata->'member_series') = 'array'
+                UNION
+                SELECT metadata->>'series_id' AS series_id
+                FROM agent_classifications
+                WHERE {date_where} AND metadata->>'series_id' IS NOT NULL
+            ) all_series
+            """,
+            date_params + date_params,
+        ).fetchone()
+
+        last_run_row = conn.execute(
+            """
+            SELECT completed_at FROM agent_jobs
+            WHERE domain = %s AND status = 'completed'
+            ORDER BY completed_at DESC LIMIT 1
+            """,
+            ("macro_signal",),
+        ).fetchone()
+
+    observations = {"total": 0, "high": 0, "weak": 0, "noise": 0, "suppressed": 0}
+    _tier_key = {"signal": "high", "weak_signal": "weak", "noise": "noise"}
+    for row in obs_rows:
+        key = _tier_key.get(row["signal_detection"])
+        if key is None:
+            continue
+        n = row["series_count"] or 0
+        observations[key] += n
+        observations["total"] += n
+        if row["is_suppressed"]:
+            observations["suppressed"] += n
+
+    events = {"high": 0, "weak": 0}
+    for row in events_rows:
+        key = _tier_key.get(row["signal_detection"])
+        if key in ("high", "weak"):
+            events[key] = row["c"]
+
+    return {
+        "window": {"from": published_from, "to": published_to},
+        "observations": observations,
+        "events": events,
+        "series_reporting": series_row["c"] if series_row else 0,
+        "last_run_at": last_run_row["completed_at"].isoformat() if last_run_row and last_run_row["completed_at"] else None,
+    }
 
 
 def list_results(

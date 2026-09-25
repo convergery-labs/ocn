@@ -68,7 +68,8 @@ class TierResult:
     series_id: str
     tier: Tier
     z_score: Optional[float]
-    reason: str  # self-describing, e.g. "abs_d1d_12bp_ge_floor_and_z_2.30"
+    reason: str  # self-describing, e.g. "abs_d1d_12bp_ge_floor_and_z_2.30" - kept as-is for debugging (real ask, frontend ticket 2026-09-25)
+    plain_reason: Optional[str] = None  # human-readable sentence, e.g. "1-day move of 13bp cleared the 10bp HIGH floor (z = +2.61)." - written inline in each rule's own branch, NOT derived by parsing `reason`, so it always matches the exact logic that ran. None on a NOISE/missing-data result (nothing worth explaining to a reader).
 
 
 EvalFn = Callable[[SeriesMove], TierResult]
@@ -84,9 +85,15 @@ def _abs_d1d_rule(high_bp: float, weak_bp: float) -> EvalFn:
             return TierResult(m.series_id, Tier.NOISE, m.z, "missing_data")
         a = abs(m.d1d_bp)
         if a >= high_bp and abs(m.z) >= 2.0:
-            return TierResult(m.series_id, Tier.HIGH, m.z, f"abs_d1d_{a:.1f}bp_ge_{high_bp}_z_{m.z:.2f}")
+            return TierResult(
+                m.series_id, Tier.HIGH, m.z, f"abs_d1d_{a:.1f}bp_ge_{high_bp}_z_{m.z:.2f}",
+                plain_reason=f"1-day move of {a:.0f}bp cleared the {high_bp:.0f}bp HIGH floor (z = {m.z:+.2f}).",
+            )
         if a >= weak_bp and abs(m.z) >= 1.0:
-            return TierResult(m.series_id, Tier.WEAK, m.z, f"abs_d1d_{a:.1f}bp_ge_{weak_bp}_z_{m.z:.2f}")
+            return TierResult(
+                m.series_id, Tier.WEAK, m.z, f"abs_d1d_{a:.1f}bp_ge_{weak_bp}_z_{m.z:.2f}",
+                plain_reason=f"1-day move of {a:.0f}bp cleared the {weak_bp:.0f}bp WEAK floor (z = {m.z:+.2f}).",
+            )
         return TierResult(m.series_id, Tier.NOISE, m.z, f"abs_d1d_{a:.1f}bp_below_floor")
     return _eval
 
@@ -100,9 +107,19 @@ def _abs_d1d_or_sign_flip_rule(high_bp: float, weak_bp: float) -> EvalFn:
         high_gate = a >= high_bp or m.sign_flip
         weak_gate = a >= weak_bp
         if high_gate and abs(m.z) >= 2.0:
-            return TierResult(m.series_id, Tier.HIGH, m.z, f"abs_d1d_{a:.1f}bp_or_signflip({m.sign_flip})_z_{m.z:.2f}")
+            if m.sign_flip:
+                plain = f"The spread crossed zero (curve un-inverted), which counts as HIGH on its own (z = {m.z:+.2f})."
+            else:
+                plain = f"1-day move of {a:.0f}bp cleared the {high_bp:.0f}bp HIGH floor (z = {m.z:+.2f})."
+            return TierResult(
+                m.series_id, Tier.HIGH, m.z, f"abs_d1d_{a:.1f}bp_or_signflip({m.sign_flip})_z_{m.z:.2f}",
+                plain_reason=plain,
+            )
         if weak_gate and abs(m.z) >= 1.0:
-            return TierResult(m.series_id, Tier.WEAK, m.z, f"abs_d1d_{a:.1f}bp_weak_z_{m.z:.2f}")
+            return TierResult(
+                m.series_id, Tier.WEAK, m.z, f"abs_d1d_{a:.1f}bp_weak_z_{m.z:.2f}",
+                plain_reason=f"1-day move of {a:.0f}bp cleared the {weak_bp:.0f}bp WEAK floor (z = {m.z:+.2f}).",
+            )
         return TierResult(m.series_id, Tier.NOISE, m.z, f"abs_d1d_{a:.1f}bp_below_floor")
     return _eval
 
@@ -122,9 +139,21 @@ def _d1d_or_d1w_or_level_rule(
         high_gate = a >= d1d_high or w >= d1w_high or lvl >= level_high
         weak_gate = (d1d_weak_lo <= a < d1d_weak_hi) or (level_weak_lo <= lvl < level_weak_hi)
         if high_gate and abs(m.z) >= 2.0:
-            return TierResult(m.series_id, Tier.HIGH, m.z, f"d1d_{a:.1f}bp_or_d1w_{w:.1f}bp_or_level_{lvl:.2f}_z_{m.z:.2f}")
+            if a >= d1d_high:
+                plain = f"1-day move of {a:.0f}bp cleared the {d1d_high:.0f}bp HIGH floor (z = {m.z:+.2f})."
+            elif w >= d1w_high:
+                plain = f"1-week move of {w:.0f}bp cleared the {d1w_high:.0f}bp HIGH floor (z = {m.z:+.2f})."
+            else:
+                plain = f"Level of {lvl:.2f} cleared the {level_high:.2f} HIGH floor (z = {m.z:+.2f})."
+            return TierResult(
+                m.series_id, Tier.HIGH, m.z, f"d1d_{a:.1f}bp_or_d1w_{w:.1f}bp_or_level_{lvl:.2f}_z_{m.z:.2f}",
+                plain_reason=plain,
+            )
         if weak_gate and abs(m.z) >= 1.0:
-            return TierResult(m.series_id, Tier.WEAK, m.z, f"weak_band_z_{m.z:.2f}")
+            return TierResult(
+                m.series_id, Tier.WEAK, m.z, f"weak_band_z_{m.z:.2f}",
+                plain_reason=f"Move fell in this series' WEAK band (z = {m.z:+.2f}).",
+            )
         return TierResult(m.series_id, Tier.NOISE, m.z, "below_floor")
     return _eval
 
@@ -142,9 +171,19 @@ def _level_cross_or_d4w_rule(cross_level: float, d4w_high: float, d4w_weak_lo: f
             m.level is not None and level_weak_lo <= m.level < level_weak_hi
         )
         if high_gate and abs(m.z) >= 2.0:
-            return TierResult(m.series_id, Tier.HIGH, m.z, f"level_cross({crossed})_or_d4w_{d4w:.3f}_z_{m.z:.2f}")
+            if crossed:
+                plain = f"Level crossed above {cross_level:.2f}, which counts as HIGH on its own (z = {m.z:+.2f})."
+            else:
+                plain = f"4-week move of {d4w:.0f}bp cleared the {d4w_high:.0f}bp HIGH floor (z = {m.z:+.2f})."
+            return TierResult(
+                m.series_id, Tier.HIGH, m.z, f"level_cross({crossed})_or_d4w_{d4w:.3f}_z_{m.z:.2f}",
+                plain_reason=plain,
+            )
         if weak_gate and abs(m.z) >= 1.0:
-            return TierResult(m.series_id, Tier.WEAK, m.z, f"weak_band_z_{m.z:.2f}")
+            return TierResult(
+                m.series_id, Tier.WEAK, m.z, f"weak_band_z_{m.z:.2f}",
+                plain_reason=f"Move fell in this series' WEAK band (z = {m.z:+.2f}).",
+            )
         return TierResult(m.series_id, Tier.NOISE, m.z, "below_floor")
     return _eval
 
@@ -159,9 +198,19 @@ def _level_or_d4w_rule(level_high: float, d4w_high: float, level_weak_lo: float,
         high_gate = lvl >= level_high or d4w >= d4w_high
         weak_gate = (level_weak_lo <= lvl < level_weak_hi) or (d4w_weak_lo <= d4w < d4w_weak_hi)
         if high_gate and abs(m.z) >= 2.0:
-            return TierResult(m.series_id, Tier.HIGH, m.z, f"level_{lvl:.3f}_or_d4w_{d4w:.3f}_z_{m.z:.2f}")
+            if lvl >= level_high:
+                plain = f"Level of {lvl:.2f} cleared the {level_high:.2f} HIGH floor (z = {m.z:+.2f})."
+            else:
+                plain = f"4-week move of {d4w:.0f}bp cleared the {d4w_high:.0f}bp HIGH floor (z = {m.z:+.2f})."
+            return TierResult(
+                m.series_id, Tier.HIGH, m.z, f"level_{lvl:.3f}_or_d4w_{d4w:.3f}_z_{m.z:.2f}",
+                plain_reason=plain,
+            )
         if weak_gate and abs(m.z) >= 1.0:
-            return TierResult(m.series_id, Tier.WEAK, m.z, f"weak_band_z_{m.z:.2f}")
+            return TierResult(
+                m.series_id, Tier.WEAK, m.z, f"weak_band_z_{m.z:.2f}",
+                plain_reason=f"Move fell in this series' WEAK band (z = {m.z:+.2f}).",
+            )
         return TierResult(m.series_id, Tier.NOISE, m.z, "below_floor")
     return _eval
 
@@ -176,9 +225,19 @@ def _level_or_dq_rule(level_high: float, dq_high: float, level_weak_lo: float, l
         high_gate = lvl >= level_high or dq >= dq_high
         weak_gate = (level_weak_lo <= lvl < level_weak_hi) or (dq_weak_lo <= dq < dq_weak_hi)
         if high_gate and abs(m.z) >= 2.0:
-            return TierResult(m.series_id, Tier.HIGH, m.z, f"level_{lvl:.2f}_or_dq_{dq:.2f}pp_z_{m.z:.2f}")
+            if lvl >= level_high:
+                plain = f"Level of {lvl:.2f} cleared the {level_high:.2f} HIGH floor (z = {m.z:+.2f})."
+            else:
+                plain = f"Quarter-over-quarter move of {dq:.2f}pp cleared the {dq_high:.2f}pp HIGH floor (z = {m.z:+.2f})."
+            return TierResult(
+                m.series_id, Tier.HIGH, m.z, f"level_{lvl:.2f}_or_dq_{dq:.2f}pp_z_{m.z:.2f}",
+                plain_reason=plain,
+            )
         if weak_gate and abs(m.z) >= 1.0:
-            return TierResult(m.series_id, Tier.WEAK, m.z, f"weak_band_z_{m.z:.2f}")
+            return TierResult(
+                m.series_id, Tier.WEAK, m.z, f"weak_band_z_{m.z:.2f}",
+                plain_reason=f"Move fell in this series' WEAK band (z = {m.z:+.2f}).",
+            )
         return TierResult(m.series_id, Tier.NOISE, m.z, "below_floor")
     return _eval
 
@@ -190,9 +249,15 @@ def _abs_d4w_rule(high: float, weak_lo: float, weak_hi: float, *, unit: str = "$
             return TierResult(m.series_id, Tier.NOISE, m.z, "missing_data")
         a = abs(m.d4w_bp)
         if a >= high and abs(m.z) >= 2.0:
-            return TierResult(m.series_id, Tier.HIGH, m.z, f"abs_d4w_{a:.1f}{unit}_ge_{high}_z_{m.z:.2f}")
+            return TierResult(
+                m.series_id, Tier.HIGH, m.z, f"abs_d4w_{a:.1f}{unit}_ge_{high}_z_{m.z:.2f}",
+                plain_reason=f"4-week move of {a:.0f}{unit} cleared the {high:.0f}{unit} HIGH floor (z = {m.z:+.2f}).",
+            )
         if weak_lo <= a < weak_hi and abs(m.z) >= 1.0:
-            return TierResult(m.series_id, Tier.WEAK, m.z, f"abs_d4w_{a:.1f}{unit}_weak_z_{m.z:.2f}")
+            return TierResult(
+                m.series_id, Tier.WEAK, m.z, f"abs_d4w_{a:.1f}{unit}_weak_z_{m.z:.2f}",
+                plain_reason=f"4-week move of {a:.0f}{unit} fell in this series' WEAK band (z = {m.z:+.2f}).",
+            )
         return TierResult(m.series_id, Tier.NOISE, m.z, f"abs_d4w_{a:.1f}{unit}_below_floor")
     return _eval
 
@@ -208,9 +273,15 @@ def _abs_pct_rule(field_name: str, high: float, weak_lo: float, weak_hi: float) 
             return TierResult(m.series_id, Tier.NOISE, m.z, "missing_data")
         a = abs(val)
         if a >= high and abs(m.z) >= 2.0:
-            return TierResult(m.series_id, Tier.HIGH, m.z, f"abs_{field_name}_{a:.2f}_ge_{high}_z_{m.z:.2f}")
+            return TierResult(
+                m.series_id, Tier.HIGH, m.z, f"abs_{field_name}_{a:.2f}_ge_{high}_z_{m.z:.2f}",
+                plain_reason=f"Move of {a:.2f}% cleared the {high:.2f}% HIGH floor (z = {m.z:+.2f}).",
+            )
         if weak_lo <= a < weak_hi and abs(m.z) >= 1.0:
-            return TierResult(m.series_id, Tier.WEAK, m.z, f"abs_{field_name}_{a:.2f}_weak_z_{m.z:.2f}")
+            return TierResult(
+                m.series_id, Tier.WEAK, m.z, f"abs_{field_name}_{a:.2f}_weak_z_{m.z:.2f}",
+                plain_reason=f"Move of {a:.2f}% fell in this series' WEAK band (z = {m.z:+.2f}).",
+            )
         return TierResult(m.series_id, Tier.NOISE, m.z, f"abs_{field_name}_{a:.2f}_below_floor")
     return _eval
 
@@ -223,9 +294,19 @@ def _dtwexbgs_rule() -> EvalFn:
         d1d = abs(m.d1d_bp) if m.d1d_bp is not None else 0.0  # reused field, holds pct here (native unit)
         d4w = abs(m.d4w_pct) if m.d4w_pct is not None else 0.0
         if (d1d >= 0.75 or d4w >= 2.5) and abs(m.z) >= 2.0:
-            return TierResult(m.series_id, Tier.HIGH, m.z, f"d1d_{d1d:.2f}pct_or_d4w_{d4w:.2f}pct_z_{m.z:.2f}")
+            if d1d >= 0.75:
+                plain = f"1-day move of {d1d:.2f}% cleared the 0.75% HIGH floor (z = {m.z:+.2f})."
+            else:
+                plain = f"4-week move of {d4w:.2f}% cleared the 2.5% HIGH floor (z = {m.z:+.2f})."
+            return TierResult(
+                m.series_id, Tier.HIGH, m.z, f"d1d_{d1d:.2f}pct_or_d4w_{d4w:.2f}pct_z_{m.z:.2f}",
+                plain_reason=plain,
+            )
         if 0.35 <= d1d < 0.75 and abs(m.z) >= 1.0:
-            return TierResult(m.series_id, Tier.WEAK, m.z, f"d1d_{d1d:.2f}pct_weak_z_{m.z:.2f}")
+            return TierResult(
+                m.series_id, Tier.WEAK, m.z, f"d1d_{d1d:.2f}pct_weak_z_{m.z:.2f}",
+                plain_reason=f"1-day move of {d1d:.2f}% fell in this series' WEAK band (z = {m.z:+.2f}).",
+            )
         return TierResult(m.series_id, Tier.NOISE, m.z, "below_floor")
     return _eval
 
@@ -238,9 +319,19 @@ def _payems_rule() -> EvalFn:
         dev = abs(m.dm_vs_trailing_pp)  # holds thousands here, not pp, for this series
         rev = abs(m.net_revision_k) if m.net_revision_k is not None else 0.0
         if (dev >= 347 or rev >= 100) and abs(m.z) >= 2.0:
-            return TierResult(m.series_id, Tier.HIGH, m.z, f"dev_{dev:.0f}k_or_rev_{rev:.0f}k_z_{m.z:.2f}")
+            if dev >= 347:
+                plain = f"Payrolls came in {dev:.0f}k off the trailing 12-month average, above the 347k HIGH floor (z = {m.z:+.2f})."
+            else:
+                plain = f"Prior 2 months revised a net {rev:.0f}k, above the 100k HIGH floor (z = {m.z:+.2f})."
+            return TierResult(
+                m.series_id, Tier.HIGH, m.z, f"dev_{dev:.0f}k_or_rev_{rev:.0f}k_z_{m.z:.2f}",
+                plain_reason=plain,
+            )
         if 50 <= dev < 347 and abs(m.z) >= 1.0:
-            return TierResult(m.series_id, Tier.WEAK, m.z, f"dev_{dev:.0f}k_weak_z_{m.z:.2f}")
+            return TierResult(
+                m.series_id, Tier.WEAK, m.z, f"dev_{dev:.0f}k_weak_z_{m.z:.2f}",
+                plain_reason=f"Payrolls came in {dev:.0f}k off the trailing 12-month average, in this series' WEAK band (z = {m.z:+.2f}).",
+            )
         return TierResult(m.series_id, Tier.NOISE, m.z, "below_floor")
     return _eval
 
@@ -251,9 +342,15 @@ def _unrate_rule() -> EvalFn:
         if m.dm_pp is None or m.z is None:
             return TierResult(m.series_id, Tier.NOISE, m.z, "missing_data")
         if m.dm_pp >= 0.3 and m.z >= 2.0:
-            return TierResult(m.series_id, Tier.HIGH, m.z, f"dm_{m.dm_pp:.2f}pp_ge_0.3_z_{m.z:.2f}")
+            return TierResult(
+                m.series_id, Tier.HIGH, m.z, f"dm_{m.dm_pp:.2f}pp_ge_0.3_z_{m.z:.2f}",
+                plain_reason=f"Month-over-month rise of {m.dm_pp:.2f}pp cleared the 0.30pp HIGH floor (z = {m.z:+.2f}).",
+            )
         if abs(m.dm_pp) >= 0.1 and abs(m.z) >= 1.0:
-            return TierResult(m.series_id, Tier.WEAK, m.z, f"dm_{m.dm_pp:.2f}pp_weak_z_{m.z:.2f}")
+            return TierResult(
+                m.series_id, Tier.WEAK, m.z, f"dm_{m.dm_pp:.2f}pp_weak_z_{m.z:.2f}",
+                plain_reason=f"Month-over-month move of {m.dm_pp:+.2f}pp fell in this series' WEAK band (z = {m.z:+.2f}).",
+            )
         return TierResult(m.series_id, Tier.NOISE, m.z, "below_floor")
     return _eval
 
@@ -264,9 +361,15 @@ def _sahm_rule() -> EvalFn:
         if m.level is None or m.z is None:
             return TierResult(m.series_id, Tier.NOISE, m.z, "missing_data")
         if m.level >= 0.50 and abs(m.z) >= 2.0:
-            return TierResult(m.series_id, Tier.HIGH, m.z, f"level_{m.level:.2f}_ge_0.50_z_{m.z:.2f}")
+            return TierResult(
+                m.series_id, Tier.HIGH, m.z, f"level_{m.level:.2f}_ge_0.50_z_{m.z:.2f}",
+                plain_reason=f"Sahm indicator reached {m.level:.2f}, at or above the 0.50 HIGH recession-trigger level (z = {m.z:+.2f}).",
+            )
         if 0.30 <= m.level < 0.50 and abs(m.z) >= 1.0:
-            return TierResult(m.series_id, Tier.WEAK, m.z, f"level_{m.level:.2f}_weak_z_{m.z:.2f}")
+            return TierResult(
+                m.series_id, Tier.WEAK, m.z, f"level_{m.level:.2f}_weak_z_{m.z:.2f}",
+                plain_reason=f"Sahm indicator reached {m.level:.2f}, in this series' WEAK band (z = {m.z:+.2f}).",
+            )
         return TierResult(m.series_id, Tier.NOISE, m.z, "below_floor")
     return _eval
 
@@ -279,9 +382,19 @@ def _hous_style_rule(high3m: float, high1m: float, weak1m_lo: float, weak1m_hi: 
         d3m = abs(m.d3m_pct) if m.d3m_pct is not None else 0.0
         dm = abs(m.dm_pp) if m.dm_pp is not None else 0.0
         if (d3m >= high3m or dm >= high1m) and abs(m.z) >= 2.0:
-            return TierResult(m.series_id, Tier.HIGH, m.z, f"d3m_{d3m:.2f}pct_or_dm_{dm:.2f}pct_z_{m.z:.2f}")
+            if d3m >= high3m:
+                plain = f"3-month average change of {d3m:.2f}% cleared the {high3m:.2f}% HIGH floor (z = {m.z:+.2f})."
+            else:
+                plain = f"Single-month change of {dm:.2f}% cleared the {high1m:.2f}% HIGH floor (z = {m.z:+.2f})."
+            return TierResult(
+                m.series_id, Tier.HIGH, m.z, f"d3m_{d3m:.2f}pct_or_dm_{dm:.2f}pct_z_{m.z:.2f}",
+                plain_reason=plain,
+            )
         if weak1m_lo <= dm < weak1m_hi and abs(m.z) >= 1.0:
-            return TierResult(m.series_id, Tier.WEAK, m.z, f"dm_{dm:.2f}pct_weak_z_{m.z:.2f}")
+            return TierResult(
+                m.series_id, Tier.WEAK, m.z, f"dm_{dm:.2f}pct_weak_z_{m.z:.2f}",
+                plain_reason=f"Single-month change of {dm:.2f}% fell in this series' WEAK band (z = {m.z:+.2f}).",
+            )
         return TierResult(m.series_id, Tier.NOISE, m.z, "below_floor")
     return _eval
 
@@ -295,9 +408,19 @@ def _csushpinsa_rule() -> EvalFn:
                    and (m.prior_level < 0 <= m.level or m.prior_level > 0 >= m.level))
         dev = abs(m.dm_vs_trailing_pp) if m.dm_vs_trailing_pp is not None else 0.0
         if (crossed or dev >= 10) and abs(m.z) >= 2.0:
-            return TierResult(m.series_id, Tier.HIGH, m.z, f"yoy_cross({crossed})_or_dev_{dev:.2f}pp_z_{m.z:.2f}")
+            if crossed:
+                plain = f"Year-over-year home price growth crossed zero, which counts as HIGH on its own (z = {m.z:+.2f})."
+            else:
+                plain = f"3-month annualized change deviated {dev:.2f}pp from trend, above the 10pp HIGH floor (z = {m.z:+.2f})."
+            return TierResult(
+                m.series_id, Tier.HIGH, m.z, f"yoy_cross({crossed})_or_dev_{dev:.2f}pp_z_{m.z:.2f}",
+                plain_reason=plain,
+            )
         if 2 <= dev < 10 and abs(m.z) >= 1.0:
-            return TierResult(m.series_id, Tier.WEAK, m.z, f"dev_{dev:.2f}pp_weak_z_{m.z:.2f}")
+            return TierResult(
+                m.series_id, Tier.WEAK, m.z, f"dev_{dev:.2f}pp_weak_z_{m.z:.2f}",
+                plain_reason=f"3-month annualized change deviated {dev:.2f}pp from trend, in this series' WEAK band (z = {m.z:+.2f}).",
+            )
         return TierResult(m.series_id, Tier.NOISE, m.z, "below_floor")
     return _eval
 
@@ -310,9 +433,19 @@ def _drcclacbs_rule() -> EvalFn:
         dq = m.dq_pp if m.dq_pp is not None else float("-inf")
         lvl = m.level if m.level is not None else float("-inf")
         if (dq >= 0.25 or lvl >= 3.5) and abs(m.z) >= 2.0:
-            return TierResult(m.series_id, Tier.HIGH, m.z, f"dq_{dq:.2f}pp_or_level_{lvl:.2f}_z_{m.z:.2f}")
+            if dq >= 0.25:
+                plain = f"Quarter-over-quarter rise of {dq:.2f}pp cleared the 0.25pp HIGH floor (z = {m.z:+.2f})."
+            else:
+                plain = f"Level of {lvl:.2f}% cleared the 3.5% HIGH floor (z = {m.z:+.2f})."
+            return TierResult(
+                m.series_id, Tier.HIGH, m.z, f"dq_{dq:.2f}pp_or_level_{lvl:.2f}_z_{m.z:.2f}",
+                plain_reason=plain,
+            )
         if 0.10 <= dq < 0.25 and abs(m.z) >= 1.0:
-            return TierResult(m.series_id, Tier.WEAK, m.z, f"dq_{dq:.2f}pp_weak_z_{m.z:.2f}")
+            return TierResult(
+                m.series_id, Tier.WEAK, m.z, f"dq_{dq:.2f}pp_weak_z_{m.z:.2f}",
+                plain_reason=f"Quarter-over-quarter move of {dq:.2f}pp fell in this series' WEAK band (z = {m.z:+.2f}).",
+            )
         return TierResult(m.series_id, Tier.NOISE, m.z, "below_floor")
     return _eval
 
@@ -327,9 +460,19 @@ def _vix_rule() -> EvalFn:
         d1d = m.d1d_bp if m.d1d_bp is not None else 0.0  # signed - only a positive spike counts
         lvl = m.level if m.level is not None else float("-inf")
         if (d1d >= 20 or lvl >= 30) and m.z >= 2.0:
-            return TierResult(m.series_id, Tier.HIGH, m.z, f"d1d_{d1d:.1f}pct_or_level_{lvl:.1f}_z_{m.z:.2f}")
+            if d1d >= 20:
+                plain = f"VIX spiked {d1d:.1f}% in one day, above the 20% HIGH floor (z = {m.z:+.2f})."
+            else:
+                plain = f"VIX level of {lvl:.1f} cleared the 30 HIGH floor (z = {m.z:+.2f})."
+            return TierResult(
+                m.series_id, Tier.HIGH, m.z, f"d1d_{d1d:.1f}pct_or_level_{lvl:.1f}_z_{m.z:.2f}",
+                plain_reason=plain,
+            )
         if (10 <= d1d < 20 or 20 <= lvl < 30) and m.z >= 1.0:
-            return TierResult(m.series_id, Tier.WEAK, m.z, f"weak_band_z_{m.z:.2f}")
+            return TierResult(
+                m.series_id, Tier.WEAK, m.z, f"weak_band_z_{m.z:.2f}",
+                plain_reason=f"VIX move fell in this series' WEAK band (z = {m.z:+.2f}).",
+            )
         return TierResult(m.series_id, Tier.NOISE, m.z, "below_floor_or_not_a_spike")
     return _eval
 
@@ -343,9 +486,15 @@ def _vxv_ratio_rule() -> EvalFn:
         if m.z is None or m.ratio is None:
             return TierResult(m.series_id, Tier.NOISE, m.z, "missing_data")
         if m.ratio >= 1.00 and m.z >= 2.0:
-            return TierResult(m.series_id, Tier.HIGH, m.z, f"ratio_{m.ratio:.3f}_inverted_z_{m.z:.2f}")
+            return TierResult(
+                m.series_id, Tier.HIGH, m.z, f"ratio_{m.ratio:.3f}_inverted_z_{m.z:.2f}",
+                plain_reason=f"VIX/VXV ratio inverted to {m.ratio:.3f} (>= 1.00), a near-term volatility spike that counts as HIGH (z = {m.z:+.2f}).",
+            )
         if 0.95 <= m.ratio < 1.00 and m.z >= 1.0:
-            return TierResult(m.series_id, Tier.WEAK, m.z, f"ratio_{m.ratio:.3f}_weak_z_{m.z:.2f}")
+            return TierResult(
+                m.series_id, Tier.WEAK, m.z, f"ratio_{m.ratio:.3f}_weak_z_{m.z:.2f}",
+                plain_reason=f"VIX/VXV ratio of {m.ratio:.3f} fell in this series' WEAK band (z = {m.z:+.2f}).",
+            )
         return TierResult(m.series_id, Tier.NOISE, m.z, "not_inverted")
     return _eval
 
@@ -359,12 +508,21 @@ def _dff_rule() -> EvalFn:
     not this tier function."""
     def _eval(m: SeriesMove) -> TierResult:
         if m.is_inter_meeting_date:
-            return TierResult(m.series_id, Tier.HIGH, m.z, "inter_meeting_move_no_gate")
+            return TierResult(
+                m.series_id, Tier.HIGH, m.z, "inter_meeting_move_no_gate",
+                plain_reason="The Fed funds target moved outside a scheduled FOMC meeting - an inter-meeting move counts as HIGH on its own (no size or z-score check).",
+            )
         if m.d1d_bp is not None and m.z is not None and abs(m.d1d_bp) >= 27 and abs(m.z) >= 2.0:
-            return TierResult(m.series_id, Tier.HIGH, m.z, f"abs_d1d_{abs(m.d1d_bp):.1f}bp_ge_27_z_{m.z:.2f}")
+            return TierResult(
+                m.series_id, Tier.HIGH, m.z, f"abs_d1d_{abs(m.d1d_bp):.1f}bp_ge_27_z_{m.z:.2f}",
+                plain_reason=f"1-day move of {abs(m.d1d_bp):.0f}bp cleared the 27bp HIGH floor (z = {m.z:+.2f}).",
+            )
         d = abs(m.d1d_bp) if m.d1d_bp is not None else 0.0
         if 2 <= d <= 27:
-            return TierResult(m.series_id, Tier.WEAK, m.z, f"drift_{d:.1f}bp_within_range")
+            return TierResult(
+                m.series_id, Tier.WEAK, m.z, f"drift_{d:.1f}bp_within_range",
+                plain_reason=f"1-day move of {d:.0f}bp was within the 2-27bp WEAK range (no z-score check).",
+            )
         return TierResult(m.series_id, Tier.NOISE, m.z, "no_move")
     return _eval
 
@@ -377,9 +535,15 @@ def _fedtarmd_rule() -> EvalFn:
             return TierResult(m.series_id, Tier.NOISE, None, "missing_data")
         a = abs(m.sep_median_shift_bp)
         if a >= 25:
-            return TierResult(m.series_id, Tier.HIGH, None, f"sep_median_shift_{a:.1f}bp_ge_25_no_zgate")
+            return TierResult(
+                m.series_id, Tier.HIGH, None, f"sep_median_shift_{a:.1f}bp_ge_25_no_zgate",
+                plain_reason=f"The SEP median moved {a:.0f}bp, above the 25bp HIGH threshold (no z-score check).",
+            )
         if a > 0:
-            return TierResult(m.series_id, Tier.WEAK, None, f"median_flat_or_dispersion_shift_{a:.1f}bp")
+            return TierResult(
+                m.series_id, Tier.WEAK, None, f"median_flat_or_dispersion_shift_{a:.1f}bp",
+                plain_reason=f"The SEP median moved {a:.0f}bp, below the 25bp HIGH threshold (no z-score check).",
+            )
         return TierResult(m.series_id, Tier.NOISE, None, "no_shift")
     return _eval
 

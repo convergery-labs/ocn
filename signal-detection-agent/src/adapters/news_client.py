@@ -78,6 +78,28 @@ async def trigger_macro_fetch(*, incremental: bool) -> int:
     )
 
 
+async def fetch_macro_series_total() -> int | None:
+    """GET /macro/series from news-retrieval; return the tracked series
+    count. Backs GET /results/summary's series_total field (real ask,
+    frontend ticket, 2026-09-25) - news-retrieval owns the series
+    universe (MACRO_SERIES_UNIVERSE), not this service, so the count is
+    fetched, not recomputed here. Returns None (not raise) on any
+    failure - a summary with series_total missing is still useful; a
+    summary that 500s because a sibling service hiccuped is not, same
+    fail-soft posture as the rest of this module's read paths."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{config.NEWS_RETRIEVAL_URL}/macro/series",
+                headers=_headers(),
+            )
+            resp.raise_for_status()
+    except httpx.HTTPError as exc:
+        logger.warning("[MACRO_SIGNAL_SUMMARY] failed to fetch series_total from news-retrieval: %s", exc)
+        return None
+    return resp.json().get("total")
+
+
 async def fetch_latest_run(domain: str) -> int | None:
     """GET /runs?domain=<slug>&status=completed&limit=1; return run_id or None."""
     try:
