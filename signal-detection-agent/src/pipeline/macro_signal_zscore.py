@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import statistics
 from datetime import date, timedelta
+from decimal import Decimal
 from typing import Any
 
 import config
@@ -16,13 +17,26 @@ import config
 def compute_daily_changes(observations: list[dict[str, Any]]) -> dict[date, float]:
     """Day-over-day change in native bp (value is in percent, as FRED
     returns rate/yield series; * 100 -> bp), keyed by observation_date.
-    `observations` must be for a SINGLE series, any order - sorted here."""
-    by_date = {o["observation_date"]: float(o["value"]) for o in observations if o.get("value") is not None}
+    `observations` must be for a SINGLE series, any order - sorted here.
+
+    CONFIRMED LIVE (real frontend ticket, 2026-09-25, job 262): computing
+    this via float(value) then float arithmetic (e.g. 0.31 - 0.26) picks
+    up binary-float imprecision (e.g. 4.999999999999996 for a real exact
+    5bp move) - a later truncation step meant to clean this up made it
+    WORSE (truncating 4.999999999999996 gives 4.99, not 5, since the
+    true value's float representation can land on either side of the
+    real integer). Fixed at the source instead: Decimal on the raw
+    string value (Postgres numeric -> str, e.g. "0.31") is exact, so the
+    bp change is exact too - no rounding or truncation step needed
+    anywhere downstream. Still returns float (the z-score/tier pipeline
+    downstream is float-based statistics, where exactness doesn't
+    matter) - only the intermediate arithmetic uses Decimal."""
+    by_date = {o["observation_date"]: Decimal(str(o["value"])) for o in observations if o.get("value") is not None}
     dates = sorted(by_date.keys())
     changes: dict[date, float] = {}
     for i in range(1, len(dates)):
         prev_d, cur_d = dates[i - 1], dates[i]
-        changes[cur_d] = (by_date[cur_d] - by_date[prev_d]) * 100
+        changes[cur_d] = float((by_date[cur_d] - by_date[prev_d]) * 100)
     return changes
 
 

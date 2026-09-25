@@ -13,6 +13,7 @@ import asyncio
 import os
 import sys
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -67,6 +68,34 @@ def test_compute_daily_changes_native_bp():
     ]
     changes = compute_daily_changes(obs)
     assert changes[date(2026, 1, 2)] == pytest.approx(5.0)  # 0.05 pct -> 5bp
+
+
+def test_compute_daily_changes_is_exact_not_float_imprecise():
+    """Regression test for a real bug found live (frontend ticket after
+    job 262, 2026-09-25): float(value) then float subtraction (e.g.
+    0.31 - 0.26) picks up binary-float imprecision - the real move here
+    is exactly 5bp, but float arithmetic can yield 4.999999999999996 or
+    5.000000000000004 depending on the exact inputs. A truncation step
+    added to "clean up" the noise made it WORSE (49.99999999999996
+    truncates to 49.99, not the real 50). The real fix is Decimal(str(
+    value)) arithmetic - exact, not approximate - so this test asserts
+    exact equality (==), not pytest.approx, on several of the exact real
+    values the frontend reported as wrong (5, 13, -8, 9)."""
+    cases = [
+        (0.26, 0.31, 5.0),
+        (0.80, 0.93, 13.0),
+        (4.53, 4.45, -8.0),
+        (2.10, 2.19, 9.0),
+    ]
+    for prior, current, expected_bp in cases:
+        obs = [
+            {"observation_date": date(2026, 1, 1), "value": prior},
+            {"observation_date": date(2026, 1, 2), "value": current},
+        ]
+        changes = compute_daily_changes(obs)
+        assert changes[date(2026, 1, 2)] == expected_bp, (
+            f"{prior} -> {current}: expected exactly {expected_bp}bp, got {changes[date(2026, 1, 2)]}"
+        )
 
 
 def test_compute_daily_changes_skips_null_values():
@@ -632,13 +661,19 @@ _REAL_SNAPSHOTS = {
 
 
 def _observations_from_snapshots(snapshots: dict[date, dict[int, float]]) -> list[dict]:
+    """value is stored as a string, matching real production shape -
+    news-retrieval's macro_observations.value is a Postgres numeric
+    column, which /macro/observations serializes as a string (e.g.
+    "4.1", not 4.1) - CONFIRMED LIVE. A test fixture passing a bare
+    float here would not catch a real type mismatch downstream (see
+    the current_values/prior_values string-consistency fix)."""
     rows = []
     for vintage, by_year in snapshots.items():
         for year, value in by_year.items():
             rows.append({
                 "series_id": "FEDTARMD",
                 "observation_date": date(year, 1, 1),
-                "value": value,
+                "value": str(value),
                 "vintage": vintage,
             })
     return rows
@@ -646,12 +681,21 @@ def _observations_from_snapshots(snapshots: dict[date, dict[int, float]]) -> lis
 
 def test_real_shift_2026_09_vs_2026_06_matches_hand_computed_value():
     """2026-06-17's 2027 dot: 3.6. 2026-09-16's 2027 dot: 4.1.
-    Shift = +0.5pp = +50bp - a real HIGH-tier event (>=25bp)."""
+    Shift = +0.5pp = +50bp - a real HIGH-tier event (>=25bp).
+
+    Asserts EXACT equality (==), not a tolerance - real bug found live
+    (frontend ticket after job 262, 2026-09-25): float arithmetic here
+    produced 49.99999999999996 for this exact case, and this test's own
+    prior tolerance-based check (abs(x - 50.0) < 1e-6) would have passed
+    even with that float-imprecise value, hiding the real bug. Decimal
+    arithmetic in macro_signal_fedtarmd.py fixes it - shift_bp is exact."""
     obs = _observations_from_snapshots(_REAL_SNAPSHOTS)
     shift = compute_sep_median_shift_bp(obs, date(2026, 9, 16))
     assert shift is not None
-    assert abs(shift.shift_bp - 50.0) < 1e-6
+    assert shift.shift_bp == 50.0
     assert shift.target_year == 2027
+    assert shift.current_value == Decimal("4.1")
+    assert shift.prior_value == Decimal("3.6")
 
 
 def test_real_shift_2025_09_vs_2025_06_matches_hand_computed_value():
@@ -733,9 +777,9 @@ def test_real_fomc_2026_09_16_event_shift_and_target_year_match_ticket():
     shift = compute_sep_median_shift_bp(obs, date(2026, 9, 16))
     assert shift is not None
     assert shift.target_year == 2027
-    assert abs(shift.shift_bp - 50.0) < 1e-6
-    assert abs(shift.current_value - 4.1) < 1e-6
-    assert abs(shift.prior_value - 3.6) < 1e-6
+    assert shift.shift_bp == 50.0
+    assert shift.current_value == Decimal("4.1")
+    assert shift.prior_value == Decimal("3.6")
     assert shift.prior_release_date == date(2026, 6, 17)
 
 # ============================================================================
@@ -999,12 +1043,14 @@ def test_transmission_direction_word_mismatching_move_bp_sign_is_rejected():
         validate_interpretation(bad, expected_channel="policy_path", members=members)
 
 
-def test_transmission_bp_number_within_tolerance_of_truncated_move_bp_passes():
-    """move_bp is truncated (not rounded) to 2dp before it ever reaches
-    this point (see controllers.run's own math.trunc choice) - a
-    sentence written against the "clean" whole-bp figure (50bp) must
-    still pass against the real stored value (49.99), not be rejected
-    over sub-bp truncation noise."""
+def test_transmission_bp_number_within_tolerance_of_slightly_rounded_move_bp_passes():
+    """A sentence may round a real value for readability (e.g. "50bp"
+    for a real 49.99, which itself may be an exact value someone chose
+    to write with one fewer significant figure, or a genuinely
+    non-integer real move) - this must still pass, not be rejected over
+    sub-bp difference. move_bp itself is exact as of the Decimal fix in
+    macro_signal_zscore.py/macro_signal_fedtarmd.py; this test is about
+    the fact-check's own tolerance, independent of that."""
     ok = {**_VALID, "transmission": "The 2027 median dot in the FOMC SEP rose 50bp, raising the expected policy path."}
     members = [{"series_id": "FEDTARMD", "value": 4.1, "move_bp": 49.99, "z_score": None, "tier": "HIGH"}]
     result = validate_interpretation(ok, expected_channel="policy_path", members=members)
@@ -1454,25 +1500,84 @@ def test_run_macro_signal_pipeline_interpret_payload_carries_real_move_not_level
     member = next(m for p in captured_payloads for m in p["members"] if m["series_id"] == "T10Y2Y")
     assert member["value"] == 0.31
     assert member["move_bp"] is not None
-    assert round(member["move_bp"]) == 5, f"expected the real +5bp move, got move_bp={member['move_bp']}"
+    assert member["move_bp"] == 5.0, f"expected the exact +5bp move, got move_bp={member['move_bp']}"
     assert round(member["move_bp"]) != round(member["value"] * 100), (
         "move_bp must never equal value*100 - that's exactly the bug (level misread as move)"
     )
 
 
-def test_run_macro_signal_pipeline_fedtarmd_event_carries_classification_basis_and_rounded_move_bp():
+def test_run_macro_signal_pipeline_standard_series_event_carries_prior_and_current_values():
+    """Real ask (frontend ticket, 2026-09-25, item 2b): prior_values was
+    empty on 28 of 29 events - only FEDTARMD had it wired. This test
+    covers a STANDARD (non-FEDTARMD) series end to end against the
+    actual insert_macro_signal_event call (the real stored-metadata
+    boundary, not just the interpret payload) - T10Y2Y going 0.26 ->
+    0.31 must produce current_values.T10Y2Y == "0.31" and
+    prior_values.T10Y2Y == "0.26", both as strings, and move_bp exactly
+    5.0 (not 4.99 or any float-imprecise value)."""
+    target_date = date(2026, 9, 24)
+    obs = []
+    d = target_date - timedelta(days=400)
+    value = 0.20
+    while d < target_date - timedelta(days=1):
+        obs.append({"series_id": "T10Y2Y", "observation_date": d, "value": str(round(value, 4))})
+        value += 0.0002 if (d.toordinal() % 2 == 0) else -0.0002
+        d += timedelta(days=1)
+    obs.append({"series_id": "T10Y2Y", "observation_date": target_date - timedelta(days=1), "value": "0.26"})
+    obs.append({"series_id": "T10Y2Y", "observation_date": target_date, "value": "0.31"})
+
+    fake_interpretation = {
+        "channel": "discount_rate", "entry_point": "unattributed",
+        "assets": ["treasuries"], "transmission": "The 2s10s Treasury curve steepened by 5bp.",
+        "suspect": False, "suspect_reason": None,
+    }
+
+    with patch("controllers.run.get_macro_observations", new=AsyncMock(return_value=obs)), \
+         patch("controllers.run.interpret_events_batch") as mock_interpret, \
+         patch("controllers.run.update_job_status"), \
+         patch("controllers.run.get_existing_macro_signal_source_ids", return_value=set()), \
+         patch("controllers.run.calendar_staleness_warning", return_value=None), \
+         patch("controllers.run.insert_macro_signal_event") as mock_insert:
+
+        def _fake_interpret(payloads):
+            return [{"event": p, "interpretation": fake_interpretation} for p in payloads]
+        mock_interpret.side_effect = _fake_interpret
+
+        from controllers.run import run_macro_signal_pipeline
+        asyncio.run(run_macro_signal_pipeline(job_id=32, from_date=target_date.isoformat(), to_date=target_date.isoformat()))
+
+    interpreted_calls = [c for c in mock_insert.call_args_list if c.args[2] is not None]
+    assert len(interpreted_calls) == 1, f"expected exactly 1 interpreted event, got {len(interpreted_calls)}"
+    stored_event = interpreted_calls[0].args[1]
+    assert stored_event["move_bp"]["T10Y2Y"] == 5.0
+    assert stored_event["current_values"]["T10Y2Y"] == "0.31"
+    assert stored_event["prior_values"]["T10Y2Y"] == "0.26"
+    assert isinstance(stored_event["current_values"]["T10Y2Y"], str)
+    assert isinstance(stored_event["prior_values"]["T10Y2Y"], str)
+
+
+def test_run_macro_signal_pipeline_fedtarmd_event_carries_classification_basis_and_exact_move_bp():
     """Real frontend follow-up ticket (after job 258, 2026-09-25): the
     FOMC event's move_bp/target_years/text are now correct, but (1)
     z_scores.FEDTARMD is still null with nothing explaining WHAT rule
     made it HIGH, and (2) move_bp arrives with float noise (e.g.
-    4.999999999999999, 6.00000000000005). Fixes: classification_basis
-    (TierResult.reason, e.g. "sep_median_shift_50.0bp_ge_25_no_zgate")
-    now stored per series, and move_bp is truncated to 2 decimal places
-    before it ever reaches the interpret payload or stored metadata -
-    truncation (not rounding) per explicit user choice, so
-    49.99999999999996 reads as 49.99, not rounded up to 50.0. Asserts on
-    the actual insert_macro_signal_event call (the real stored-metadata
-    boundary), not just the interpret payload."""
+    4.999999999999999, 6.00000000000005).
+
+    Fixes: classification_basis (TierResult.reason, e.g.
+    "sep_median_shift_50.0bp_ge_25_no_zgate") now stored per series.
+    move_bp: a first fix (truncate to 2dp) was itself reported wrong by
+    the frontend - truncating 49.99999999999996 gives 49.99, not the
+    real exact value 50, and disagreed with the event text and
+    classification_basis. The real fix is upstream: Decimal(str(value))
+    arithmetic in macro_signal_fedtarmd.py (not float()) is exact, so no
+    rounding/truncation step is needed anywhere downstream - this test
+    asserts the EXACT value (50.0, not 49.99) now comes out the other
+    end. Also asserts current_values/prior_values are both present and
+    are strings (real ask: prior_values was missing on 28 of 29 events,
+    and FEDTARMD's own prior_value was a bare float, not a string like
+    current_values). Asserts on the actual insert_macro_signal_event
+    call (the real stored-metadata boundary), not just the interpret
+    payload."""
     snapshots = {
         date(2026, 6, 17): {2026: 3.8, 2027: 3.6, 2028: 3.4},
         date(2026, 9, 16): {2026: 4.1, 2027: 4.1, 2028: 3.9, 2029: 3.6},
@@ -1505,7 +1610,11 @@ def test_run_macro_signal_pipeline_fedtarmd_event_carries_classification_basis_a
     assert stored_event["z_scores"]["FEDTARMD"] is None  # still null by design, no z-gate rule
     assert stored_event["classification_basis"]["FEDTARMD"] is not None
     assert "sep_median_shift" in stored_event["classification_basis"]["FEDTARMD"]
-    assert stored_event["move_bp"]["FEDTARMD"] == 49.99  # truncated to 2dp (real value was 49.99999999999996)
+    assert stored_event["move_bp"]["FEDTARMD"] == 50.0  # exact, not 49.99 - real values are 3.6 -> 4.1
+    assert stored_event["current_values"]["FEDTARMD"] == "4.1"
+    assert stored_event["prior_values"]["FEDTARMD"] == "3.6"
+    assert isinstance(stored_event["current_values"]["FEDTARMD"], str)
+    assert isinstance(stored_event["prior_values"]["FEDTARMD"], str)
 
 
 def test_run_macro_signal_pipeline_dff_past_calendar_horizon_is_skipped_not_guessed():
