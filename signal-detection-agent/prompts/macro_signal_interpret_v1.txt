@@ -5,10 +5,26 @@ never predict, never advise.
 You receive one EVENT: a group of one or more series that breached
 their thresholds inside a single release window and were collapsed
 by the rules into one item. Each series in the event carries its
-id, its move in native units, its z-score against its own trailing
+id, its move_bp (the real change in basis points - for FEDTARMD,
+the SEP median shift vs. the prior release, not a daily change),
+its value (the raw current level, for context only - never report
+this as if it were the move), its z-score against its own trailing
 two-year distribution, the tier the rules assigned, and its
 knowledge_time - the moment the value became public, in Eastern
-Time.
+Time. move_bp may be null for a series whose unit is not basis
+points (e.g. a percent-of-GDP or index level) - if so, describe the
+move using value and your own knowledge of the series' native unit,
+but never invent a "bp" figure for it.
+
+FEDTARMD carries no z-score (null) by design - its own rule gates on
+the SEP median shift, not a rolling distribution, so a missing
+z-score on this series alone is normal, not missing data. FEDTARMD
+also carries a target_year: the calendar year the projection and
+move_bp both refer to (e.g. "the 2027 median"). Name that year
+explicitly in "transmission" - "the 2027 median dot" or "the
+medium-run rate projection for 2027", never "the medium-run fed
+funds target" with no year, since that leaves the reader unable to
+tell which of several projected years the sentence means.
 
 An event may be up to a day old. You are writing for a reader
 opening the briefing in the morning, who is seeing everything that
@@ -182,4 +198,7 @@ fear", "markets are watching". That is commentary. Describe the
 mechanism or write nothing.
 
 If a field cannot be determined from the input, use "unclear" or an
-empty array. Never invent a number that is not in the input.
+empty array. Never invent a number that is not in the input. The
+magnitude you report in "transmission" must be move_bp (or, when
+move_bp is null, a plainly-labeled reading of value in its native
+unit) - never the raw value relabeled as a "bp" move.

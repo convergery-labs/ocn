@@ -394,6 +394,7 @@ async def run_macro_signal_pipeline(job_id: int, from_date: str, to_date: str) -
             tiered_by_date.setdefault(obs_date, {})[series_id] = from_tier_result(
                 tier_result,
                 value=obs_for_date["value"] if obs_for_date else None,
+                move_bp=change_bp,
                 source=obs_for_date.get("source") if obs_for_date else None,
                 knowledge_time_confidence=obs_for_date.get("knowledge_time_confidence") if obs_for_date else None,
             )
@@ -438,6 +439,7 @@ async def run_macro_signal_pipeline(job_id: int, from_date: str, to_date: str) -
             tiered_by_date.setdefault(obs_date, {})["DFF"] = from_tier_result(
                 tier_result,
                 value=dff_obs_for_date["value"] if dff_obs_for_date else None,
+                move_bp=change_bp,
                 source=dff_obs_for_date.get("source") if dff_obs_for_date else None,
                 knowledge_time_confidence=dff_obs_for_date.get("knowledge_time_confidence") if dff_obs_for_date else None,
             )
@@ -455,8 +457,8 @@ async def run_macro_signal_pipeline(job_id: int, from_date: str, to_date: str) -
         for release_date in release_dates:
             if not (from_dt <= release_date <= to_dt):
                 continue
-            shift_bp = compute_sep_median_shift_bp(fedtarmd_observations, release_date)
-            move = SeriesMove("FEDTARMD", sep_median_shift_bp=shift_bp)
+            sep_shift = compute_sep_median_shift_bp(fedtarmd_observations, release_date)
+            move = SeriesMove("FEDTARMD", sep_median_shift_bp=sep_shift.shift_bp if sep_shift else None)
             tier_result = tier_series_move(move)
             representative_obs = next(
                 (o for o in fedtarmd_observations if o.get("vintage") == release_date),
@@ -465,6 +467,8 @@ async def run_macro_signal_pipeline(job_id: int, from_date: str, to_date: str) -
             tiered_by_date.setdefault(release_date, {})["FEDTARMD"] = from_tier_result(
                 tier_result,
                 value=representative_obs["value"] if representative_obs else None,
+                move_bp=sep_shift.shift_bp if sep_shift else None,
+                target_year=sep_shift.target_year if sep_shift else None,
                 source=representative_obs.get("source") if representative_obs else None,
                 knowledge_time_confidence=representative_obs.get("knowledge_time_confidence") if representative_obs else None,
             )
@@ -496,7 +500,7 @@ async def run_macro_signal_pipeline(job_id: int, from_date: str, to_date: str) -
                 audit_rows.append({
                     "series_id": series_id, "observation_date": obs_date,
                     "tier": r.tier.value, "z_score": r.z_score,
-                    "suppressed_by": r.suppressed_by, "knowledge_time": None,
+                    "suppressed_by": r.suppressed_by, "knowledge_time": obs_date,
                     "source": r.source, "knowledge_time_confidence": r.knowledge_time_confidence,
                 })
     already_audited = get_existing_macro_signal_source_ids(audit_candidate_ids)
@@ -543,7 +547,10 @@ async def run_macro_signal_pipeline(job_id: int, from_date: str, to_date: str) -
             "knowledge_time": event.knowledge_time.isoformat() if hasattr(event.knowledge_time, "isoformat") else str(event.knowledge_time),
             "channel": event.channel.value,
             "members": [
-                {"series_id": m.series_id, "value": m.value, "z_score": m.z_score, "tier": m.tier.value}
+                {
+                    "series_id": m.series_id, "value": m.value, "move_bp": m.move_bp,
+                    "target_year": m.target_year, "z_score": m.z_score, "tier": m.tier.value,
+                }
                 for m in event.members
             ],
         }
@@ -579,6 +586,21 @@ async def run_macro_signal_pipeline(job_id: int, from_date: str, to_date: str) -
             "tier": max((m["tier"] for m in event_payload["members"]), key=lambda t: t == "HIGH"),
             "member_series": [m["series_id"] for m in event_payload["members"]],
             "z_scores": {m["series_id"]: m["z_score"] for m in event_payload["members"]},
+            # move_bp/target_year fill the exact gap a frontend hit live:
+            # z_scores.FEDTARMD is always null (its rule is a no-z-gate
+            # SEP-median-shift exception, not a z-score threshold - see
+            # macro_signal_thresholds._fedtarmd_rule), so without these
+            # there was no field anywhere saying WHAT number made it HIGH
+            # or WHICH projected year "the medium-run fed funds target"
+            # meant. Populated for every series (not just FEDTARMD) since
+            # any member could in principle need the same Current/Prior/
+            # Change display; target_year is None for every series except
+            # FEDTARMD, where it is never None on an interpreted event.
+            "move_bp": {m["series_id"]: m["move_bp"] for m in event_payload["members"]},
+            "target_years": {
+                m["series_id"]: m["target_year"]
+                for m in event_payload["members"] if m.get("target_year") is not None
+            },
             # Deduplicated arrays, not a per-series map - the VALUE (which
             # source/confidence) is what matters here, and every member of
             # a collapsed event shares the same value in practice today,

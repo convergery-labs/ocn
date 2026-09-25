@@ -1109,6 +1109,10 @@ def _titles_describe_same_event(
     try:
         client = _make_client(api_key)
         response = client.chat.completions.create(
+            # Hardcoded, not env-configurable - chosen for speed/cost on a
+            # one-word-equivalent classification call; avoid reasoning
+            # models here, they add real per-call latency for no accuracy
+            # gain on this task.
             model="openai/gpt-4o-mini",
             temperature=0,
             messages=[

@@ -102,6 +102,69 @@ def test_post_macro_fetch_creates_run_and_returns_202(monkeypatch):
     assert resp.json() == {"run_id": 99, "status": "running"}
 
 
+def test_get_macro_series_requires_auth():
+    from fastapi.testclient import TestClient
+    import app as app_module
+
+    client = TestClient(app_module.create_app())
+    resp = client.get("/macro/series")
+    assert resp.status_code == 401
+
+
+def test_get_macro_series_returns_full_universe_with_valid_auth():
+    """Real ask (frontend ticket, 2026-09-25): the UI shows "Coverage
+    X / Y series" but had no way to read Y (total tracked series) -
+    only X (series reporting in a window) was derivable from /results
+    rows. This is a fixed in-memory constant (MACRO_SERIES_UNIVERSE),
+    not a DB query - asserting the real count (46) so this breaks
+    loudly if the universe ever changes without this test being
+    updated."""
+    from fastapi.testclient import TestClient
+    import app as app_module
+    from macro_signal_fetch import MACRO_SERIES_UNIVERSE
+
+    client = TestClient(app_module.create_app())
+    resp = client.get(
+        "/macro/series",
+        headers={"x-ocn-caller": _admin_caller_header()},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == len(MACRO_SERIES_UNIVERSE) == 46
+    assert len(body["series"]) == 46
+    assert {"series_id": "DGS10", "channel": "discount_rate"} in body["series"]
+
+
+def test_get_macro_observations_requires_auth():
+    """Regression test for a real bug found live (2026-09-25, real staging
+    ALB request with no Authorization header returned 200 with real
+    data): GET /macro/observations was missing Depends(require_auth)
+    entirely. The api-gateway's /news/* proxy only enforces its own
+    auth for paths starting with "market/" (see api-gateway/routes/
+    proxy_routes.py) - any other /news/* route, this one included, is
+    reachable with no x-ocn-caller header unless the route enforces its
+    own auth, same as every other GET route in this file already does."""
+    from fastapi.testclient import TestClient
+    import app as app_module
+
+    client = TestClient(app_module.create_app())
+    resp = client.get("/macro/observations")
+    assert resp.status_code == 401
+
+
+def test_get_macro_observations_returns_data_with_valid_auth():
+    from fastapi.testclient import TestClient
+    import app as app_module
+
+    with patch("routes.macro.get_macro_observations", return_value=([], None)):
+        client = TestClient(app_module.create_app())
+        resp = client.get(
+            "/macro/observations",
+            headers={"x-ocn-caller": _admin_caller_header()},
+        )
+    assert resp.status_code == 200
+
+
 def _admin_caller_header() -> str:
     import base64
     import json

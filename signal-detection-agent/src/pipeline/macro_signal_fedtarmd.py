@@ -18,6 +18,7 @@ about 2027. This module does that comparison.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date
 from typing import Any, Optional
 
@@ -36,10 +37,28 @@ def _target_year_series(observations: list[dict[str, Any]]) -> dict[date, dict[i
     return by_release
 
 
+@dataclass
+class SepMedianShift:
+    """The real move behind a FEDTARMD event, plus the exact target year
+    and the two SEP releases' own values it was computed from - added
+    because a frontend consuming only the bp number had no way to build
+    a Current/Prior/Change display or explain which year "the medium-run
+    fed funds target" referred to (CONFIRMED LIVE, real ticket: the
+    2026-09-16 event's own text said "375bp" - not derivable from any
+    single target year's real shift - because nothing surfaced which
+    year the sentence meant, or the real per-year numbers to check it
+    against)."""
+    shift_bp: float
+    target_year: int
+    current_value: float
+    prior_value: float
+    prior_release_date: date
+
+
 def compute_sep_median_shift_bp(
     observations: list[dict[str, Any]], release_date: date,
-) -> Optional[float]:
-    """Returns the bp shift in the SAME target year's median dot between
+) -> Optional[SepMedianShift]:
+    """Returns the SAME target year's median dot shift between
     `release_date`'s own SEP and the immediately PRIOR SEP release found
     in `observations` - or None if release_date isn't a known release, no
     prior release exists, or neither release projected a common target
@@ -70,5 +89,11 @@ def compute_sep_median_shift_bp(
     preferred_year = prior_release.year + 1
     target_year = preferred_year if preferred_year in common_years else common_years[0]
 
-    shift_pp = current[target_year] - prior[target_year]
-    return shift_pp * 100
+    current_value = current[target_year]
+    prior_value = prior[target_year]
+    shift_bp = (current_value - prior_value) * 100
+    return SepMedianShift(
+        shift_bp=shift_bp, target_year=target_year,
+        current_value=current_value, prior_value=prior_value,
+        prior_release_date=prior_release,
+    )

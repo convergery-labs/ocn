@@ -1,11 +1,17 @@
 """Routes for /macro - read macro_signal observations from Postgres,
 and trigger a fetch.
 
-Not under /market/* deliberately - that prefix is DynamoDB-backed
-elsewhere (routes/market.py) and is forced to require auth at the
-api-gateway proxy layer; /macro/* behaves like /runs and /articles/*
-instead (gateway-proxied automatically, no gateway code change
-needed)."""
+Not under /market/* - that prefix is DynamoDB-backed elsewhere
+(routes/market.py) and is forced to require auth at the api-gateway
+proxy layer specifically. /macro/* instead enforces its own auth
+directly on each route via Depends(require_auth)/Depends(require_admin)
+- CONFIRMED LIVE (2026-09-25) that relying on the gateway alone is not
+safe: the api-gateway's /news/* proxy uses optional_auth except for a
+path.startswith("market/") special case, so any route under this
+prefix that doesn't declare its own auth dependency is reachable with
+no Authorization header at all. GET /macro/observations was missing
+this and served real data unauthenticated until this fix - do not
+assume gateway-level enforcement for any future route added here."""
 import os
 from datetime import date
 from typing import Any, Optional
@@ -14,11 +20,31 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from auth import require_admin
+from auth import require_admin, require_auth
 from controllers.macro_run import create_macro_fetch_run, run_macro_fetch
+from macro_signal_fetch import MACRO_SERIES_UNIVERSE
 from models.macro_observations import get_macro_observations
 
 router = APIRouter()
+
+
+@router.get("/macro/series")
+def list_macro_series(
+    caller: dict[str, Any] = Depends(require_auth),
+) -> dict:
+    """The full tracked series universe (series_id + channel), straight
+    from macro_signal_fetch.MACRO_SERIES_UNIVERSE - no DB query, this is
+    a fixed in-memory constant. Added for the frontend's "Coverage X / Y
+    series" display: X (series reporting in a window) is already
+    countable from /results rows, but nothing exposed Y (total tracked)
+    until this endpoint."""
+    return {
+        "series": [
+            {"series_id": s["series_id"], "channel": s["channel"]}
+            for s in MACRO_SERIES_UNIVERSE
+        ],
+        "total": len(MACRO_SERIES_UNIVERSE),
+    }
 
 
 @router.get("/macro/observations")
@@ -28,10 +54,19 @@ def list_macro_observations(
     to_date: Optional[date] = None,
     limit: int = Query(default=500, ge=1, le=2000),
     cursor: Optional[str] = None,
+    caller: dict[str, Any] = Depends(require_auth),
 ) -> dict:
     """Cursor-paginated macro_observations rows, optionally filtered by
     series_id and/or observation_date range. Consumed by
-    signal-detection-agent's macro_signal pipeline adapter."""
+    signal-detection-agent's macro_signal pipeline adapter.
+
+    CONFIRMED LIVE (2026-09-25, real staging ALB request with no
+    Authorization header): this route was missing Depends(require_auth)
+    entirely - the module docstring's claim that this prefix is
+    "gateway-proxied automatically" assumed the route itself enforced
+    auth the way every other GET route in this file does; it never did.
+    Real macro_observations data (3 years of FRED/Treasury history) was
+    served to unauthenticated requests until this fix."""
     try:
         observations, next_cursor = get_macro_observations(
             series_ids=series or None,

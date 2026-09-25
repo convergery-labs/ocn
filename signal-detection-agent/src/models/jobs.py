@@ -337,6 +337,18 @@ def insert_macro_signal_event(
     wrong-for-some-members value. A suppressed/NOISE audit row is
     always exactly one series, so it gets a plain metadata.source /
     metadata.knowledge_time_confidence value instead.
+
+    metadata.move_bp is a per-series map (series_id -> real change in
+    bp, mirroring metadata.z_scores' own shape) - CONFIRMED LIVE (real
+    frontend ticket): a FEDTARMD event ties to _fedtarmd_rule's no-
+    z-gate exception (z_scores.FEDTARMD is always null - that rule
+    gates on SEP median shift, not a rolling z-score), and without this
+    field there was no way to see WHAT number made the event HIGH.
+    metadata.target_years is a per-series map, populated only for
+    series whose move is year-specific (today, only FEDTARMD) - answers
+    "which projected year does this event's number refer to", since
+    FEDTARMD's own text ("the medium-run fed funds target") never named
+    a year and the frontend had no field to resolve it from.
     """
     if interpretation is not None:
         source_id = f"{event['release_id']}-{event.get('channel')}-{event['knowledge_time']}"
@@ -352,6 +364,8 @@ def insert_macro_signal_event(
             "member_series": event.get("member_series"),
             "release_id": event.get("release_id"),
             "z_scores": event.get("z_scores"),
+            "move_bp": event.get("move_bp"),
+            "target_years": event.get("target_years"),
             "sources": event.get("sources"),
             "knowledge_time_confidences": event.get("knowledge_time_confidences"),
             "suppressed_by": None,

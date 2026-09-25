@@ -336,11 +336,69 @@ resource "aws_cloudwatch_event_target" "news_retrieval_geopolitical_news_daily" 
         # still runs on its own 05:00 UTC schedule too, as a fallback for
         # if this webhook delivery is ever missed - see that rule's own
         # comment and routes/webhooks.py in signal-detection-agent).
+        #
+        # -X faulthandler: confirmed live (2026-09-25, run_id=472) that
+        # this domain's scheduled fetch can die completely silently - the
+        # process's own log output and CloudWatch's lastIngestionTime both
+        # stopped 11 seconds after start, with no exception, no traceback,
+        # and no CloudTrail StopTask event; the run row was left stuck in
+        # 'running' for 7+ hours until manually cleaned up. faulthandler
+        # dumps a traceback to stderr (captured by the same awslogs driver
+        # as everything else) on a fatal signal (SIGSEGV/SIGABRT/SIGBUS),
+        # which a plain uncaught Python exception would already do without
+        # it - so its absence here means this wasn't an ordinary Python
+        # exception. Costs nothing when nothing crashes; only changes
+        # behavior on an actual fatal-signal death, which is exactly the
+        # case current logs give zero information about.
         command = [
-          "python", "__main__.py", "trigger",
+          "python", "-X", "faulthandler", "__main__.py", "trigger",
           "--domain", "geopolitical_news", "--days-back", "1",
           "--callback-url", "http://signal-detection-agent.${var.env}.ocn.internal:8003/webhooks/news-retrieval-run-completed",
         ]
+      }
+    ]
+  })
+}
+
+resource "aws_cloudwatch_event_rule" "news_retrieval_fail_stuck_runs_hourly" {
+  name = "${var.env}-news-retrieval-fail-stuck-runs-hourly"
+  # Confirmed live (2026-09-25, run_id=472): a scheduled fetch can die
+  # completely silently (no exception, no traceback, no CloudTrail
+  # StopTask event) and leave its run row stuck in 'running' forever,
+  # since the only existing cleanup (fail_orphaned_runs, models/runs.py)
+  # runs once at server startup - useless here because this server had
+  # been up 24+ hours with no restart, so run_id=472 sat stuck for 7+
+  # hours until a human found and manually cleaned it up. This rule is
+  # the periodic catch for that gap, independent of server restarts -
+  # every domain's runs share one `runs` table, so this one schedule
+  # covers all of them, not just geopolitical_news.
+  schedule_expression = "cron(0 * * * ? *)"
+}
+
+resource "aws_cloudwatch_event_target" "news_retrieval_fail_stuck_runs_hourly" {
+  rule     = aws_cloudwatch_event_rule.news_retrieval_fail_stuck_runs_hourly.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+
+  ecs_target {
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.news_retrieval.family}"
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets          = var.public_subnet_ids
+      security_groups  = [var.news_sg_id]
+      assign_public_ip = true
+    }
+  }
+
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name = "news-retrieval"
+        # 3 hours: comfortably longer than any real run has ever taken
+        # (the longest observed, run_id=445, completed in under 90 min)
+        # while still catching a stuck run well before a human would
+        # otherwise notice.
+        command = ["python", "__main__.py", "fail-stuck-runs", "--max-hours", "3"]
       }
     ]
   })
@@ -879,8 +937,15 @@ resource "aws_ecs_service" "signal_detection" {
   name            = "${var.env}-signal-detection"
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.signal_detection.arn
-  desired_count   = 1
-  launch_type     = "FARGATE"
+  # Stopped 2026-09-25 (explicit request) - was previously scaled to 0
+  # directly via `aws ecs update-service`, which a plain terraform apply
+  # would have silently reverted back to 1 (the state Terraform's own
+  # config still expected) the next time infra touched this service -
+  # set here so the paused state actually persists through Terraform,
+  # same pattern as the CloudWatch schedule "Paused" comments elsewhere
+  # in this file. Set back to 1 to resume.
+  desired_count = 0
+  launch_type   = "FARGATE"
 
 
   network_configuration {
@@ -1479,6 +1544,17 @@ resource "aws_ecs_service" "signal_detection_agent" {
   task_definition = aws_ecs_task_definition.signal_detection_agent.arn
   desired_count   = 1
   launch_type     = "FARGATE"
+  # enable_execute_command / deployment_maximum_percent /
+  # deployment_minimum_healthy_percent set explicitly here (2026-09-25) to
+  # match what was actually live in AWS (confirmed via aws ecs
+  # describe-services) rather than the reverse - this service's real
+  # settings had drifted from the previous config's own defaults, and
+  # applying that stale config would have silently disabled ECS Exec
+  # (shell/debug access to the running containers) and changed rollout
+  # behavior as an unrelated side effect of this same apply.
+  enable_execute_command             = true
+  deployment_maximum_percent         = 100
+  deployment_minimum_healthy_percent = 0
 
   network_configuration {
     subnets          = var.private_subnet_ids
@@ -1712,8 +1788,15 @@ resource "aws_ecs_service" "lucky_clarke" {
   name            = "${var.env}-lucky-clarke"
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.lucky_clarke.arn
-  desired_count   = 1
-  launch_type     = "FARGATE"
+  # Stopped 2026-09-25 (explicit request) - was previously scaled to 0
+  # directly via `aws ecs update-service`, which a plain terraform apply
+  # would have silently reverted back to 1 (the state Terraform's own
+  # config still expected) the next time infra touched this service -
+  # set here so the paused state actually persists through Terraform,
+  # same pattern as the CloudWatch schedule "Paused" comments elsewhere
+  # in this file. Set back to 1 to resume.
+  desired_count = 0
+  launch_type   = "FARGATE"
 
 
   network_configuration {
