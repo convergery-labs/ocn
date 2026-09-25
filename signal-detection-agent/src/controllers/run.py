@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import math
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any
@@ -386,16 +385,26 @@ async def run_macro_signal_pipeline(job_id: int, from_date: str, to_date: str) -
         if series_id not in THRESHOLDS:
             continue  # tracked in news-retrieval's universe but not yet wired into THRESHOLDS
         zscores = compute_series_zscores(observations)
+        sorted_obs_dates = sorted(o["observation_date"] for o in observations if o.get("value") is not None)
         for obs_date, (change_bp, z) in zscores.items():
             if not (from_dt <= obs_date <= to_dt):
                 continue
             move = SeriesMove(series_id, d1d_bp=change_bp, z=z)
             tier_result = tier_series_move(move)
             obs_for_date = next((o for o in observations if o["observation_date"] == obs_date), None)
+            # Real ask (frontend ticket, 2026-09-25, job 262): prior_value
+            # populated for every series, not derived by the caller from
+            # value - move_bp/100 - the immediately preceding real
+            # observation in this series' own history, same day used to
+            # compute change_bp above (compute_daily_changes.py).
+            prior_idx = sorted_obs_dates.index(obs_date) - 1 if obs_date in sorted_obs_dates else -1
+            prior_obs_date = sorted_obs_dates[prior_idx] if prior_idx >= 0 else None
+            prior_obs = next((o for o in observations if o["observation_date"] == prior_obs_date), None) if prior_obs_date else None
             tiered_by_date.setdefault(obs_date, {})[series_id] = from_tier_result(
                 tier_result,
                 value=obs_for_date["value"] if obs_for_date else None,
                 move_bp=change_bp,
+                prior_value=prior_obs["value"] if prior_obs else None,
                 source=obs_for_date.get("source") if obs_for_date else None,
                 knowledge_time_confidence=obs_for_date.get("knowledge_time_confidence") if obs_for_date else None,
             )
@@ -413,6 +422,7 @@ async def run_macro_signal_pipeline(job_id: int, from_date: str, to_date: str) -
     if "DFF" in by_series:
         dff_observations = by_series["DFF"]
         dff_zscores = compute_series_zscores(dff_observations)
+        dff_sorted_obs_dates = sorted(o["observation_date"] for o in dff_observations if o.get("value") is not None)
         for obs_date, (change_bp, z) in dff_zscores.items():
             if not (from_dt <= obs_date <= to_dt):
                 continue
@@ -437,10 +447,14 @@ async def run_macro_signal_pipeline(job_id: int, from_date: str, to_date: str) -
             )
             tier_result = tier_series_move(move)
             dff_obs_for_date = next((o for o in dff_observations if o["observation_date"] == obs_date), None)
+            dff_prior_idx = dff_sorted_obs_dates.index(obs_date) - 1 if obs_date in dff_sorted_obs_dates else -1
+            dff_prior_obs_date = dff_sorted_obs_dates[dff_prior_idx] if dff_prior_idx >= 0 else None
+            dff_prior_obs = next((o for o in dff_observations if o["observation_date"] == dff_prior_obs_date), None) if dff_prior_obs_date else None
             tiered_by_date.setdefault(obs_date, {})["DFF"] = from_tier_result(
                 tier_result,
                 value=dff_obs_for_date["value"] if dff_obs_for_date else None,
                 move_bp=change_bp,
+                prior_value=dff_prior_obs["value"] if dff_prior_obs else None,
                 source=dff_obs_for_date.get("source") if dff_obs_for_date else None,
                 knowledge_time_confidence=dff_obs_for_date.get("knowledge_time_confidence") if dff_obs_for_date else None,
             )
@@ -470,7 +484,7 @@ async def run_macro_signal_pipeline(job_id: int, from_date: str, to_date: str) -
                 value=representative_obs["value"] if representative_obs else None,
                 move_bp=sep_shift.shift_bp if sep_shift else None,
                 target_year=sep_shift.target_year if sep_shift else None,
-                prior_value=sep_shift.prior_value if sep_shift else None,
+                prior_value=str(sep_shift.prior_value) if sep_shift else None,
                 source=representative_obs.get("source") if representative_obs else None,
                 knowledge_time_confidence=representative_obs.get("knowledge_time_confidence") if representative_obs else None,
             )
@@ -551,7 +565,13 @@ async def run_macro_signal_pipeline(job_id: int, from_date: str, to_date: str) -
             "members": [
                 {
                     "series_id": m.series_id, "value": m.value,
-                    "move_bp": math.trunc(m.move_bp * 100) / 100 if m.move_bp is not None else None,
+                    # No rounding/truncation - move_bp is exact as of the
+                    # Decimal fix in macro_signal_zscore.py/
+                    # macro_signal_fedtarmd.py (real frontend ticket,
+                    # 2026-09-25: a prior truncation step here made float
+                    # noise WORSE, e.g. 4.999999999999996 truncated to
+                    # 4.99 instead of the real exact value 5).
+                    "move_bp": m.move_bp,
                     "target_year": m.target_year, "prior_value": m.prior_value,
                     "z_score": m.z_score, "tier": m.tier.value,
                     "classification_basis": m.reason,
@@ -609,12 +629,16 @@ async def run_macro_signal_pipeline(job_id: int, from_date: str, to_date: str) -
             # Real ask (frontend ticket, 2026-09-25, item 7 - "all numbers
             # must be correct and consistent"): a UI's Current/Prior/
             # Change display needs the actual two readings move_bp was
-            # computed from, not just the delta - current_values is
-            # `value` (already the current reading for every series);
-            # prior_values is only populated for FEDTARMD (the one series
-            # whose prior reading isn't value - move_bp/100, since each
-            # SEP release is a genuinely distinct snapshot, not a daily
-            # series - see SuppressibleResult.prior_value's own docstring).
+            # computed from, not just the delta. current_values is
+            # `value` (the current reading); prior_values is the
+            # immediately preceding real observation for every standard
+            # series, or the prior SEP release's own value for FEDTARMD
+            # (see SuppressibleResult.prior_value's own docstring) -
+            # populated for every series in member_series, not just
+            # FEDTARMD (CONFIRMED LIVE a frontend found it missing on 28
+            # of 29 events - it was only ever wired for FEDTARMD before
+            # this fix). Both are strings, matching `value`'s own
+            # convention, not bare floats.
             "current_values": {m["series_id"]: m["value"] for m in event_payload["members"]},
             "prior_values": {
                 m["series_id"]: m["prior_value"]

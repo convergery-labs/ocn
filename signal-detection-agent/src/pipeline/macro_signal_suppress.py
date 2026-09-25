@@ -47,19 +47,19 @@ class SuppressibleResult:
     tier: Tier
     z_score: Optional[float]
     reason: str
-    value: Optional[float] = None          # native-unit level, needed for identity checks
+    value: Optional[str] = None            # native-unit level, needed for identity checks - the raw string as read from macro_observations, not float(), so it prints exactly (e.g. "4.1", not 4.1)
     move_bp: Optional[float] = None        # real change (d1d_bp or sep_median_shift_bp) - what INTERPRET should call "the move"
     target_year: Optional[int] = None      # FEDTARMD-only: which projected year move_bp/value refer to (CONFIRMED LIVE gap: a frontend consuming a FEDTARMD event had no field saying which year "the medium-run fed funds target" meant)
-    prior_value: Optional[float] = None    # FEDTARMD-only: the prior SEP's own value for target_year - for every OTHER series, prior is already derivable as value - move_bp/100, so only FEDTARMD (a genuinely different release each time, not a daily series) needs this stored explicitly
+    prior_value: Optional[str] = None      # The immediately preceding real observation (standard series) or the prior SEP release's own value for target_year (FEDTARMD) - as a string, matching `value`'s own convention (CONFIRMED LIVE a frontend saw current_values as strings but prior_values as a bare float, an inconsistency, and missing entirely on 28 of 29 events since it was only ever wired for FEDTARMD before this fix)
     suppressed_by: Optional[str] = None
     source: Optional[str] = None                       # 'fred' | 'fred_alfred' | 'treasury_fiscal'
     knowledge_time_confidence: Optional[str] = None     # 'verified' | 'known_lag'
 
 
 def from_tier_result(
-    tr: TierResult, value: Optional[float] = None,
+    tr: TierResult, value: Optional[str] = None,
     *, move_bp: Optional[float] = None, target_year: Optional[int] = None,
-    prior_value: Optional[float] = None, source: Optional[str] = None,
+    prior_value: Optional[str] = None, source: Optional[str] = None,
     knowledge_time_confidence: Optional[str] = None,
 ) -> SuppressibleResult:
     return SuppressibleResult(

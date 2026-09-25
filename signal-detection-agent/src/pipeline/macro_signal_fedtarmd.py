@@ -20,20 +20,29 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal
 from typing import Any, Optional
 
 
-def _target_year_series(observations: list[dict[str, Any]]) -> dict[date, dict[int, float]]:
+def _target_year_series(observations: list[dict[str, Any]]) -> dict[date, dict[int, Decimal]]:
     """Groups FEDTARMD observations by SEP release (vintage), each a
-    {target_year: median} dict. observations must all be for FEDTARMD."""
-    by_release: dict[date, dict[int, float]] = {}
+    {target_year: median} dict. observations must all be for FEDTARMD.
+
+    Decimal(str(value)), not float(value) - CONFIRMED LIVE (real
+    frontend ticket, 2026-09-25): float arithmetic on these values
+    produced a shift_bp of 49.99999999999996 for a real exact 50bp
+    move, and a later truncation step to clean that up made it worse
+    (truncating landed on 49.99, not 50). Postgres numeric already
+    serializes exactly as a decimal string - Decimal on that string is
+    exact, so no rounding/truncation is needed anywhere downstream."""
+    by_release: dict[date, dict[int, Decimal]] = {}
     for o in observations:
         vintage = o.get("vintage")
         obs_date = o.get("observation_date")
         value = o.get("value")
         if vintage is None or obs_date is None or value is None:
             continue
-        by_release.setdefault(vintage, {})[obs_date.year] = float(value)
+        by_release.setdefault(vintage, {})[obs_date.year] = Decimal(str(value))
     return by_release
 
 
@@ -50,8 +59,8 @@ class SepMedianShift:
     against)."""
     shift_bp: float
     target_year: int
-    current_value: float
-    prior_value: float
+    current_value: Decimal
+    prior_value: Decimal
     prior_release_date: date
 
 
@@ -91,7 +100,7 @@ def compute_sep_median_shift_bp(
 
     current_value = current[target_year]
     prior_value = prior[target_year]
-    shift_bp = (current_value - prior_value) * 100
+    shift_bp = float((current_value - prior_value) * 100)
     return SepMedianShift(
         shift_bp=shift_bp, target_year=target_year,
         current_value=current_value, prior_value=prior_value,
