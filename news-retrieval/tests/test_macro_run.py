@@ -132,7 +132,30 @@ def test_get_macro_series_returns_full_universe_with_valid_auth():
     body = resp.json()
     assert body["total"] == len(MACRO_SERIES_UNIVERSE) == 46
     assert len(body["series"]) == 46
-    assert {"series_id": "DGS10", "channel": "discount_rate"} in body["series"]
+    assert {
+        "series_id": "DGS10", "channel": "discount_rate",
+        "name": "10-Year Treasury Yield", "unit": "percent",
+    } in body["series"]
+
+
+def test_get_macro_series_every_series_has_a_name_and_unit():
+    """Real ask (frontend ticket, 2026-09-25): /macro/series originally
+    returned only series_id/channel, limiting the UI to raw FRED codes
+    (T10Y2Y) and raw native-unit deltas (+0.05) instead of a real name
+    and "+5bp". Checks every one of the 46 series has a non-empty name
+    and unit, not just a spot-checked sample."""
+    from fastapi.testclient import TestClient
+    import app as app_module
+
+    client = TestClient(app_module.create_app())
+    resp = client.get(
+        "/macro/series",
+        headers={"x-ocn-caller": _admin_caller_header()},
+    )
+    assert resp.status_code == 200
+    for s in resp.json()["series"]:
+        assert s["name"] and isinstance(s["name"], str), s
+        assert s["unit"] and isinstance(s["unit"], str), s
 
 
 def test_get_macro_observations_requires_auth():

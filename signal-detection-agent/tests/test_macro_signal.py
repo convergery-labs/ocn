@@ -973,6 +973,44 @@ def test_valid_payload_passes():
     assert result == _VALID
 
 
+def test_valid_payload_passes_with_matching_members():
+    members = [{"series_id": "DGS1", "value": 4.45, "move_bp": 11.0, "z_score": 1.6, "tier": "WEAK"}]
+    result = validate_interpretation(_VALID, expected_channel="policy_path", members=members)
+    assert result == _VALID
+
+
+def test_transmission_bp_number_mismatching_real_move_bp_is_rejected():
+    """Regression test for the exact real bug (2026-09-24 audit, T10Y2Y):
+    "steepened by 31bp" was accepted for a real +5bp move because
+    nothing ever cross-checked the written number against move_bp. This
+    is the fix - the same wrong-number sentence must now fail
+    validation (member's real move_bp is 5.0, sentence claims 31bp,
+    outside the 1bp tolerance)."""
+    bad = {**_VALID, "transmission": "The 10y-2y Treasury spread steepened by 31bp, raising the discount rate."}
+    members = [{"series_id": "T10Y2Y", "value": 0.31, "move_bp": 5.0, "z_score": 1.5, "tier": "WEAK"}]
+    with pytest.raises(InterpretationValidationError, match="numbers don't match"):
+        validate_interpretation(bad, expected_channel="policy_path", members=members)
+
+
+def test_transmission_direction_word_mismatching_move_bp_sign_is_rejected():
+    bad = {**_VALID, "transmission": "The 1-year Treasury yield fell 11bp, easing the policy path."}
+    members = [{"series_id": "DGS1", "value": 4.45, "move_bp": 11.0, "z_score": 1.6, "tier": "WEAK"}]
+    with pytest.raises(InterpretationValidationError, match="numbers don't match"):
+        validate_interpretation(bad, expected_channel="policy_path", members=members)
+
+
+def test_transmission_bp_number_within_tolerance_of_truncated_move_bp_passes():
+    """move_bp is truncated (not rounded) to 2dp before it ever reaches
+    this point (see controllers.run's own math.trunc choice) - a
+    sentence written against the "clean" whole-bp figure (50bp) must
+    still pass against the real stored value (49.99), not be rejected
+    over sub-bp truncation noise."""
+    ok = {**_VALID, "transmission": "The 2027 median dot in the FOMC SEP rose 50bp, raising the expected policy path."}
+    members = [{"series_id": "FEDTARMD", "value": 4.1, "move_bp": 49.99, "z_score": None, "tier": "HIGH"}]
+    result = validate_interpretation(ok, expected_channel="policy_path", members=members)
+    assert result == ok
+
+
 def test_missing_required_field_raises():
     bad = dict(_VALID)
     del bad["assets"]
@@ -1420,6 +1458,54 @@ def test_run_macro_signal_pipeline_interpret_payload_carries_real_move_not_level
     assert round(member["move_bp"]) != round(member["value"] * 100), (
         "move_bp must never equal value*100 - that's exactly the bug (level misread as move)"
     )
+
+
+def test_run_macro_signal_pipeline_fedtarmd_event_carries_classification_basis_and_rounded_move_bp():
+    """Real frontend follow-up ticket (after job 258, 2026-09-25): the
+    FOMC event's move_bp/target_years/text are now correct, but (1)
+    z_scores.FEDTARMD is still null with nothing explaining WHAT rule
+    made it HIGH, and (2) move_bp arrives with float noise (e.g.
+    4.999999999999999, 6.00000000000005). Fixes: classification_basis
+    (TierResult.reason, e.g. "sep_median_shift_50.0bp_ge_25_no_zgate")
+    now stored per series, and move_bp is truncated to 2 decimal places
+    before it ever reaches the interpret payload or stored metadata -
+    truncation (not rounding) per explicit user choice, so
+    49.99999999999996 reads as 49.99, not rounded up to 50.0. Asserts on
+    the actual insert_macro_signal_event call (the real stored-metadata
+    boundary), not just the interpret payload."""
+    snapshots = {
+        date(2026, 6, 17): {2026: 3.8, 2027: 3.6, 2028: 3.4},
+        date(2026, 9, 16): {2026: 4.1, 2027: 4.1, 2028: 3.9, 2029: 3.6},
+    }
+    obs = _observations_from_snapshots(snapshots)
+
+    fake_interpretation = {
+        "channel": "policy_path", "entry_point": "FOMC decision",
+        "assets": ["treasuries"], "transmission": "The 2027 median dot rose 50bp.",
+        "suspect": False, "suspect_reason": None,
+    }
+
+    with patch("controllers.run.get_macro_observations", new=AsyncMock(return_value=obs)), \
+         patch("controllers.run.interpret_events_batch") as mock_interpret, \
+         patch("controllers.run.update_job_status"), \
+         patch("controllers.run.get_existing_macro_signal_source_ids", return_value=set()), \
+         patch("controllers.run.calendar_staleness_warning", return_value=None), \
+         patch("controllers.run.insert_macro_signal_event") as mock_insert:
+
+        def _fake_interpret(payloads):
+            return [{"event": p, "interpretation": fake_interpretation} for p in payloads]
+        mock_interpret.side_effect = _fake_interpret
+
+        from controllers.run import run_macro_signal_pipeline
+        asyncio.run(run_macro_signal_pipeline(job_id=31, from_date="2026-09-16", to_date="2026-09-16"))
+
+    interpreted_calls = [c for c in mock_insert.call_args_list if c.args[2] is not None]
+    assert len(interpreted_calls) == 1
+    stored_event = interpreted_calls[0].args[1]
+    assert stored_event["z_scores"]["FEDTARMD"] is None  # still null by design, no z-gate rule
+    assert stored_event["classification_basis"]["FEDTARMD"] is not None
+    assert "sep_median_shift" in stored_event["classification_basis"]["FEDTARMD"]
+    assert stored_event["move_bp"]["FEDTARMD"] == 49.99  # truncated to 2dp (real value was 49.99999999999996)
 
 
 def test_run_macro_signal_pipeline_dff_past_calendar_horizon_is_skipped_not_guessed():

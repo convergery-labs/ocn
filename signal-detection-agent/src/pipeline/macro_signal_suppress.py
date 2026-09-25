@@ -50,6 +50,7 @@ class SuppressibleResult:
     value: Optional[float] = None          # native-unit level, needed for identity checks
     move_bp: Optional[float] = None        # real change (d1d_bp or sep_median_shift_bp) - what INTERPRET should call "the move"
     target_year: Optional[int] = None      # FEDTARMD-only: which projected year move_bp/value refer to (CONFIRMED LIVE gap: a frontend consuming a FEDTARMD event had no field saying which year "the medium-run fed funds target" meant)
+    prior_value: Optional[float] = None    # FEDTARMD-only: the prior SEP's own value for target_year - for every OTHER series, prior is already derivable as value - move_bp/100, so only FEDTARMD (a genuinely different release each time, not a daily series) needs this stored explicitly
     suppressed_by: Optional[str] = None
     source: Optional[str] = None                       # 'fred' | 'fred_alfred' | 'treasury_fiscal'
     knowledge_time_confidence: Optional[str] = None     # 'verified' | 'known_lag'
@@ -58,11 +59,13 @@ class SuppressibleResult:
 def from_tier_result(
     tr: TierResult, value: Optional[float] = None,
     *, move_bp: Optional[float] = None, target_year: Optional[int] = None,
-    source: Optional[str] = None, knowledge_time_confidence: Optional[str] = None,
+    prior_value: Optional[float] = None, source: Optional[str] = None,
+    knowledge_time_confidence: Optional[str] = None,
 ) -> SuppressibleResult:
     return SuppressibleResult(
         tr.series_id, tr.tier, tr.z_score, tr.reason, value=value, move_bp=move_bp,
-        target_year=target_year, source=source, knowledge_time_confidence=knowledge_time_confidence,
+        target_year=target_year, prior_value=prior_value, source=source,
+        knowledge_time_confidence=knowledge_time_confidence,
     )
 
 

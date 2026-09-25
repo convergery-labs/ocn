@@ -27,20 +27,87 @@ from models.macro_observations import get_macro_observations
 
 router = APIRouter()
 
+# Real ask (frontend ticket, 2026-09-25): /macro/series returned only
+# series_id + channel, so the UI could only show a raw FRED code
+# (T10Y2Y) and a raw native-unit change (+0.05) instead of a real name
+# and "+5bp". Display-only metadata, kept separate from
+# MACRO_SERIES_UNIVERSE (news-retrieval's own fetch config - source_type/
+# revised flags the fetcher needs, not display concerns) rather than
+# adding display fields to that dict. Every entry here must have a
+# MACRO_SERIES_UNIVERSE counterpart - checked once at import time below
+# so a future series addition can't silently ship without a display name.
+MACRO_SERIES_DISPLAY: dict[str, dict[str, str]] = {
+    "DFII10": {"name": "10-Year TIPS Yield", "unit": "percent"},
+    "DFII5": {"name": "5-Year TIPS Yield", "unit": "percent"},
+    "T10YIE": {"name": "10-Year Breakeven Inflation Rate", "unit": "percent"},
+    "T5YIFR": {"name": "5-Year, 5-Year Forward Inflation Expectation", "unit": "percent"},
+    "T10Y2Y": {"name": "10Y-2Y Treasury Spread", "unit": "percent"},
+    "T10Y3M": {"name": "10Y-3M Treasury Spread", "unit": "percent"},
+    "DGS10": {"name": "10-Year Treasury Yield", "unit": "percent"},
+    "DGS3MO": {"name": "3-Month Treasury Yield", "unit": "percent"},
+    "DGS2": {"name": "2-Year Treasury Yield", "unit": "percent"},
+    "DGS1": {"name": "1-Year Treasury Yield", "unit": "percent"},
+    "DFF": {"name": "Effective Federal Funds Rate", "unit": "percent"},
+    "DFEDTARU": {"name": "Federal Funds Target Rate (Upper Bound)", "unit": "percent"},
+    "FEDTARMD": {"name": "Federal Funds Rate Median Projection (SEP)", "unit": "percent"},
+    "BAA10Y": {"name": "Moody's Baa Corporate Bond Spread over 10-Year Treasury", "unit": "percent"},
+    "NFCI": {"name": "Chicago Fed National Financial Conditions Index", "unit": "index"},
+    "ANFCI": {"name": "Chicago Fed Adjusted National Financial Conditions Index", "unit": "index"},
+    "NFCICREDIT": {"name": "Chicago Fed NFCI Credit Subindex", "unit": "index"},
+    "DRTSCILM": {"name": "Net % of Banks Tightening C&I Loan Standards", "unit": "percent"},
+    "WALCL": {"name": "Federal Reserve Total Assets", "unit": "millions_usd"},
+    "RRPONTSYD": {"name": "Overnight Reverse Repurchase Agreements", "unit": "billions_usd"},
+    "WTREGEN": {"name": "Treasury General Account Balance", "unit": "billions_usd"},
+    "WRESBAL": {"name": "Reserve Balances with Federal Reserve Banks", "unit": "billions_usd"},
+    "TOTRESNS": {"name": "Total Reserves of Depository Institutions", "unit": "billions_usd"},
+    "DTWEXBGS": {"name": "Trade Weighted U.S. Dollar Index (Broad)", "unit": "index"},
+    "ICSA": {"name": "Initial Jobless Claims", "unit": "count"},
+    "WEI": {"name": "Weekly Economic Index", "unit": "percent"},
+    "GACDFSA066MSFRBPHI": {"name": "Philadelphia Fed Coincident Diffusion Index", "unit": "index"},
+    "NEWORDER": {"name": "Manufacturers' New Orders: Nondefense Capital Goods ex-Aircraft", "unit": "millions_usd"},
+    "close_today_bal": {"name": "Treasury Daily Closing Cash Balance", "unit": "millions_usd"},
+    "CPIAUCSL": {"name": "Consumer Price Index (All Items)", "unit": "index"},
+    "CPILFESL": {"name": "Core Consumer Price Index (ex Food & Energy)", "unit": "index"},
+    "PCEPILFE": {"name": "Core PCE Price Index", "unit": "index"},
+    "PAYEMS": {"name": "Nonfarm Payrolls", "unit": "thousands"},
+    "UNRATE": {"name": "Unemployment Rate", "unit": "percent"},
+    "SAHMREALTIME": {"name": "Sahm Rule Recession Indicator", "unit": "percentage_points"},
+    "JTSJOL": {"name": "Job Openings (JOLTS)", "unit": "thousands"},
+    "CCSA": {"name": "Continued Jobless Claims", "unit": "count"},
+    "RSAFS": {"name": "Retail Sales", "unit": "millions_usd"},
+    "HOUST": {"name": "Housing Starts", "unit": "thousands"},
+    "PERMIT": {"name": "Building Permits", "unit": "thousands"},
+    "MORTGAGE30US": {"name": "30-Year Fixed Mortgage Rate", "unit": "percent"},
+    "CSUSHPINSA": {"name": "S&P/Case-Shiller Home Price Index", "unit": "index"},
+    "TOTALSL": {"name": "Total Consumer Credit Outstanding", "unit": "billions_usd"},
+    "DRCCLACBS": {"name": "Credit Card Delinquency Rate", "unit": "percent"},
+    "VIXCLS": {"name": "CBOE Volatility Index (VIX)", "unit": "index"},
+    "VXVCLS": {"name": "CBOE 3-Month Volatility Index", "unit": "index"},
+}
+
+_missing_display = [s["series_id"] for s in MACRO_SERIES_UNIVERSE if s["series_id"] not in MACRO_SERIES_DISPLAY]
+assert not _missing_display, f"MACRO_SERIES_DISPLAY is missing entries for: {_missing_display}"
+
 
 @router.get("/macro/series")
 def list_macro_series(
     caller: dict[str, Any] = Depends(require_auth),
 ) -> dict:
-    """The full tracked series universe (series_id + channel), straight
-    from macro_signal_fetch.MACRO_SERIES_UNIVERSE - no DB query, this is
-    a fixed in-memory constant. Added for the frontend's "Coverage X / Y
+    """The full tracked series universe (series_id, channel, display
+    name, unit), straight from macro_signal_fetch.MACRO_SERIES_UNIVERSE
+    + this module's own MACRO_SERIES_DISPLAY map - no DB query, both are
+    fixed in-memory constants. Added for the frontend's "Coverage X / Y
     series" display: X (series reporting in a window) is already
     countable from /results rows, but nothing exposed Y (total tracked)
-    until this endpoint."""
+    until this endpoint; name/unit added on a follow-up ticket so the UI
+    isn't limited to showing raw FRED codes and raw native-unit deltas."""
     return {
         "series": [
-            {"series_id": s["series_id"], "channel": s["channel"]}
+            {
+                "series_id": s["series_id"], "channel": s["channel"],
+                "name": MACRO_SERIES_DISPLAY[s["series_id"]]["name"],
+                "unit": MACRO_SERIES_DISPLAY[s["series_id"]]["unit"],
+            }
             for s in MACRO_SERIES_UNIVERSE
         ],
         "total": len(MACRO_SERIES_UNIVERSE),

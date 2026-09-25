@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any
@@ -469,6 +470,7 @@ async def run_macro_signal_pipeline(job_id: int, from_date: str, to_date: str) -
                 value=representative_obs["value"] if representative_obs else None,
                 move_bp=sep_shift.shift_bp if sep_shift else None,
                 target_year=sep_shift.target_year if sep_shift else None,
+                prior_value=sep_shift.prior_value if sep_shift else None,
                 source=representative_obs.get("source") if representative_obs else None,
                 knowledge_time_confidence=representative_obs.get("knowledge_time_confidence") if representative_obs else None,
             )
@@ -548,8 +550,11 @@ async def run_macro_signal_pipeline(job_id: int, from_date: str, to_date: str) -
             "channel": event.channel.value,
             "members": [
                 {
-                    "series_id": m.series_id, "value": m.value, "move_bp": m.move_bp,
-                    "target_year": m.target_year, "z_score": m.z_score, "tier": m.tier.value,
+                    "series_id": m.series_id, "value": m.value,
+                    "move_bp": math.trunc(m.move_bp * 100) / 100 if m.move_bp is not None else None,
+                    "target_year": m.target_year, "prior_value": m.prior_value,
+                    "z_score": m.z_score, "tier": m.tier.value,
+                    "classification_basis": m.reason,
                 }
                 for m in event.members
             ],
@@ -600,6 +605,30 @@ async def run_macro_signal_pipeline(job_id: int, from_date: str, to_date: str) -
             "target_years": {
                 m["series_id"]: m["target_year"]
                 for m in event_payload["members"] if m.get("target_year") is not None
+            },
+            # Real ask (frontend ticket, 2026-09-25, item 7 - "all numbers
+            # must be correct and consistent"): a UI's Current/Prior/
+            # Change display needs the actual two readings move_bp was
+            # computed from, not just the delta - current_values is
+            # `value` (already the current reading for every series);
+            # prior_values is only populated for FEDTARMD (the one series
+            # whose prior reading isn't value - move_bp/100, since each
+            # SEP release is a genuinely distinct snapshot, not a daily
+            # series - see SuppressibleResult.prior_value's own docstring).
+            "current_values": {m["series_id"]: m["value"] for m in event_payload["members"]},
+            "prior_values": {
+                m["series_id"]: m["prior_value"]
+                for m in event_payload["members"] if m.get("prior_value") is not None
+            },
+            # Real ask (frontend ticket, 2026-09-25): a FEDTARMD event is
+            # HIGH with z_scores.FEDTARMD always null (its rule gates on
+            # move_bp, not a z-score - see _fedtarmd_rule), and move_bp/
+            # target_years alone don't say WHICH RULE decided the tier.
+            # classification_basis is TierResult.reason verbatim (e.g.
+            # "sep_median_shift_50.0bp_ge_25_no_zgate") - already computed
+            # at TIER time for every series, just never persisted before.
+            "classification_basis": {
+                m["series_id"]: m["classification_basis"] for m in event_payload["members"]
             },
             # Deduplicated arrays, not a per-series map - the VALUE (which
             # source/confidence) is what matters here, and every member of

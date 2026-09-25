@@ -17,6 +17,7 @@ from typing import Any
 
 import config
 from pipeline.classifier import classify_with_model
+from pipeline.macro_signal_factcheck import check_transmission_matches_real_numbers
 from pipeline.macro_signal_thresholds import Channel
 
 logger = logging.getLogger(__name__)
@@ -67,19 +68,31 @@ def load_system_prompt() -> str:
 def build_user_prompt(event: dict[str, Any]) -> str:
     """Serializes a collapsed event's facts into the user-turn prompt.
     `event` shape: {release_id, knowledge_time (ISO string), channel,
-    members: [{series_id, value, move_bp, target_year, z_score, tier}],
-    dfedtaru_ctx_bp?}
+    members: [{series_id, value, move_bp, target_year, z_score, tier,
+    classification_basis}], dfedtaru_ctx_bp?}
     """
     import json
     return json.dumps(event, indent=2, default=str)
 
 
-def validate_interpretation(payload: dict[str, Any], *, expected_channel: str) -> dict[str, Any]:
+def validate_interpretation(
+    payload: dict[str, Any], *, expected_channel: str, members: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Mirrors classifier.py's validate_classification() role: required
     keys present, enum membership, cross-field consistency, banned-language
     scan. Raises InterpretationValidationError on any violation - callers
     should skip the event, never fabricate a fallback sentence (there's no
-    safe default the way WEAK is a safe default tier)."""
+    safe default the way WEAK is a safe default tier).
+
+    members (real event.members dicts - series_id/value/move_bp/z_score/
+    tier), when given, are cross-checked against `transmission`'s own bp
+    figures and direction words (real frontend ticket item 7, 2026-09-25:
+    "all numbers must be correct and consistent with each other" - the
+    original "31bp for a 5bp move" T10Y2Y bug would have been caught
+    here). Optional (defaults to no check) only so existing unit tests
+    that construct a bare payload without a real event don't all need
+    updating - every real call site in interpret_event/interpret_events_
+    batch always passes it."""
     missing = [f for f in _REQUIRED_FIELDS if f not in payload]
     if missing:
         raise InterpretationValidationError(f"Missing required fields: {missing}")
@@ -151,6 +164,13 @@ def validate_interpretation(payload: dict[str, Any], *, expected_channel: str) -
             f"move (violates 'it never classifies'): {tier_commentary_hits}"
         )
 
+    if members is not None:
+        fact_check = check_transmission_matches_real_numbers(transmission, members)
+        if not fact_check.ok:
+            raise InterpretationValidationError(
+                f"transmission's numbers don't match the real event data: {fact_check.problems}"
+            )
+
     return payload
 
 
@@ -198,7 +218,7 @@ def interpret_event(
     expected_channel = event["channel"]
 
     def _validator(payload: dict[str, Any]) -> dict[str, Any]:
-        return validate_interpretation(payload, expected_channel=expected_channel)
+        return validate_interpretation(payload, expected_channel=expected_channel, members=event["members"])
 
     last_exc: Exception | None = None
     for attempt in range(1, max_attempts + 1):

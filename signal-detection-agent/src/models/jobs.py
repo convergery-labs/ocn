@@ -349,6 +349,13 @@ def insert_macro_signal_event(
     "which projected year does this event's number refer to", since
     FEDTARMD's own text ("the medium-run fed funds target") never named
     a year and the frontend had no field to resolve it from.
+
+    metadata.classification_basis is a per-series map of TierResult.
+    reason verbatim (e.g. "sep_median_shift_50.0bp_ge_25_no_zgate") -
+    already computed at TIER time for every series, just never
+    persisted before. Answers "what rule/metric made this HIGH" for a
+    series whose z_score is null by design (FEDTARMD's no-z-gate
+    exception being the one live case today).
     """
     if interpretation is not None:
         source_id = f"{event['release_id']}-{event.get('channel')}-{event['knowledge_time']}"
@@ -366,6 +373,9 @@ def insert_macro_signal_event(
             "z_scores": event.get("z_scores"),
             "move_bp": event.get("move_bp"),
             "target_years": event.get("target_years"),
+            "current_values": event.get("current_values"),
+            "prior_values": event.get("prior_values"),
+            "classification_basis": event.get("classification_basis"),
             "sources": event.get("sources"),
             "knowledge_time_confidences": event.get("knowledge_time_confidences"),
             "suppressed_by": None,
