@@ -202,6 +202,26 @@ def expire_articles(domain: str, days: int) -> None:
     logger.info("[EXPIRE] domain=%s days=%d deleted=%d", domain, days, deleted)
 
 
+@cli.command("fail-stuck-runs")
+@click.option(
+    "--max-hours", default=3, show_default=True,
+    help="Mark any run still 'running' after this many hours as failed. "
+    "Meant to run on its own schedule (independent of server restarts) - "
+    "confirmed live (2026-09-25, run_id=472) that a scheduled fetch can "
+    "die silently with no exception/traceback and leave its run row stuck "
+    "in 'running' indefinitely, since nothing else revisits it once the "
+    "process is gone.",
+)
+def fail_stuck_runs_cmd(max_hours: int) -> None:
+    """Clean up any run stuck in 'running' past the given age. Runs to
+    completion and exits."""
+    from models.runs import fail_stuck_runs
+
+    init_db()
+    failed_ids = fail_stuck_runs(max_hours)
+    logger.info("[WATCHDOG] max_hours=%d marked_failed=%s", max_hours, failed_ids)
+
+
 @cli.command("poll-market")
 @click.option(
     "--mode",

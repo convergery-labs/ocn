@@ -67,7 +67,8 @@ def load_system_prompt() -> str:
 def build_user_prompt(event: dict[str, Any]) -> str:
     """Serializes a collapsed event's facts into the user-turn prompt.
     `event` shape: {release_id, knowledge_time (ISO string), channel,
-    members: [{series_id, change, unit, z_score, tier}], dfedtaru_ctx_bp?}
+    members: [{series_id, value, move_bp, target_year, z_score, tier}],
+    dfedtaru_ctx_bp?}
     """
     import json
     return json.dumps(event, indent=2, default=str)

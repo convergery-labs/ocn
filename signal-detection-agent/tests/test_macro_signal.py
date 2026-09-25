@@ -650,7 +650,8 @@ def test_real_shift_2026_09_vs_2026_06_matches_hand_computed_value():
     obs = _observations_from_snapshots(_REAL_SNAPSHOTS)
     shift = compute_sep_median_shift_bp(obs, date(2026, 9, 16))
     assert shift is not None
-    assert abs(shift - 50.0) < 1e-6
+    assert abs(shift.shift_bp - 50.0) < 1e-6
+    assert shift.target_year == 2027
 
 
 def test_real_shift_2025_09_vs_2025_06_matches_hand_computed_value():
@@ -659,7 +660,8 @@ def test_real_shift_2025_09_vs_2025_06_matches_hand_computed_value():
     obs = _observations_from_snapshots(_REAL_SNAPSHOTS)
     shift = compute_sep_median_shift_bp(obs, date(2025, 9, 17))
     assert shift is not None
-    assert abs(shift - (-20.0)) < 1e-6
+    assert abs(shift.shift_bp - (-20.0)) < 1e-6
+    assert shift.target_year == 2026
 
 
 def test_no_shift_computable_without_a_prior_release():
@@ -688,17 +690,20 @@ def test_picks_nearest_common_year_when_release_plus_one_missing():
     obs = _observations_from_snapshots(snapshots)
     shift = compute_sep_median_shift_bp(obs, date(2025, 6, 1))
     assert shift is not None
-    assert abs(shift - 20.0) < 1e-6  # 2027: 3.2 - 3.0 = +0.2pp = +20bp (nearest common year used since 2026 absent)
+    assert abs(shift.shift_bp - 20.0) < 1e-6  # 2027: 3.2 - 3.0 = +0.2pp = +20bp (nearest common year used since 2026 absent)
+    assert shift.target_year == 2027
 
 
 def test_crossing_calendar_year_boundary_does_not_silently_compare_wrong_years():
     """Regression test for the exact bug found live before this module
-    existed: Dec SEP (year=2025, 'next year relative to itself'=2026)
-    vs the following March SEP (year=2026, 'next year relative to
-    itself'=2027) must NOT be compared as if they were the same target
-    year - this test constructs that exact boundary-crossing pair and
-    confirms the SAME target year (2027, the one they share) is used,
-    not a naive relative-year mismatch."""
+    existed: comparing "each release's own next year relative to
+    itself" would take Dec 2025's next-year (2026) against March
+    2026's next-year (2027) - different calendar years, a false
+    comparison. The real rule is target_year = PRIOR release's
+    year+1 (2025+1=2026 here), evaluated against what the CURRENT
+    release says about that same year - this test confirms 2026 (not
+    2027) is used, and that both releases' real 2026 values feed the
+    shift, not a naive same-offset-from-each-release mismatch."""
     snapshots = {
         date(2025, 12, 10): {2026: 3.5, 2027: 3.2},
         date(2026, 3, 18): {2026: 3.4, 2027: 3.1, 2028: 3.0},
@@ -706,8 +711,32 @@ def test_crossing_calendar_year_boundary_does_not_silently_compare_wrong_years()
     obs = _observations_from_snapshots(snapshots)
     shift = compute_sep_median_shift_bp(obs, date(2026, 3, 18))
     assert shift is not None
-    # 2027 (release_date.year+1 = 2027) is shared: 3.1 - 3.2 = -0.1pp = -10bp
-    assert abs(shift - (-10.0)) < 1e-6
+    assert shift.target_year == 2026
+    # 2026: 3.4 - 3.5 = -0.1pp = -10bp
+    assert abs(shift.shift_bp - (-10.0)) < 1e-6
+
+
+def test_real_fomc_2026_09_16_event_shift_and_target_year_match_ticket():
+    """Regression test for a real frontend ticket (2026-09-25): the
+    2026-09-16 FOMC event's stored text said "repriced...by 375bp" -
+    a number that matched no real per-year shift and named no target
+    year. Real data (news-retrieval, 2026-06-17 vs 2026-09-16 SEP
+    releases): 2026 +30bp, 2027 +50bp, 2028 +50bp, 2029 new (no prior).
+    The module's own "nearest future year" rule picks 2027 (release_
+    date.year+1 = 2026+1), so this is the exact real event the ticket
+    asked about, locked in against real numbers."""
+    snapshots = {
+        date(2026, 6, 17): {2026: 3.8, 2027: 3.6, 2028: 3.4},
+        date(2026, 9, 16): {2026: 4.1, 2027: 4.1, 2028: 3.9, 2029: 3.6},
+    }
+    obs = _observations_from_snapshots(snapshots)
+    shift = compute_sep_median_shift_bp(obs, date(2026, 9, 16))
+    assert shift is not None
+    assert shift.target_year == 2027
+    assert abs(shift.shift_bp - 50.0) < 1e-6
+    assert abs(shift.current_value - 4.1) < 1e-6
+    assert abs(shift.prior_value - 3.6) < 1e-6
+    assert shift.prior_release_date == date(2026, 6, 17)
 
 # ============================================================================
 # FOMC calendar (DFF inter-meeting detection)  (from test_macro_signal_fomc_calendar.py)
@@ -1341,6 +1370,56 @@ def test_run_macro_signal_pipeline_dff_flat_rate_on_unscheduled_date_is_not_inte
     call_args = mock_interpret.call_args
     if call_args is not None:
         assert call_args.args[0] == []
+
+
+def test_run_macro_signal_pipeline_interpret_payload_carries_real_move_not_level():
+    """Regression test for a real bug found live (2026-09-24 audit):
+    T10Y2Y went 0.26 -> 0.31 (a real +5bp move) but INTERPRET's output
+    said "steepened by 31bp" - the model was only ever given `value`
+    (the raw level, 0.31) and had no real move field, so it silently
+    reported the level as if it were the change. Same root cause
+    produced "widened 92bp" for a real +12bp T10Y3M move, and a
+    fabricated "375bp" for FEDTARMD (whose payload had no move number
+    at all to anchor on). Fixed by threading move_bp (SuppressibleResult)
+    through to the interpret payload - this test locks in that the
+    payload's members carry the real move_bp, distinct from the level,
+    so INTERPRET always has the correct number instead of guessing."""
+    target_date = date(2026, 9, 24)
+    obs = []
+    d = target_date - timedelta(days=400)
+    value = 0.20
+    while d < target_date:
+        obs.append({"series_id": "T10Y2Y", "observation_date": d, "value": round(value, 4)})
+        value += 0.0002 if (d.toordinal() % 2 == 0) else -0.0002
+        d += timedelta(days=1)
+    # Real reported bug: 0.26 -> 0.31, a +5bp move, but `value` (31 once
+    # read as bp) is nowhere close to the real move.
+    obs.append({"series_id": "T10Y2Y", "observation_date": target_date - timedelta(days=1), "value": 0.26})
+    obs.append({"series_id": "T10Y2Y", "observation_date": target_date, "value": 0.31})
+
+    captured_payloads = []
+
+    def _fake_interpret(payloads):
+        captured_payloads.extend(payloads)
+        return []
+
+    with patch("controllers.run.get_macro_observations", new=AsyncMock(return_value=obs)), \
+         patch("controllers.run.interpret_events_batch", side_effect=_fake_interpret), \
+         patch("controllers.run.update_job_status"), \
+         patch("controllers.run.get_existing_macro_signal_source_ids", return_value=set()), \
+         patch("controllers.run.calendar_staleness_warning", return_value=None), \
+         patch("controllers.run.insert_macro_signal_event"):
+        from controllers.run import run_macro_signal_pipeline
+        asyncio.run(run_macro_signal_pipeline(job_id=30, from_date=target_date.isoformat(), to_date=target_date.isoformat()))
+
+    assert captured_payloads, "T10Y2Y's real move should have cleared HIGH/WEAK and reached INTERPRET"
+    member = next(m for p in captured_payloads for m in p["members"] if m["series_id"] == "T10Y2Y")
+    assert member["value"] == 0.31
+    assert member["move_bp"] is not None
+    assert round(member["move_bp"]) == 5, f"expected the real +5bp move, got move_bp={member['move_bp']}"
+    assert round(member["move_bp"]) != round(member["value"] * 100), (
+        "move_bp must never equal value*100 - that's exactly the bug (level misread as move)"
+    )
 
 
 def test_run_macro_signal_pipeline_dff_past_calendar_horizon_is_skipped_not_guessed():

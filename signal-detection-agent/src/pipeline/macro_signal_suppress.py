@@ -30,12 +30,26 @@ class SuppressibleResult:
     macro_signal_fetch.py / macro_release_times.py there) rather than
     recomputed here - this is provenance about where the number came
     from and how certain its publication timing is, not something this
-    layer can determine on its own."""
+    layer can determine on its own.
+
+    move_bp is the real day-over-day change (d1d_bp) for a standard
+    series, or the SEP median shift (sep_median_shift_bp) for FEDTARMD -
+    whichever number tiering actually keyed its HIGH/WEAK decision on.
+    Kept distinct from `value` (the raw level, needed for derived-series
+    identity checks like DGS10 = DFII10 + T10YIE) because CONFIRMED LIVE:
+    without a real move field, INTERPRET was only ever given `value` and
+    silently misread the LEVEL as if it were the move (e.g. T10Y2Y's
+    level 0.31 reported as "steepened by 31bp" when the real move was
+    +5bp; FEDTARMD with no move field at all fabricated "375bp" from
+    nothing traceable) - see project plan history for the live audit
+    that found this."""
     series_id: str
     tier: Tier
     z_score: Optional[float]
     reason: str
     value: Optional[float] = None          # native-unit level, needed for identity checks
+    move_bp: Optional[float] = None        # real change (d1d_bp or sep_median_shift_bp) - what INTERPRET should call "the move"
+    target_year: Optional[int] = None      # FEDTARMD-only: which projected year move_bp/value refer to (CONFIRMED LIVE gap: a frontend consuming a FEDTARMD event had no field saying which year "the medium-run fed funds target" meant)
     suppressed_by: Optional[str] = None
     source: Optional[str] = None                       # 'fred' | 'fred_alfred' | 'treasury_fiscal'
     knowledge_time_confidence: Optional[str] = None     # 'verified' | 'known_lag'
@@ -43,11 +57,12 @@ class SuppressibleResult:
 
 def from_tier_result(
     tr: TierResult, value: Optional[float] = None,
-    *, source: Optional[str] = None, knowledge_time_confidence: Optional[str] = None,
+    *, move_bp: Optional[float] = None, target_year: Optional[int] = None,
+    source: Optional[str] = None, knowledge_time_confidence: Optional[str] = None,
 ) -> SuppressibleResult:
     return SuppressibleResult(
-        tr.series_id, tr.tier, tr.z_score, tr.reason, value=value,
-        source=source, knowledge_time_confidence=knowledge_time_confidence,
+        tr.series_id, tr.tier, tr.z_score, tr.reason, value=value, move_bp=move_bp,
+        target_year=target_year, source=source, knowledge_time_confidence=knowledge_time_confidence,
     )
 
 

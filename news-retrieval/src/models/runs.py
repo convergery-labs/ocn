@@ -208,6 +208,42 @@ def fail_orphaned_runs() -> int:
         return cur.rowcount
 
 
+def fail_stuck_runs(max_hours: int) -> list[int]:
+    """Mark any run stuck in 'running' for longer than max_hours as failed.
+
+    Separate from fail_orphaned_runs() above: that one runs unconditionally
+    at server startup (safe there - nothing should legitimately still be
+    running right after a fresh start), but calling it periodically while
+    the server is up would wrongly kill a run that's genuinely still in
+    progress. This one only touches rows old enough that they cannot be a
+    normal in-flight run - confirmed live (2026-09-25, run_id=472) that a
+    scheduled fetch can die completely silently (no exception, no
+    traceback, no CloudTrail StopTask event - see the -X faulthandler
+    comment on this domain's CloudWatch target in infra/services.tf, added
+    alongside this function for the same incident) and leave its run row
+    stuck in 'running' indefinitely, since nothing else ever revisits it
+    once the process is gone. This is the periodic catch for that case,
+    meant to run on its own schedule (see the CLI's fail-stuck-runs
+    command), not tied to server restarts.
+
+    Returns the ids of the runs that were marked failed.
+    """
+    with get_db() as conn:
+        cur = conn.execute(
+            """
+            UPDATE runs
+            SET status       = 'failed',
+                completed_at = CURRENT_TIMESTAMP,
+                summary      = 'Stuck: no progress for over ' || :max_hours || ' hour(s), marked failed by watchdog'
+            WHERE status = 'running'
+              AND started_at < NOW() - (:max_hours || ' hours')::INTERVAL
+            RETURNING id
+            """,
+            {"max_hours": max_hours},
+        )
+        return [row["id"] for row in cur.fetchall()]
+
+
 def get_running_run_for_domain(domain: str) -> Optional[int]:
     """Return the id of any currently running run for domain, or None."""
     with get_db() as conn:
