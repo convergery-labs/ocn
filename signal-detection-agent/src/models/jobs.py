@@ -368,6 +368,27 @@ def insert_macro_signal_event(
     shows verbatim in "Why did AlphaStreet flag it?" - never derived by
     parsing classification_basis, so it can't drift from the logic that
     actually ran.
+
+    metadata.series_tiers is a per-series map of each member's OWN tier
+    (signal/weak_signal/noise, same vocabulary as the row-level
+    signal_detection column below) - added because signal_detection
+    itself is fundamentally event-level, not per-series: it's the EVENT's
+    rolled-up MAX tier across all members (see the line right below this
+    docstring - `"signal" if event.get("tier") == "HIGH" else
+    "weak_signal"`, computed once, applied to the whole row). CONFIRMED
+    LIVE (real frontend ticket, 2026-09-25) this caused a real, visible
+    inconsistency: GET /results/summary counted observations.* using
+    signal_detection applied uniformly to every member, so a WEAK member
+    of a HIGH-rolled-up event (e.g. the 2026-08-28 discount_rate event -
+    DFII5/T10Y2Y are HIGH, but DFII10/T5YIFR are WEAK per their own
+    classification_reason) got counted as "high" in the summary while its
+    own classification_reason plainly said "cleared the ... WEAK floor" -
+    two fields disagreeing about the same fact. series_tiers is written
+    from the exact same per-member Tier value classification_reason was
+    generated from (m["tier"] in controllers.run's macro_event
+    construction), so the two can never drift apart - GET /results/
+    summary now counts observations.* from series_tiers, not
+    signal_detection.
     """
     if interpretation is not None:
         source_id = f"{event['release_id']}-{event.get('channel')}-{event['knowledge_time']}"
@@ -389,6 +410,7 @@ def insert_macro_signal_event(
             "prior_values": event.get("prior_values"),
             "classification_basis": event.get("classification_basis"),
             "classification_reason": event.get("classification_reason"),
+            "series_tiers": event.get("series_tiers"),
             "sources": event.get("sources"),
             "knowledge_time_confidences": event.get("knowledge_time_confidences"),
             "suppressed_by": None,
@@ -1419,19 +1441,29 @@ def get_results_summary(
     published_from/published_to on /results, and the same published >=
     X / published < (Y + 1 day) inclusive-date-range predicate.
 
-    "observations": one row PER SERIES per date, counted by the row's
-    OWN signal_detection - CONFIRMED LIVE this needs real unnesting, not
-    a plain row count: an interpreted event's metadata.member_series can
-    hold 2+ series (e.g. a collapsed discount_rate event with T10Y2Y and
-    T5YIFR in one row), and that whole row's signal_detection reflects
-    the event's rolled-up MAX tier across all members, not each
-    member's own (no per-member tier is stored today - see project plan
-    history for that scoping decision). An audit row's metadata.series_id
-    is always exactly one series, so it always contributes 1.
-    jsonb_array_length(member_series) - for the interpreted-event shape
-    - or 1 - for the audit-row shape, via jsonb_typeof to tell them apart
-    - summed per signal_detection bucket, so a 2-member "signal" event
-    contributes 2 to observations.high, not 1.
+    "observations": one row PER SERIES per date, counted by that
+    SERIES' OWN tier - CONFIRMED LIVE (real frontend ticket, 2026-09-25,
+    a real reported inconsistency) this must read metadata.series_tiers
+    (a per-member map, e.g. {"DFII10": "weak_signal", "T10Y2Y":
+    "signal"}), NOT the row's own signal_detection column applied
+    uniformly to every member - signal_detection is the EVENT's
+    rolled-up MAX tier across all members (e.g. one member HIGH makes
+    the whole row "signal"), so counting a WEAK member as "high" because
+    it happens to share a row with a HIGH member is exactly the bug
+    that was reported: classification_reason (also per-member, written
+    from the same real Tier value as series_tiers) said "WEAK floor"
+    for a series the summary was counting as "high".
+    jsonb_each_text(series_tiers) unnests the interpreted-event shape
+    into one row per series-tier pair; an audit row (always exactly one
+    series) has no series_tiers, so it falls back to its own row-level
+    signal_detection - correct there, since an audit row's
+    signal_detection already IS that one series' own tier (see
+    insert_macro_signal_event's audit branch - it's set directly from
+    that series' Tier, never rolled up across members). An interpreted
+    event inserted before this fix (no series_tiers yet) also falls
+    back the same way, applying its rolled-up tier to every member -
+    the same imprecise behavior as before, but only until it's
+    re-interpreted; never silently drops the row from the count.
 
     "suppressed": rows with metadata.suppressed_by set - these ALSO
     count toward their own tier bucket above (an audit row can be both
@@ -1471,14 +1503,11 @@ def get_results_summary(
         obs_rows = conn.execute(
             f"""
             SELECT
-                signal_detection,
-                metadata->>'suppressed_by' IS NOT NULL AS is_suppressed,
-                CASE
-                    WHEN jsonb_typeof(metadata->'member_series') = 'array'
-                        THEN jsonb_array_length(metadata->'member_series')
-                    ELSE 1
-                END AS series_count
+                COALESCE(per_series.tier, agent_classifications.signal_detection) AS effective_tier,
+                metadata->>'suppressed_by' IS NOT NULL AS is_suppressed
             FROM agent_classifications
+            LEFT JOIN LATERAL jsonb_each_text(metadata->'series_tiers') AS per_series(series_id, tier)
+                ON jsonb_typeof(metadata->'series_tiers') = 'object'
             WHERE {date_where}
             """,
             date_params,
@@ -1522,14 +1551,13 @@ def get_results_summary(
     observations = {"total": 0, "high": 0, "weak": 0, "noise": 0, "suppressed": 0}
     _tier_key = {"signal": "high", "weak_signal": "weak", "noise": "noise"}
     for row in obs_rows:
-        key = _tier_key.get(row["signal_detection"])
+        key = _tier_key.get(row["effective_tier"])
         if key is None:
             continue
-        n = row["series_count"] or 0
-        observations[key] += n
-        observations["total"] += n
+        observations[key] += 1
+        observations["total"] += 1
         if row["is_suppressed"]:
-            observations["suppressed"] += n
+            observations["suppressed"] += 1
 
     events = {"high": 0, "weak": 0}
     for row in events_rows:

@@ -95,6 +95,14 @@ logger = logging.getLogger(__name__)
 
 _executor = ThreadPoolExecutor(max_workers=config.CLASSIFY_CONCURRENCY)
 
+# Real ask (frontend ticket, 2026-09-25): metadata.series_tiers per-member
+# vocabulary - same HIGH->signal/WEAK->weak_signal/NOISE->noise mapping
+# models/jobs.py's own _AUDIT_TIER_TO_SIGNAL_DETECTION and
+# _TAIWAN_SIGNAL_MAP already use, kept as its own module-level constant
+# here rather than importing either of those (both are private to
+# models/jobs.py and shaped around a different call site).
+_TIER_TO_SIGNAL_DETECTION = {"HIGH": "signal", "WEAK": "weak_signal", "NOISE": "noise"}
+
 
 async def resolve_news_run_id(
     domain: str,
@@ -670,6 +678,25 @@ async def run_macro_signal_pipeline(job_id: int, from_date: str, to_date: str) -
             "classification_reason": {
                 m["series_id"]: m["classification_reason"]
                 for m in event_payload["members"] if m.get("classification_reason") is not None
+            },
+            # Real ask (frontend ticket, 2026-09-25): GET /results/summary
+            # originally counted observations.* by the EVENT's rolled-up
+            # signal_detection column (the row's own max-tier-across-
+            # members value) applied to every member - CONFIRMED LIVE this
+            # disagreed with classification_reason on real data: the
+            # 2026-08-28 discount_rate event is signal_detection='signal'
+            # (DFII5/T10Y2Y are HIGH), but DFII10/T5YIFR's own
+            # classification_reason says WEAK - counting them as "high" in
+            # the summary contradicted the very sentence shown for them.
+            # series_tiers is the real fix: each member's OWN tier
+            # (_AUDIT_TIER_TO_SIGNAL_DETECTION's HIGH->signal/WEAK->
+            # weak_signal vocabulary, same as signal_detection's own,
+            # models/jobs.py), written from the exact same m["tier"] value
+            # classification_reason was generated from - the two can never
+            # drift apart, since nothing derives one from the other.
+            "series_tiers": {
+                m["series_id"]: _TIER_TO_SIGNAL_DETECTION.get(m["tier"], "noise")
+                for m in event_payload["members"]
             },
             # Deduplicated arrays, not a per-series map - the VALUE (which
             # source/confidence) is what matters here, and every member of
