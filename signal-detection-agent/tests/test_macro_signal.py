@@ -1083,6 +1083,7 @@ _VALID = {
         "1-year Treasury rose 11bp in repricing the expected policy path "
         "higher, raising the discount rate on short-duration obligations."
     ),
+    "series_directions": {"DGS1": "up"},
     "suspect": False,
     "suspect_reason": None,
 }
@@ -1144,10 +1145,15 @@ def test_transmission_bp_number_mismatching_real_move_bp_is_rejected():
         validate_interpretation(bad, expected_channel="policy_path", members=members)
 
 
-def test_transmission_direction_word_mismatching_move_bp_sign_is_rejected():
-    bad = {**_VALID, "transmission": "The 1-year Treasury yield fell 11bp, easing the policy path."}
+def test_series_direction_mismatching_move_bp_sign_is_rejected():
+    """Direction is checked against the model's own structured
+    series_directions field (real fix, frontend follow-up 2026-09-25,
+    job 271 - see macro_signal_factcheck.py's own docstring for why
+    free-text direction-word parsing was replaced entirely), not
+    parsed from transmission's prose."""
+    bad = {**_VALID, "series_directions": {"DGS1": "down"}}
     members = [{"series_id": "DGS1", "value": 4.45, "move_bp": 11.0, "z_score": 1.6, "tier": "WEAK"}]
-    with pytest.raises(InterpretationValidationError, match="numbers don't match"):
+    with pytest.raises(InterpretationValidationError, match="doesn't match the real event data"):
         validate_interpretation(bad, expected_channel="policy_path", members=members)
 
 
@@ -1159,59 +1165,72 @@ def test_transmission_bp_number_within_tolerance_of_slightly_rounded_move_bp_pas
     sub-bp difference. move_bp itself is exact as of the Decimal fix in
     macro_signal_zscore.py/macro_signal_fedtarmd.py; this test is about
     the fact-check's own tolerance, independent of that."""
-    ok = {**_VALID, "transmission": "The 2027 median dot in the FOMC SEP rose 50bp, raising the expected policy path."}
+    ok = {
+        **_VALID,
+        "transmission": "The 2027 median dot in the FOMC SEP rose 50bp, raising the expected policy path.",
+        "series_directions": {"FEDTARMD": "up"},
+    }
     members = [{"series_id": "FEDTARMD", "value": 4.1, "move_bp": 49.99, "z_score": None, "tier": "HIGH"}]
     result = validate_interpretation(ok, expected_channel="policy_path", members=members)
     assert result == ok
 
 
-def test_transmission_wrong_direction_word_on_multimember_event_is_rejected():
-    """Regression test for a real bug found live (frontend follow-up,
-    2026-09-25, job 267): the ORIGINAL direction check only validated
-    single-member events, on the theory that a multi-member sentence
-    might legitimately describe just one member. That missed this exact
-    case: "steepening the 2s10s curve by 8bp" was stored for a real
-    T10Y2Y move of -8bp (0.47 -> 0.39, a FLATTENING) - the number (8bp)
-    was correct and matched a real member, but the direction word next
-    to it was backwards. Must now be rejected even though the event has
-    other members too (DFII5 +11bp, T5YIFR -3bp)."""
+def test_series_direction_wrong_on_multimember_event_with_tied_magnitudes_is_rejected():
+    """Regression test for TWO real bugs found live on this exact event
+    shape (frontend follow-up, 2026-09-25): job 267's original text
+    ("steepening the 2s10s curve by 8bp" for a real T10Y2Y move of
+    -8bp) passed because the first direction check only validated
+    single-member events. Job 271's fixed-but-still-broken text-parsing
+    version ALSO wrongly passed this, because DFII10 (+8bp, not even a
+    member of this specific event but present in the real 2026-08-28
+    data) and T10Y2Y (-8bp) tie in |move_bp| - matching "8bp" to
+    whichever member happens first is fundamentally unreliable. The
+    real fix removes text parsing for direction entirely:
+    series_directions is checked directly against move_bp sign, so a
+    wrong T10Y2Y direction is caught with zero ambiguity regardless of
+    what any other member's magnitude happens to be."""
     bad = {
         **_VALID,
         "transmission": "Real yields rose 11bp at the 5-year point, steepening the 2s10s curve by 8bp and raising the discount rate.",
+        "series_directions": {"DFII5": "up", "T10Y2Y": "up", "T5YIFR": "down"},  # T10Y2Y wrong - real move is -8.0
     }
     members = [
         {"series_id": "DFII5", "value": 2.5, "move_bp": 11.0, "z_score": 2.47, "tier": "HIGH"},
         {"series_id": "T10Y2Y", "value": 0.39, "move_bp": -8.0, "z_score": -2.46, "tier": "HIGH"},
         {"series_id": "T5YIFR", "value": 2.3, "move_bp": -3.0, "z_score": -1.19, "tier": "WEAK"},
     ]
-    with pytest.raises(InterpretationValidationError, match="numbers don't match"):
+    with pytest.raises(InterpretationValidationError, match="doesn't match the real event data"):
         validate_interpretation(bad, expected_channel="discount_rate", members=members)
 
 
-def test_transmission_wrong_direction_word_narrowing_for_positive_move_is_rejected():
-    """Second real reported case (same ticket): "narrowing the 2s10s
-    curve by 5bp" for a real T10Y2Y move of +5.0 (0.26 -> 0.31, a
-    STEEPENING) - the opposite-sign bug in the other direction."""
+def test_series_direction_wrong_narrowing_for_positive_move_is_rejected():
+    """Second real reported case (same ticket): T10Y2Y direction stated
+    as "down" for a real move of +5.0 (0.26 -> 0.31, a STEEPENING) - the
+    opposite-sign bug in the other direction."""
     bad = {
         **_VALID,
         "transmission": "The 5-year forward inflation compensation fell 3bp, narrowing the 2s10s curve by 5bp and lowering the real discount rate.",
+        "series_directions": {"T10Y2Y": "down", "T5YIFR": "down"},  # T10Y2Y wrong - real move is +5.0
     }
     members = [
         {"series_id": "T10Y2Y", "value": 0.31, "move_bp": 5.0, "z_score": 1.54, "tier": "WEAK"},
         {"series_id": "T5YIFR", "value": 2.33, "move_bp": -3.0, "z_score": -1.21, "tier": "WEAK"},
     ]
-    with pytest.raises(InterpretationValidationError, match="numbers don't match"):
+    with pytest.raises(InterpretationValidationError, match="doesn't match the real event data"):
         validate_interpretation(bad, expected_channel="discount_rate", members=members)
 
 
-def test_transmission_correct_direction_per_member_on_multimember_event_passes():
-    """Same event shape as the two rejected tests above, but with the
-    real, correct direction words for each member - must pass. Confirms
-    the per-number check doesn't just reject everything multi-member,
-    only genuinely wrong pairings."""
+def test_series_direction_correct_on_multimember_event_with_tied_magnitudes_passes():
+    """Same event shape as the tied-magnitude test above (DFII5 +11bp,
+    T10Y2Y -8bp, T5YIFR -3bp), but with the real, correct direction for
+    every member - must pass. Confirms the fix doesn't just reject
+    everything with a magnitude tie, only genuinely wrong directions -
+    and that the free-text wording itself ("flattening") is no longer
+    what's being checked, series_directions is."""
     ok = {
         **_VALID,
         "transmission": "Real yields rose 11bp at the 5-year point, flattening the 2s10s curve by 8bp and raising the discount rate.",
+        "series_directions": {"DFII5": "up", "T10Y2Y": "down", "T5YIFR": "down"},
     }
     members = [
         {"series_id": "DFII5", "value": 2.5, "move_bp": 11.0, "z_score": 2.47, "tier": "HIGH"},
