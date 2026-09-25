@@ -47,6 +47,7 @@ class SuppressibleResult:
     tier: Tier
     z_score: Optional[float]
     reason: str
+    plain_reason: Optional[str] = None     # human-readable sentence (TierResult.plain_reason, verbatim) - real ask, frontend ticket 2026-09-25: "Why did AlphaStreet flag it?" needs plain English per series, written by the rule that actually fired, not derived by parsing `reason` client-side. None on a NOISE/missing-data result.
     value: Optional[str] = None            # native-unit level, needed for identity checks - the raw string as read from macro_observations, not float(), so it prints exactly (e.g. "4.1", not 4.1)
     move_bp: Optional[float] = None        # real change (d1d_bp or sep_median_shift_bp) - what INTERPRET should call "the move"
     target_year: Optional[int] = None      # FEDTARMD-only: which projected year move_bp/value refer to (CONFIRMED LIVE gap: a frontend consuming a FEDTARMD event had no field saying which year "the medium-run fed funds target" meant)
@@ -63,7 +64,7 @@ def from_tier_result(
     knowledge_time_confidence: Optional[str] = None,
 ) -> SuppressibleResult:
     return SuppressibleResult(
-        tr.series_id, tr.tier, tr.z_score, tr.reason, value=value, move_bp=move_bp,
+        tr.series_id, tr.tier, tr.z_score, tr.reason, plain_reason=tr.plain_reason, value=value, move_bp=move_bp,
         target_year=target_year, prior_value=prior_value, source=source,
         knowledge_time_confidence=knowledge_time_confidence,
     )
