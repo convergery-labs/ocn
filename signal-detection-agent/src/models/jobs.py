@@ -278,6 +278,77 @@ def get_existing_korea_signal_source_ids(source_ids: list[str]) -> set[str]:
     return {r["source_id"] for r in rows}
 
 
+def insert_japan_signal_classification(
+    job_id: int, article: dict[str, Any] | None, result: dict[str, Any],
+) -> None:
+    """Upsert one agent_classifications row for a japan_market_signal item
+    (source_type='japan_market_signal') - J1 (jp_forecast/irbank_financials
+    revisions) and J2 (results against forecast), same shape as
+    insert_korea_signal_classification (deterministic rule result,
+    signal_score left NULL, not a scored LLM judgment).
+
+    J3 (missing revision, source_category 'jp_missing_revision') and
+    WATCHING (classify_stale_revision_pattern, source_category
+    'jp_watching') both describe an ABSENCE, not a real fetched article -
+    there is no real url to point to for either, so `article.get("url")`
+    is None for both and `url` is stored NULL, same "field absent means
+    not applicable" convention this module already uses elsewhere. Both
+    still pass a small synthetic dict with a real `title` and, critically,
+    a real `published` (the as_of timestamp the absence/staleness was
+    detected at) rather than a fully-None article - see classify_missing_
+    revision's and classify_stale_revision_pattern's own result-shape
+    comments for why: neither absence is timeless (both are only true AS
+    OF a specific real moment), and a NULL published would otherwise make
+    the row invisible to list_all_results' own published_from/
+    published_to day-window filter - a real, previously-documented gap
+    for J3 specifically, fixed 2026-09-30 to match WATCHING's own
+    already-correct behavior.
+    """
+    article = article or {}
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO agent_classifications (
+                job_id, source_type, source_id, url, title,
+                signal_detection, signal_score, signal_reason,
+                published, metadata
+            ) VALUES (%s, 'japan_market_signal', %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT DO NOTHING
+            """,
+            (
+                job_id,
+                result.get("source_id"),
+                article.get("url"),
+                article.get("title"),
+                result["signal"],
+                result.get("signal_score"),
+                result.get("reason"),
+                article.get("published"),
+                json.dumps(result.get("metadata") or {}, ensure_ascii=False),
+            ),
+        )
+
+
+def get_existing_japan_signal_source_ids(source_ids: list[str]) -> set[str]:
+    """Return the subset of source_ids already classified as
+    source_type='japan_market_signal', across ALL prior jobs - same
+    dedup role as get_existing_korea_signal_source_ids, since a filing's
+    own synthetic irbank-financials:// url can legitimately reappear
+    across multiple news-retrieval polls before this job ever ran.
+    """
+    if not source_ids:
+        return set()
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT source_id FROM agent_classifications
+            WHERE source_type = 'japan_market_signal' AND source_id = ANY(%s)
+            """,
+            (source_ids,),
+        ).fetchall()
+    return {r["source_id"] for r in rows}
+
+
 def insert_macro_signal_event(
     job_id: int, event: dict[str, Any], interpretation: dict[str, Any] | None,
 ) -> None:
@@ -1175,6 +1246,7 @@ def list_all_results(
     signal_detection: str | None = None,
     source_type: str | None = None,
     ticker: str | None = None,
+    code: str | None = None,
     period: str | None = None,
     source_category: str | None = None,
     grade: str | None = None,
@@ -1205,6 +1277,18 @@ def list_all_results(
     also matches the expression index on UPPER(metadata->>'ticker') in
     db.py, so the comparison stays index-friendly rather than falling back
     to a sequential scan.
+
+    code matches metadata->>'code' (JSONB) - the japan_market_signal
+    equivalent of ticker above, NOT the same field: every J1-J7/WATCHING
+    Japan classifier stores a company's TSE 4-digit code (or Kioxia's own
+    "285A" - always TEXT, never cast to int) under metadata.code, never
+    metadata.ticker (see japan_ticker_universe.py's own JAPAN_TICKER_
+    UNIVERSE). Without this, a caller wanting one company's own Japan
+    Signals history (e.g. Advantest, 6857) had no way to filter
+    server-side and had to page through every japan_market_signal row
+    client-side instead. Same case-insensitive UPPER()-both-sides match
+    and partial expression index as ticker (idx_agent_classifications_
+    japan_code in db.py), for the same index-friendliness reason.
 
     period matches metadata->>'period_gregorian' (e.g. "2026-07") - only
     taiwan_market_signal mops_revenue rows populate this field, same
@@ -1332,6 +1416,9 @@ def list_all_results(
     if ticker:
         conditions.append("UPPER(metadata->>'ticker') = UPPER(%s)")
         params.append(ticker)
+    if code:
+        conditions.append("UPPER(metadata->>'code') = UPPER(%s)")
+        params.append(code)
     if period:
         conditions.append("metadata->>'period_gregorian' = %s")
         params.append(period)

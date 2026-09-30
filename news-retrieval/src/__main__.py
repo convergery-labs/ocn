@@ -134,6 +134,61 @@ def backfill_korea_customs(max_pages: int | None) -> None:
     )
 
 
+@cli.command("backfill-japan-seaj")
+def backfill_japan_seaj() -> None:
+    """One-time historical backfill for japan_market_signal's
+    seaj_billings source - reads SEAJ's own historical Excel archive
+    (real monthly billings + YoY%, confirmed live 2026-09-29 to go back to
+    2005) to recover real history beyond the regular monthly poll's
+    "current PDF release only" scope (~6 trailing months).
+
+    Deliberately NOT wired into the regular `trigger --domain
+    japan_market_signal` path at all, and never should be - see
+    pipeline.fetch_seaj_billings_backfill's own docstring for why running
+    this repeatedly on a schedule would risk inserting a duplicate for any
+    month the live PDF fetcher already owns (the Excel file has no
+    prelim/final qualifier of its own, so a naive re-run could produce a
+    second url for a month the live fetcher is still actively tracking).
+    Safe to run once, and safe to RE-run after that one time (article
+    storage is deduped by url, same as every other domain, and this
+    function's own _SEAJ_BACKFILL_SKIP_RECENT_MONTHS margin keeps it away
+    from the live fetcher's own active window on every run) - but it is
+    not meant to be scheduled, only invoked deliberately when the stored
+    seaj_billings history needs to be (re)built.
+    """
+    import pipeline
+    from models.articles import create_articles
+    from models.runs import complete_run, create_run, fail_run
+
+    init_db()
+    seed()
+
+    run_id = create_run(
+        name="backfill-japan-seaj",
+        domain="japan_market_signal",
+        days_back=0,
+        max_articles=None,
+        focus=None,
+        model="none",
+    )
+    logger.info("Starting SEAJ billings backfill — run_id=%d", run_id)
+    try:
+        articles = pipeline.fetch_seaj_billings_backfill(sources=[{"placeholder": True}])
+    except Exception as exc:
+        logger.error("Backfill failed: %s", exc)
+        fail_run(run_id, str(exc))
+        sys.exit(1)
+
+    all_articles = [{**art, "run_id": run_id} for art in articles]
+    if all_articles:
+        create_articles(all_articles)
+    complete_run(run_id, len(articles))
+    logger.info(
+        "SEAJ billings backfill complete — run_id=%d articles=%d",
+        run_id, len(articles),
+    )
+
+
 @cli.command("fetch-macro-signals")
 @click.option(
     "--incremental",
