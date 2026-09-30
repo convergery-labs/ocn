@@ -104,6 +104,21 @@ DOMAINS: list[dict[str, Any]] = [
             " fallback)."
         ),
     },
+    {
+        "name": "Japan Market Signal",
+        "slug": "japan_market_signal",
+        "description": (
+            "Earnings-forecast revisions, disclosures, ownership filings,"
+            " buybacks, industry billings, and capex news for Japan"
+            " AI-supply-chain equipment and materials companies, fetched"
+            " via IRBANK (free forecast/buyback history mirror), Kabutan"
+            " (free TDnet disclosure mirror), and EDINET (Financial"
+            " Services Agency's official filing API). TDnet's own paid"
+            " API (~JPY 50,000+/mo) and J-Quants' forecast-revision-reason"
+            " add-on were both confirmed live and rejected as unnecessary"
+            " given these free substitutes - see news-retrieval/CLAUDE.md."
+        ),
+    },
 ]
 
 # P0 core universe (spec Section 14.1), hardcoded pending research-universe
@@ -1890,6 +1905,655 @@ KOREA_GDELT_ENGLISH_SOURCE: dict[str, Any] = {
     },
 }
 
+# ---------------------------------------------------------------------------
+# Japan market signal
+# ---------------------------------------------------------------------------
+#
+# 20 companies from the Japan Signals spec Section 1 - narrow, near-monopoly
+# steps in chipmaking (wafers, patterning chemicals, mask inspection, wafer
+# dicing/grinding, test, substrates) plus the wider AI-universe read-through
+# set (passives, memory, analogue, grid/data-centre power, and the SoftBank
+# holding-company exposure).
+#
+# code is TEXT throughout, never cast to int - Kioxia's code (285A) contains
+# a letter. fiscal_year_end (MM-DD) is static per-company reference data used
+# downstream by signal-detection-agent's progress-vs-forecast math (almost
+# every company here ends its fiscal year 03-31, not 12-31 - see spec
+# Section 2.4). native_name is the Japanese company name, used the same way
+# Taiwan's native_name is - for native-language press queries, not yet wired
+# to a source below (see press_jp, still pending).
+#
+# CONFIRMED DELISTED 2026-09-28: Shinko Electric (6967) - the spec's own
+# note flagged an unconfirmed take-private process; resolved by fetching
+# EDINET's official code list (disclosure2dl.edinet-fsa.go.jp/.../
+# codelist/Edinetcode.zip - see edinet_filing's config below) and checking
+# it directly: Shinko Electric's own entry (EDINET code E01957) now shows
+# "非上場" (unlisted) with a BLANK 証券コード (securities code) field, where
+# every other company in this universe has a populated 5-digit code. Kept
+# in the universe (code "6967" still resolvable to E01957 for any residual
+# EDINET filings, same as the spec's own Section 0 rationale - a company
+# going quiet is itself a signal, not a reason to delete it outright), but
+# any fetcher keyed on a live TICKER (not an EDINET code) should expect
+# this one to never produce a securities-code match going forward.
+# short_name: a common abbreviated form real Japanese press articles use
+# INSTEAD OF the full native_name - confirmed as a real, measured gap
+# 2026-09-28 by comparing full-native_name matches against short-form
+# matches over the same real MONOist article sample: Resonac Holdings
+# (レゾナック・ホールディングス) matched 0 articles by full name vs. 5 by
+# its short form (レゾナック); Renesas Electronics
+# (ルネサスエレクトロニクス) matched 0 vs. 7; Shin-Etsu Chemical
+# (信越化学工業) matched 8 vs. 9. Only present where it's genuinely
+# DIFFERENT from native_name - most company names here are already short
+# enough that press articles use the same string either way (e.g.
+# Advantest's アドバンテスト is never abbreviated further in practice).
+# Used by monoist_capex/press_jp's company-name matching (matches against
+# EITHER native_name or short_name, when present) - not by any source
+# that queries by native_name as an exact API parameter (Taiwan/Korea's
+# GDELT sources), where using an abbreviation could return TOO MANY
+# unrelated results instead of too few.
+# "customers" (added 2026-09-30): read-through major-customer names per
+# company, for descriptive display alongside a classified signal only
+# (e.g. "this Advantest capex signal reads through to TSMC/Samsung/
+# Nvidia") - NOT used in any fetch/matching/classification logic. UNVERIFIED
+# against a primary source (an annual report, an investor-relations
+# disclosure, or an independent filing) as of this addition - entered
+# from a user-supplied reference table with no citation trail. Treat as
+# provisional pending a real source check before relying on it for
+# anything beyond descriptive UI text.
+JAPAN_TICKER_UNIVERSE: list[dict[str, str]] = [
+    {"code": "6857", "company": "Advantest", "native_name": "アドバンテスト", "exchange": "TSE", "fiscal_year_end": "03-31", "customers": ["TSMC", "Samsung Electronics", "AMD", "Nvidia", "Intel"]},
+    {"code": "8035", "company": "Tokyo Electron", "native_name": "東京エレクトロン", "exchange": "TSE", "fiscal_year_end": "03-31", "customers": ["TSMC", "Samsung Electronics", "Intel", "SK Hynix", "Micron Technology"]},
+    {"code": "6146", "company": "Disco", "native_name": "ディスコ", "exchange": "TSE", "fiscal_year_end": "03-31", "customers": ["TSMC", "Samsung Electronics", "Texas Instruments", "Lumileds", "SMIC"]},
+    {"code": "6920", "company": "Lasertec", "native_name": "レーザーテック", "exchange": "TSE", "fiscal_year_end": "06-30", "customers": ["TSMC", "Samsung Electronics", "Intel"]},
+    {"code": "5803", "company": "Fujikura", "native_name": "フジクラ", "exchange": "TSE", "fiscal_year_end": "03-31", "customers": ["Apple"]},
+    {"code": "4063", "company": "Shin-Etsu Chemical", "native_name": "信越化学工業", "short_name": "信越化学", "exchange": "TSE", "fiscal_year_end": "03-31", "customers": ["TSMC", "Samsung Electronics", "Micron Technology", "Intel"]},
+    {"code": "3436", "company": "SUMCO", "native_name": "SUMCO", "exchange": "TSE", "fiscal_year_end": "12-31", "customers": ["TSMC", "Samsung Electronics", "Kioxia", "Intel", "SK Hynix"]},
+    {"code": "4062", "company": "Ibiden", "native_name": "イビデン", "exchange": "TSE", "fiscal_year_end": "03-31", "customers": ["Intel", "Samsung Electronics", "Nvidia", "Apple"]},
+    {"code": "6967", "company": "Shinko Electric", "native_name": "新光電気工業", "short_name": "新光電気", "exchange": "TSE", "fiscal_year_end": "03-31", "customers": ["Intel", "AMD", "Nvidia"]},
+    {"code": "7735", "company": "Screen Holdings", "native_name": "SCREENホールディングス", "short_name": "SCREEN", "exchange": "TSE", "fiscal_year_end": "03-31", "customers": ["TSMC", "Intel", "Samsung Electronics"]},
+    {"code": "6525", "company": "Kokusai Electric", "native_name": "KOKUSAI ELECTRIC", "exchange": "TSE", "fiscal_year_end": "03-31", "customers": ["Intel", "Samsung Electronics", "SK Hynix", "Micron Technology"]},
+    {"code": "4186", "company": "Tokyo Ohka Kogyo", "native_name": "東京応化工業", "short_name": "東京応化", "exchange": "TSE", "fiscal_year_end": "03-31", "customers": ["Intel", "TSMC", "Samsung Electronics"]},
+    {"code": "4004", "company": "Resonac Holdings", "native_name": "レゾナック・ホールディングス", "short_name": "レゾナック", "exchange": "TSE", "fiscal_year_end": "12-31", "customers": ["TSMC", "Samsung Electronics", "Intel"]},
+    {"code": "6315", "company": "Towa", "native_name": "TOWA", "exchange": "TSE", "fiscal_year_end": "03-31", "customers": ["SK Hynix", "TSMC", "Samsung Electronics"]},
+    {"code": "6981", "company": "Murata Manufacturing", "native_name": "村田製作所", "exchange": "TSE", "fiscal_year_end": "03-31", "customers": ["Apple", "Samsung Electronics"]},
+    {"code": "6762", "company": "TDK", "native_name": "TDK", "exchange": "TSE", "fiscal_year_end": "03-31", "customers": ["Apple", "Samsung Electronics"]},
+    {"code": "285A", "company": "Kioxia", "native_name": "キオクシア", "exchange": "TSE", "fiscal_year_end": "03-31", "customers": ["Apple", "Dell", "HP"]},
+    {"code": "6723", "company": "Renesas Electronics", "native_name": "ルネサスエレクトロニクス", "short_name": "ルネサス", "exchange": "TSE", "fiscal_year_end": "12-31", "customers": ["Toyota", "Honda", "Denso"]},
+    {"code": "6501", "company": "Hitachi", "native_name": "日立製作所", "exchange": "TSE", "fiscal_year_end": "03-31", "customers": ["Microsoft", "AWS"]},
+    {"code": "9984", "company": "SoftBank Group", "native_name": "ソフトバンクグループ", "exchange": "TSE", "fiscal_year_end": "03-31", "customers": ["AMD", "AWS", "Alphabet", "Intel", "MediaTek", "Nvidia", "Qualcomm", "Samsung Electronics"]},
+]
+
+# irbank_financials: earnings-forecast revision history via IRBANK
+# (irbank.net), a free Japanese financial-data aggregator - NOT the official
+# J-Quants API (confirmed live 2026-09-27: J-Quants' free tier caps history
+# at 2 years with a 12-week data delay, and even a paid tier only returns
+# revision figures, not the reason/context text; IRBANK substitutes for both
+# gaps at no cost).
+#
+# Two-step fetch, confirmed live against a real company (Advantest, 6857):
+#   1. GET irbank.net/{code}/tdnet - a single page per company holding its
+#      full disclosure history (confirmed live 13+ years deep for
+#      Advantest), each entry shaped roughly:
+#        <dt>{date}</dt><dd><a href="/{code}/{doc_id}">{title}</a><br>
+#        <a href="/news/{news_id}">{irbank auto-generated summary}</a></dd>
+#      Filter titles matching "業績予想.*修正" (e.g. "通期連結業績予想の修正
+#      に関するお知らせ") to find revision notices among the full feed.
+#   2. For each new match, GET irbank.net/news/{news_id} - confirmed live to
+#      contain BOTH a plain-language summary sentence (old figure -> new
+#      figure -> %change -> YoY%) AND a structured old/new table
+#      ("業績予想の修正（連結）" section, <dl class="gdl"> rows labelled
+#      予（前）[previous forecast] vs 予 [new forecast]) for revenue,
+#      operating profit, and net income. This is real structured data, not
+#      prose-only.
+#   No company-stated "reason" text is present anywhere on IRBANK (only
+#   IRBANK's own auto-generated summary sentence) - a real, accepted gap
+#   versus the original spec's assumption of a quoted reason field.
+#   No revision-sequence number exists either - counting/ordering revisions
+#   within a fiscal year is deferred to signal-detection-agent, computed
+#   from this source's own dated rows rather than fabricated here.
+#
+# Dedup: synthetic url "irbank-financials://{code}/{news_id}" - news_id is
+# globally unique per IRBANK news item, so the DB's existing global
+# uq_articles_url index does all dedup work, same convention as
+# dart-filing://, twse-revenue://, etc. above. No per-source dedup logic
+# needed.
+#
+# Fetcher (source_type: "irbank_financials") implemented in pipeline.py.
+JAPAN_IRBANK_FINANCIALS_SOURCE: dict[str, Any] = {
+    "domain_slug": "japan_market_signal",
+    "url": "irbank_financials:japan_market_signal",
+    "name": "IRBANK Forecast Revisions (Japan)",
+    "source_type": "irbank_financials",
+    "frequency_name": "daily",
+    "description": (
+        "Earnings-forecast revision notices for Japan AI-supply-chain"
+        " companies, via IRBANK's per-company TDnet disclosure mirror"
+        " (free) - old-vs-new revenue/operating-profit/net-income figures"
+        " AND the company's own stated reason, both extracted from the"
+        " filing's own source PDF (see pipeline.py's _fetch_irbank_"
+        "filing_pdf) - not from IRBANK's own HTML, which carries neither."
+    ),
+    "config": {
+        "companies": [
+            {"code": t["code"], "company": t["company"]}
+            for t in JAPAN_TICKER_UNIVERSE
+        ],
+    },
+}
+
+# irbank_buyback: buyback-program history via IRBANK's per-company
+# /{code}/buyback page (free, no API key) - the PRIMARY source for buyback
+# figures in this pipeline. Confirmed live against Advantest (6857):
+# genuinely clean, already-structured data (grouped by board-resolution
+# program/year, one dated monthly status-report entry each with share-count
+# change, cumulative yen amount, and cumulative % of the program's
+# authorized upper limit) - unlike edinet_buyback_status's docType 220/230
+# filing, which has NO discrete numeric field at all for the same data
+# (see that source's own comment above). Not days_back-scoped - confirmed
+# live this page is small (a handful of programs, a few entries each per
+# company), so walking the whole thing per run and relying on dedup is
+# simpler than a client-side cutoff.
+#
+# Fetcher (source_type: "irbank_buyback") implemented in pipeline.py.
+JAPAN_IRBANK_BUYBACK_SOURCE: dict[str, Any] = {
+    "domain_slug": "japan_market_signal",
+    "url": "irbank_buyback:japan_market_signal",
+    "name": "IRBANK Buyback Status (Japan)",
+    "source_type": "irbank_buyback",
+    "frequency_name": "daily",
+    "description": (
+        "Share-buyback program history for Japan AI-supply-chain"
+        " companies, via IRBANK's free per-company /buyback page - clean"
+        " structured data (date, share-count change, cumulative amount,"
+        " cumulative % of program limit) for each board-resolution"
+        " program. The primary source for buyback figures in this"
+        " pipeline; edinet_buyback_status corroborates same-day filings"
+        " but carries no comparable structured numbers."
+    ),
+    "config": {
+        "companies": [
+            {"code": t["code"], "company": t["company"]}
+            for t in JAPAN_TICKER_UNIVERSE
+        ],
+    },
+}
+
+# irbank_company_reference: each company's latest total assets AND
+# shares-outstanding estimate, via IRBANK's free per-company /{code}/bs
+# ("financial condition") page plus its main /{code} page. Confirmed live
+# 2026-09-29 against all 20 universe companies (0 failures on the
+# total-assets half) - a clean per-fiscal-period history table with 総資産
+# (total assets) as its own labelled column; only the single NEWEST row
+# is kept per run (a slow-changing reference fact, not a news feed - see
+# pipeline.py's own comment on _fetch_one_irbank_company_reference for why
+# no history is needed here, unlike irbank_financials). Shares outstanding
+# is derived (market cap / previous-close price, both on the main page -
+# no direct share-count field exists anywhere on IRBANK's pages checked),
+# so it is allowed to be independently None on a row without dropping the
+# whole row - total assets alone still serves J5 even if that derivation
+# fails for one company.
+#
+# Exists to serve J5 (capacity commitment) and J6 (ownership/capital
+# policy) in signal-detection-agent's japan_signal_classifier.py: the
+# spec's own Section 6.5 rule needs total assets as the denominator for
+# "investment >= 10% of total assets" (J5), and shares outstanding as the
+# denominator for "buyback >= 5% of shares outstanding" (J6).
+# monoist_capex (jp_capex) carries J5's investment yen figure and
+# irbank_buyback carries J6's buyback share-count figure; this source
+# carries the other half of both fractions. Folded into one source_type
+# rather than two - see pipeline.py's own top-of-section comment for why.
+#
+# Fetcher (source_type: "irbank_company_reference") implemented in
+# pipeline.py.
+JAPAN_IRBANK_COMPANY_REFERENCE_SOURCE: dict[str, Any] = {
+    "domain_slug": "japan_market_signal",
+    "url": "irbank_company_reference:japan_market_signal",
+    "name": "IRBANK Company Reference (Japan)",
+    "source_type": "irbank_company_reference",
+    "frequency_name": "monthly",
+    "description": (
+        "Latest total-assets and shares-outstanding figures for Japan"
+        " AI-supply-chain companies, via IRBANK's free per-company /bs"
+        " and main pages - the denominators J5's investment-vs-total-"
+        "assets rule and J6's buyback-vs-shares-outstanding rule need."
+        " Reference data, not a news feed - only the newest known"
+        " fiscal-period figure is kept per run."
+    ),
+    "config": {
+        "companies": [
+            {"code": t["code"], "company": t["company"]}
+            for t in JAPAN_TICKER_UNIVERSE
+        ],
+    },
+}
+
+# kabutan_tdnet_mirror: near-real-time TDnet disclosure mirror via Kabutan
+# (kabutan.jp/disclosures/), free, no API key. Confirmed live 2026-09-28:
+# a global (not per-ticker) feed, newest-first, paginated (?page=N, ~16
+# rows/page) - NOT the per-company page IRBANK uses. A single Japan trading
+# day spans roughly 30 pages of this feed across ALL companies (confirmed
+# live: page 30 was still 2026-09-28 before rolling into 2026-09-26, the
+# prior trading day - 09-27 was a Sunday). This is DELIBERATELY daily-only,
+# not backfilled - IRBANK already covers 5-year forecast-revision history;
+# Kabutan's value here is same-day corroboration and disclosure TYPES
+# IRBANK's own /tdnet page mixes in without a clean category filter
+# (confirmed live category params exist: kubun=kgh 決算/results, j 自己株式
+# 取得/buyback, e エクイティ/equity, t 追加・訂正/corrections, s その他/
+# other - not yet used here, since the daily page-walk already returns
+# every category and client-side filtering to JAPAN_TICKER_UNIVERSE is
+# cheap regardless of category).
+#
+# Table structure (class="stock_table"), confirmed live: code, company
+# name, market segment (東証Ｇ/Ｐ etc, sometimes blank for some listings -
+# confirmed live, e.g. 171A), category, title + PDF link
+# (kabutan.jp/disclosures/pdf/{date}/{doc_id}/ - the same underlying TDnet
+# PDF IRBANK also mirrors, giving a cross-check opportunity later), and an
+# ISO 8601 timestamp with timezone in a <time datetime="..."> attribute -
+# used directly rather than parsing the co-located display text
+# ("26/09/28 17:53"), which is redundant and more failure-prone to parse.
+#
+# Dedup: synthetic url "kabutan-tdnet://{code}/{doc_id}" (doc_id parsed out
+# of the PDF url's own path) - global uq_articles_url index handles dedup,
+# same convention as every other Japan source_type.
+#
+# Fetcher (source_type: "kabutan_tdnet_mirror") implemented in pipeline.py.
+JAPAN_KABUTAN_TDNET_MIRROR_SOURCE: dict[str, Any] = {
+    "domain_slug": "japan_market_signal",
+    "url": "kabutan_tdnet_mirror:japan_market_signal",
+    "name": "Kabutan TDnet Disclosure Mirror (Japan)",
+    "source_type": "kabutan_tdnet_mirror",
+    "frequency_name": "daily",
+    "description": (
+        "Same-day TDnet disclosure mirror for Japan AI-supply-chain"
+        " companies via Kabutan's free, global disclosure feed"
+        " (kabutan.jp/disclosures/) - walked page-by-page until the date"
+        " rolls over to the prior trading day, filtered client-side to"
+        " JAPAN_TICKER_UNIVERSE. Daily-only by design, not backfilled -"
+        " irbank_financials already owns 5-year forecast-revision history;"
+        " this source corroborates same-day disclosures and covers types"
+        " (buybacks, equity, corrections) outside that source's scope."
+    ),
+    "config": {
+        "codes": [t["code"] for t in JAPAN_TICKER_UNIVERSE],
+    },
+}
+
+# kabutan_buyback: buyback ANNOUNCEMENT trigger via the same Kabutan
+# disclosure feed as kabutan_tdnet_mirror, scoped server-side to kubun=j
+# (自社株取得/buyback) - confirmed live this category param works exactly
+# as documented (every returned row was 自社株取得, none of any other
+# category) and spans far fewer pages per day than the unfiltered feed
+# (confirmed live: one page covered 3 trading days of buyback-only
+# filings, vs. ~30 pages/day unfiltered). Shares one function
+# (_fetch_kabutan_disclosures in pipeline.py) with kabutan_tdnet_mirror via
+# the kubun parameter, not a near-duplicate fetcher.
+#
+# This is the ANNOUNCEMENT-trigger role in the buyback signal design (a
+# company just filed something buyback-related), distinct from
+# irbank_buyback's ONGOING status role (the actual cumulative
+# shares/amount/% figures) - cross-checking the two lets a downstream
+# classifier confirm a new Kabutan buyback disclosure lines up with a
+# corresponding new entry on IRBANK's own buyback page, same idea as
+# EDINET/IRBANK corroboration above.
+#
+# Fetcher (source_type: "kabutan_buyback") implemented in pipeline.py.
+JAPAN_KABUTAN_BUYBACK_SOURCE: dict[str, Any] = {
+    "domain_slug": "japan_market_signal",
+    "url": "kabutan_buyback:japan_market_signal",
+    "name": "Kabutan Buyback Disclosures (Japan)",
+    "source_type": "kabutan_buyback",
+    "frequency_name": "daily",
+    "description": (
+        "Same-day buyback-related disclosure announcements for Japan"
+        " AI-supply-chain companies, via Kabutan's disclosure feed scoped"
+        " server-side to kubun=j (自社株取得). The announcement-trigger"
+        " signal (a buyback-related notice was just filed), distinct from"
+        " irbank_buyback's ongoing structured status figures."
+    ),
+    "config": {
+        "codes": [t["code"] for t in JAPAN_TICKER_UNIVERSE],
+    },
+}
+
+# edinet_filing: 5% large-shareholding filings (docTypeCode 350) via
+# EDINET's official REST API (api.edinet-fsa.go.jp) - free, but requires a
+# registered Subscription-Key (EDINET_API_KEY, already in .env), confirmed
+# live 2026-09-27/28: v2 returns a hard 401 with no key at all, unlike
+# IRBANK/Kabutan above.
+#
+# EDINET's documents.json metadata NEVER carries the actual percentage held
+# (confirmed live: secCode is null on every 350-type row, and no ratio
+# field exists in the list endpoint at all) - the real value is only
+# inside the filing's own CSV export (type=5), fetched per-filing. Element
+# ID confirmed live: "jplvh_cor:HoldingRatioOfShareCertificatesEtc".
+#
+# issuerEdinetCode (the company whose shares were bought, NOT edinetCode -
+# the filer who bought them) is the join key back to our ticker universe -
+# but EDINET's own API gives no ticker<->issuerEdinetCode mapping
+# (secCode null on this doctype, no lookup endpoint). Resolved instead via
+# EDINET's own bulk code-list download (disclosure2dl.edinet-fsa.go.jp/.../
+# codelist/Edinetcode.zip, Shift-JIS CSV, 証券コード=securities code field)
+# - see edinet_code.py's resolve_edinet_codes(), same process-lifetime-
+# cache pattern as dart_corp_code.py's resolve_corp_codes(). This code list
+# is also what CONFIRMED Shinko Electric (6967) as delisted - see
+# JAPAN_TICKER_UNIVERSE's own comment above.
+#
+# Fetcher (source_type: "edinet_filing") implemented in pipeline.py.
+JAPAN_EDINET_FILING_SOURCE: dict[str, Any] = {
+    "domain_slug": "japan_market_signal",
+    "url": "edinet_filing:japan_market_signal",
+    "name": "EDINET Large Shareholding Filings (Japan)",
+    "source_type": "edinet_filing",
+    "frequency_name": "daily",
+    "description": (
+        "5%-large-shareholding filings (docTypeCode 350) for Japan"
+        " AI-supply-chain companies, via EDINET's official documents.json"
+        " list + per-filing CSV export (for the holding-ratio percentage,"
+        " never present in the list metadata itself). Requires"
+        " EDINET_API_KEY."
+    ),
+    "config": {
+        "codes": [t["code"] for t in JAPAN_TICKER_UNIVERSE],
+    },
+}
+
+# edinet_buyback_status: 自己株券買付状況報告書 (report on status of share
+# repurchase, docTypeCode 220/230) via the SAME EDINET fetch infrastructure
+# as edinet_filing above (see pipeline.py's _fetch_edinet_by_mode) - a
+# config variant, not a separate near-duplicate fetcher, mirroring how
+# Taiwan's TWSE/TPEx material-announcement fetcher shares one function via
+# a key_map rather than being two functions.
+#
+# UNLIKE edinet_filing, this doctype's list-metadata carries secCode/
+# edinetCode DIRECTLY (issuerEdinetCode is null - a company reporting its
+# OWN buyback has no separate "issuer" field, confirmed live against a
+# real filing, Godo Steel 2026-09-15), and its CSV export has NO discrete
+# numeric field for shares/amount/progress at all - every figure lives
+# inside a single free-text XBRL element (confirmed live:
+# AcquisitionsByResolutionOfBoardOfDirectorsMeetingTextBlock, a long
+# unstructured Japanese paragraph with dates, share counts, and yen amounts
+# run together). Per explicit decision: store the filing's existence and
+# that raw text block AS-IS, do not attempt to parse it into numeric
+# fields - IRBANK's own /{code}/buyback page (source_type irbank_buyback,
+# not yet built) already has this as genuinely clean structured fields and
+# is the intended primary source for buyback NUMBERS; this source's role
+# is same-day EDINET corroboration only.
+#
+# Fetcher (source_type: "edinet_buyback_status") implemented in pipeline.py.
+JAPAN_EDINET_BUYBACK_STATUS_SOURCE: dict[str, Any] = {
+    "domain_slug": "japan_market_signal",
+    "url": "edinet_buyback_status:japan_market_signal",
+    "name": "EDINET Buyback Status Reports (Japan)",
+    "source_type": "edinet_buyback_status",
+    "frequency_name": "daily",
+    "description": (
+        "Share-repurchase status reports (docTypeCode 220/230) for Japan"
+        " AI-supply-chain companies, via EDINET's official documents.json"
+        " list. The filing's raw acquisition text block is stored as-is"
+        " (not parsed into numeric fields - no discrete field exists for"
+        " this doctype); irbank_buyback is the primary source for"
+        " structured buyback figures. Requires EDINET_API_KEY."
+    ),
+    "config": {
+        "codes": [t["code"] for t in JAPAN_TICKER_UNIVERSE],
+    },
+}
+
+# edinet_extraordinary_report: 臨時報告書 (extraordinary report, docTypeCode
+# 180/190) via the SAME EDINET fetch infrastructure as edinet_filing/
+# edinet_buyback_status above (_fetch_edinet_by_mode, mode="extraordinary")
+# - a config variant, not a separate fetcher. The design spec's Step 3
+# explicitly asks for "5% shareholding filings AND extraordinary reports"
+# - this doctype was missed in the initial build (only 350/220/230 were
+# implemented) and added after a direct gap check against the spec.
+#
+# Confirmed live 2026-09-28 via a real filing (Shin-Etsu Chemical, 4063, a
+# stock-option/warrant issuance to directors and employees) - joined via
+# edinetCode DIRECTLY (issuerEdinetCode was null, same as buyback status -
+# a company reporting its OWN extraordinary event has no separate "issuer"
+# field). "Extraordinary report" is a broad, varied category - confirmed
+# live it can mean anything from a stock-option grant to M&A to a
+# disaster disclosure, distinguished by documents.json's own
+# currentReportReason legal-clause code (already present in list
+# metadata, no extra fetch needed for that). The filing's free-text reason
+# (jpcrp-esr_cor:ReasonForFilingTextBlock) is stored as-is, same
+# no-numeric-parsing decision as edinet_buyback_status, since this doctype
+# varies too much for one consistent numeric extraction to generalize.
+#
+# Fetcher (source_type: "edinet_extraordinary_report") implemented in
+# pipeline.py.
+JAPAN_EDINET_EXTRAORDINARY_REPORT_SOURCE: dict[str, Any] = {
+    "domain_slug": "japan_market_signal",
+    "url": "edinet_extraordinary_report:japan_market_signal",
+    "name": "EDINET Extraordinary Reports (Japan)",
+    "source_type": "edinet_extraordinary_report",
+    "frequency_name": "daily",
+    "description": (
+        "Extraordinary reports (docTypeCode 180/190) for Japan"
+        " AI-supply-chain companies, via EDINET's official documents.json"
+        " list - a broad, varied category (M&A, executive/capital"
+        " changes, disasters, stock-option grants, etc.), distinguished by"
+        " the filing's own currentReportReason legal-clause code. The"
+        " filing's free-text reason is stored as-is, not parsed into"
+        " numeric fields (this doctype varies too much for one consistent"
+        " extraction). Requires EDINET_API_KEY."
+    ),
+    "config": {
+        "codes": [t["code"] for t in JAPAN_TICKER_UNIVERSE],
+    },
+}
+
+# seaj_billings: monthly Japan-based semiconductor equipment billings via
+# SEAJ's free English press-release PDF (seaj.or.jp/english/statistics) -
+# free, no API key, and UNLIKE every other Japan source_type, no
+# per-company scoping at all (this is a single industry-wide figure).
+#
+# Confirmed live 2026-09-28: the free release is a 3-MONTH MOVING AVERAGE,
+# never a true single-month figure - SEAJ's own PDF states this explicitly,
+# and this is confirmed (via earlier research) to be the ceiling of what
+# ANY free source publishes for this data, including SEMI's own WWSEMS
+# report and every third-party aggregator checked - there is no free path
+# to the underlying true monthly number anywhere. Section 6.4's
+# classification rule for this signal is designed around this limitation
+# (compare the 3-month-average series against its own 12-month average,
+# use SEAJ's own published YoY% directly) rather than assuming a true
+# single-month figure exists - not implemented here, since classification
+# is signal-detection-agent's job.
+#
+# Fetcher (source_type: "seaj_billings") implemented in pipeline.py.
+JAPAN_SEAJ_BILLINGS_SOURCE: dict[str, Any] = {
+    "domain_slug": "japan_market_signal",
+    "url": "seaj_billings:japan_market_signal",
+    "name": "SEAJ Equipment Billings (Japan)",
+    "source_type": "seaj_billings",
+    "frequency_name": "monthly",
+    "description": (
+        "Monthly Japan-based semiconductor equipment billings (3-month"
+        " moving average, not a true single-month figure - no free source"
+        " publishes that), via SEAJ's free English press-release PDF."
+        " Industry-wide, not scoped to any single company."
+    ),
+    "config": {},
+}
+
+# monoist_capex: capacity/investment news via MONOist's free 工場ニュース
+# (Factory News) series listing (monoist.itmedia.co.jp/mn/series/1464/) -
+# free, no API key, no per-company query capability at all (unlike
+# GDELT). Confirmed live 2026-09-28: a single page load already returns
+# ~950 real articles spanning several months, filtered CLIENT-SIDE by
+# native_name substring match, same approach as Taiwan's GDELT
+# title-filter - 74 of those ~950 real articles matched our 20-company
+# universe on this same test, with genuinely relevant capex signal (e.g.
+# Resonac's 15bn-yen HDD-media investment cited as generative-AI-demand
+# driven, Shin-Etsu's 530bn-yen US PVC expansion, Fujikura's 45bn-yen
+# next-gen optical fiber plant).
+#
+# This is prose, not structured filing data (unlike every other Japan
+# source_type) - amounts/company/plant details live in free text, not
+# discrete fields; extraction of those specifics into structured signal
+# fields is signal-detection-agent's job, not news-retrieval's - this
+# fetcher stores title + description as fetched, same fetch/store-only
+# boundary every other source_type in this domain follows.
+#
+# Fetcher (source_type: "monoist_capex") implemented in pipeline.py.
+JAPAN_MONOIST_CAPEX_SOURCE: dict[str, Any] = {
+    "domain_slug": "japan_market_signal",
+    "url": "monoist_capex:japan_market_signal",
+    "name": "MONOist Factory News (Japan)",
+    "source_type": "monoist_capex",
+    "frequency_name": "daily",
+    "description": (
+        "Capacity/investment news for Japan AI-supply-chain companies, via"
+        " MONOist's free 工場ニュース (Factory News) series - a general"
+        " manufacturing-news feed filtered client-side by company"
+        " native_name, not a per-company query (no such capability exists"
+        " for this source)."
+    ),
+    "config": {
+        "companies": [
+            {
+                "code": t["code"], "company": t["company"], "native_name": t["native_name"],
+                **({"short_name": t["short_name"]} if "short_name" in t else {}),
+            }
+            for t in JAPAN_TICKER_UNIVERSE
+        ],
+    },
+}
+
+# press_jp: free Nikkei-equivalent wire coverage. Nikkei itself stays
+# paywalled by design (per this domain's spec - headline+timestamp only
+# would still mean scraping a paywalled site's teaser, not attempted).
+# Free substitutes were checked live 2026-09-28. Two sub-sources are
+# usable, merged into one source_type:
+#   - Reuters Japan: blocked outright by an active DataDome anti-bot
+#     challenge on every path tried (article pages, RSS guesses all 401) -
+#     no path around this without a headless browser, out of scope.
+#   - Kyodo News English: reachable, but confirmed to have NO business/
+#     economy/tech category at all in its site nav (only Japan/World/
+#     Sports/Arts/Feature/Travel-Tourism/Sumo/Asian Games/Podcast).
+#   - Jiji Press: a free, unauthenticated economy-category listing
+#     (jiji.com/jc/list?g=eco), confirmed live to return ~50 real
+#     headline+timestamp entries per page load. BROAD general-economy
+#     feed, not semiconductor-specific - a real, accepted limitation
+#     (confirmed live it can return zero matches against
+#     JAPAN_TICKER_UNIVERSE on a given page load, same legitimate
+#     zero-match behavior as kabutan_buyback).
+#   - newswitch.jp (Nikkan Kogyo Shimbun's free site): a dedicated 半導体
+#     (semiconductor) keyword-tag page (newswitch.jp/keyword/detail/573) -
+#     genuinely more targeted than Jiji, semiconductor-specific by
+#     construction. Confirmed live to find real matches Jiji's broad feed
+#     does not (e.g. Resonac's 12-inch SiC substrate development). No
+#     timestamp on the listing itself - a two-step fetch (list, then each
+#     matched article's own page for its date) is needed, same
+#     "cheap discovery, expensive fetch only for matches" shape as
+#     irbank_financials.
+#
+# Both sub-sources are still an accepted, real gap versus Nikkei's own
+# scoop lead time - this domain's own design notes are explicit that no
+# free source reproduces that specificity.
+#
+# Headline + timestamp only, body always None - this is a deliberate
+# copyright/scope boundary (same treatment as Nikkei itself), not a
+# technical limitation of what could be scraped.
+#
+# Fetcher (source_type: "press_jp") implemented in pipeline.py
+# (_fetch_press_jp_jiji + _fetch_press_jp_newswitch, merged by
+# _fetch_press_jp).
+JAPAN_PRESS_JP_SOURCE: dict[str, Any] = {
+    "domain_slug": "japan_market_signal",
+    "url": "press_jp:japan_market_signal",
+    "name": "Japan Press Coverage - Jiji Press + Newswitch (Japan)",
+    "source_type": "press_jp",
+    "frequency_name": "daily",
+    "description": (
+        "Free Nikkei-equivalent wire coverage for Japan AI-supply-chain"
+        " companies, via Jiji Press's free economy-category listing"
+        " (broad, general-economy) and newswitch.jp's free semiconductor"
+        " keyword-tag page (targeted, semiconductor-specific) -"
+        " headline+timestamp only, no article body. Reuters Japan and"
+        " Kyodo News English were checked and confirmed unusable"
+        " (Reuters: anti-bot blocked; Kyodo: no business/economy category"
+        " exists)."
+    ),
+    "config": {
+        "companies": [
+            {
+                "code": t["code"], "company": t["company"], "native_name": t["native_name"],
+                **({"short_name": t["short_name"]} if "short_name" in t else {}),
+            }
+            for t in JAPAN_TICKER_UNIVERSE
+        ],
+    },
+}
+
+# press_jp_english_check: the English-coverage mirror the design spec's own
+# Step 5 explicitly asks for ("mirror every search in English recording
+# whether anything was found and when" - "the English mirror makes the
+# timing claim testable rather than assumed"). Independent per-company
+# search, not a per-article cross-reference (same shape as Korea's
+# KOREA_GDELT_ENGLISH_SOURCE) - run once per company at fetch time,
+# separate from any specific press_jp/monoist_capex article already found.
+#
+# DuckDuckGo (via the free `ddgs` package, no API key) - the same provider
+# signal-detection-agent's web_search.py already uses for a DIFFERENT job
+# (classification-time entity context for already-scored signals); this
+# source_type is a distinct, earlier-in-the-pipeline use of the same free
+# tool, not a duplication of that job. Confirmed live 2026-09-28 real,
+# relevant results for these company names (e.g. a real Reuters article on
+# Advantest's forecast revision, dated 2025-07-29).
+#
+# This service's job is only to fetch and store what DuckDuckGo returns -
+# the actual timing comparison (was there English coverage, and was it
+# before/after the Japanese-language disclosure) is signal-detection-
+# agent's job, computed from these rows plus press_jp/monoist_capex/
+# irbank_financials's rows, not done here.
+#
+# Fetcher (source_type: "press_jp_english_check") implemented in
+# pipeline.py.
+# A bare `company` name is used as the DuckDuckGo News query for every
+# ticker except these two - confirmed live (2026-09-28) that "Disco" and
+# "Towa" collide with common English words/names (nightclub/music culture
+# and unrelated brand usage respectively), returning 0/5 and 0/5 relevant
+# results even within a tight 1-day window. Appending "Corporation
+# semiconductor" was confirmed live to fix this (Disco: 0/5 -> 5/5 relevant;
+# Towa: 0/5 -> 4/5, the remaining miss being an unrelated company, "Tower
+# Semiconductor", not generic noise) without degrading results for an
+# already-clean name (Advantest: still 5/5 relevant with the same suffix
+# appended) - so the suffix is applied only to the two confirmed-colliding
+# tickers, not universally.
+_JAPAN_ENGLISH_CHECK_SEARCH_QUERY_OVERRIDES: dict[str, str] = {
+    "6146": "Disco Corporation semiconductor",
+    "6315": "Towa Corporation semiconductor",
+}
+
+JAPAN_PRESS_JP_ENGLISH_CHECK_SOURCE: dict[str, Any] = {
+    "domain_slug": "japan_market_signal",
+    "url": "press_jp_english_check:japan_market_signal",
+    "name": "Japan Press English-Coverage Check (DuckDuckGo)",
+    "source_type": "press_jp_english_check",
+    "frequency_name": "daily",
+    "description": (
+        "English-language coverage check for Japan AI-supply-chain"
+        " companies, via DuckDuckGo News search (free, no API key) -"
+        " headline+timestamp only, no article body. Exists solely to test"
+        " whether/when English coverage exists, for comparison against"
+        " press_jp/monoist_capex/irbank_financials's Japanese-language"
+        " sources - not a primary signal source itself."
+    ),
+    "config": {
+        "companies": [
+            {
+                "code": t["code"],
+                "company": t["company"],
+                "search_query": _JAPAN_ENGLISH_CHECK_SEARCH_QUERY_OVERRIDES.get(
+                    t["code"], t["company"]
+                ),
+            }
+            for t in JAPAN_TICKER_UNIVERSE
+        ],
+    },
+}
+
 # GDELT DOC 2.0 API, queried once per individual theme code (not OR-joined -
 # only single bare "theme:X" queries are confirmed working against the live
 # API; multi-theme "(theme:X OR theme:Y)" queries could not be verified and
@@ -2413,6 +3077,22 @@ SOURCES: list[dict[str, Any]] = [
     KOREA_GDELT_SOURCE,
     KOREA_GDELT_ENGLISH_SOURCE,
     KOREA_CUSTOMS_EXPORT_SOURCE,
+    # ------------------------------------------------------------------
+    # Japan market signal (more source_types pending - see
+    # JAPAN_TICKER_UNIVERSE comment block above)
+    # ------------------------------------------------------------------
+    JAPAN_IRBANK_FINANCIALS_SOURCE,
+    JAPAN_IRBANK_BUYBACK_SOURCE,
+    JAPAN_IRBANK_COMPANY_REFERENCE_SOURCE,
+    JAPAN_KABUTAN_TDNET_MIRROR_SOURCE,
+    JAPAN_KABUTAN_BUYBACK_SOURCE,
+    JAPAN_EDINET_FILING_SOURCE,
+    JAPAN_EDINET_BUYBACK_STATUS_SOURCE,
+    JAPAN_EDINET_EXTRAORDINARY_REPORT_SOURCE,
+    JAPAN_SEAJ_BILLINGS_SOURCE,
+    JAPAN_MONOIST_CAPEX_SOURCE,
+    JAPAN_PRESS_JP_SOURCE,
+    JAPAN_PRESS_JP_ENGLISH_CHECK_SOURCE,
 ]
 
 # VC commentary / investor blogs.

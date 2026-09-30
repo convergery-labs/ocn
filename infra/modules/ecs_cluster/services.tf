@@ -199,6 +199,20 @@ resource "aws_ecs_task_definition" "news_retrieval" {
           # (infra/CLAUDE.md).
           name      = "FRED_API_KEY"
           valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:ocn/${var.env}/news-retrieval:FRED_API_KEY::"
+        },
+        {
+          # Required for edinet_filing/edinet_buyback_status/
+          # edinet_extraordinary_report source_types (japan_market_signal
+          # domain) - EDINET (Financial Services Agency) v2 API
+          # subscription key, free/self-service registration at
+          # disclosure2.edinet-fsa.go.jp - confirmed live 2026-09-27 the
+          # v2 API returns a hard 401 with no key at all, unlike every
+          # other Japan source_type (IRBANK/Kabutan/SEAJ/MONOist/Jiji/
+          # newswitch.jp need no credential). Must exist in Secrets
+          # Manager under this key before terraform apply, same
+          # requirement as every other secret above (infra/CLAUDE.md).
+          name      = "EDINET_API_KEY"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:ocn/${var.env}/news-retrieval:EDINET_API_KEY::"
         }
       ]
       logConfiguration = {
@@ -514,6 +528,164 @@ resource "aws_cloudwatch_event_target" "news_retrieval_korea_market_signal" {
       {
         name    = "news-retrieval"
         command = ["python", "__main__.py", "trigger", "--domain", "korea_market_signal", "--days-back", "1"]
+      }
+    ]
+  })
+}
+
+resource "aws_cloudwatch_event_rule" "news_retrieval_japan_market_signal_pre_open" {
+  name = "${var.env}-news-retrieval-japan-market-signal-pre-open"
+  # Twice daily, anchored to real Tokyo Stock Exchange session times
+  # (09:00-15:00 JST, JST = UTC+9 year-round, no DST) rather than an
+  # unbounded 24h poll - explicit user instruction 2026-09-30. None of
+  # Japan's 9 (of 10) daily-frequency source_types are a live feed tied to
+  # the trading session itself (IRBANK/Kabutan/EDINET/MONOist/press_jp are
+  # all scraped/polled pages or a date-scoped API, not a market data feed
+  # - see the design's own accepted same-day-to-next-day freshness
+  # tradeoff, TDnet's real near-real-time cadence has no affordable free
+  # path), but real disclosures still cluster around the session boundary
+  # (overnight filings ahead of the open, same-day filings right after
+  # close) the same way Taiwan's own 重大訊息 announcements cluster after
+  # its market close - so this fetches ahead of the open to pick up
+  # overnight filings before the session starts.
+  #
+  # 23:00 UTC = 08:00 JST, 1 hour before the 09:00 JST open - a deliberate
+  # buffer, not a measured runtime, same "buffer, not a measurement"
+  # caveat every other schedule comment in this file gives.
+  schedule_expression = "cron(0 23 * * ? *)"
+}
+
+resource "aws_cloudwatch_event_target" "news_retrieval_japan_market_signal_pre_open" {
+  rule     = aws_cloudwatch_event_rule.news_retrieval_japan_market_signal_pre_open.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+
+  ecs_target {
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.news_retrieval.family}"
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets          = var.public_subnet_ids
+      security_groups  = [var.news_sg_id]
+      assign_public_ip = true
+    }
+  }
+
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "news-retrieval"
+        command = ["python", "__main__.py", "trigger", "--domain", "japan_market_signal", "--days-back", "1"]
+      }
+    ]
+  })
+}
+
+resource "aws_cloudwatch_event_rule" "news_retrieval_japan_market_signal_post_close" {
+  name = "${var.env}-news-retrieval-japan-market-signal-post-close"
+  # Second of the two daily passes - see the pre-open rule's own comment
+  # above for the full real-market-hours rationale. --days-back 1 makes a
+  # second same-day poll safe/idempotent (harmless re-poll, global URL
+  # dedup on ingest prevents duplicate inserts - same reasoning the SEAJ
+  # monthly rule's own comment already gives for why its own overlap with
+  # the daily rule is harmless).
+  #
+  # 06:30 UTC = 15:30 JST, 30 minutes after the 15:00 JST close (TSE's
+  # continuous session, inclusive of the 11:30-12:30 JST lunch break) -
+  # catches same-day filings right after the session ends.
+  #
+  # --days-back 1 deliberately excludes seaj_billings (frequency_name
+  # "monthly", min_days_back 30 - see load_sources' `f.min_days_back <=
+  # days_back` gate in models/sources.py) - confirmed live this is
+  # correct, not an oversight: seaj_billings is scheduled separately below
+  # rather than folded into this daily --days-back 31, since EDINET's own
+  # fetcher (unlike Kabutan/MONOist/press_jp) genuinely uses days_back as
+  # a real per-day API loop (one documents.json call per day in the
+  # window, times 3 modes: shareholding/buyback/extraordinary) - running
+  # --days-back 31 daily just to catch a monthly source would multiply
+  # EDINET's daily call volume 31x for no benefit, since EDINET's own
+  # filings for a past day don't change after the fact.
+  schedule_expression = "cron(30 6 * * ? *)"
+}
+
+resource "aws_cloudwatch_event_target" "news_retrieval_japan_market_signal_post_close" {
+  rule     = aws_cloudwatch_event_rule.news_retrieval_japan_market_signal_post_close.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+
+  ecs_target {
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.news_retrieval.family}"
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets          = var.public_subnet_ids
+      security_groups  = [var.news_sg_id]
+      assign_public_ip = true
+    }
+  }
+
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "news-retrieval"
+        command = ["python", "__main__.py", "trigger", "--domain", "japan_market_signal", "--days-back", "1"]
+      }
+    ]
+  })
+}
+
+resource "aws_cloudwatch_event_rule" "news_retrieval_japan_market_signal_monthly" {
+  name = "${var.env}-news-retrieval-japan-market-signal-monthly"
+  # This is the ONLY schedule that ever includes seaj_billings
+  # (frequency_name "monthly", min_days_back 30 - see load_sources'
+  # `f.min_days_back <= days_back` gate) - the daily rule above always
+  # runs --days-back 1, which never satisfies that gate, so without this
+  # rule seaj_billings would only ever run via a manual trigger. See the
+  # daily rule's own comment for why this isn't instead folded into a
+  # wider daily --days-back 31 (EDINET's fetcher genuinely loops per day
+  # in the window, so that would multiply its daily API calls 31x for no
+  # benefit).
+  #
+  # SEAJ's own fetcher (_fetch_seaj_billings) does not even take a
+  # days_back parameter - it always fetches whatever the CURRENT release
+  # on SEAJ's index page is (confirmed live ~6 trailing months per
+  # release, so a missed month is recovered automatically once this rule
+  # next fires) and relies on its own {period}-{qualifier} dedup key, so
+  # --days-back 31 here exists only to satisfy load_sources' gate, not to
+  # control what SEAJ itself returns.
+  #
+  # 25th of the month, 04:00 UTC - SEAJ's own English press release is
+  # confirmed live to land on the 18th in the one real sample checked this
+  # session, and this project's own SEAJ research separately found the
+  # release cadence generally falls in the 20th-27th window - the 25th is
+  # picked to land inside that window on a typical month, accepting that
+  # an early-in-window release (like the 18th case observed) will be
+  # caught up to 7 days late rather than same-day. Every OTHER source_type
+  # in this domain also runs again on this date (this rule has no way to
+  # fetch just seaj_billings in isolation without a pipeline.py change),
+  # which is harmless - global URL dedup - but means this rule duplicates
+  # the daily rule's own work once a month.
+  schedule_expression = "cron(0 4 25 * ? *)"
+}
+
+resource "aws_cloudwatch_event_target" "news_retrieval_japan_market_signal_monthly" {
+  rule     = aws_cloudwatch_event_rule.news_retrieval_japan_market_signal_monthly.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+
+  ecs_target {
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.news_retrieval.family}"
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets          = var.public_subnet_ids
+      security_groups  = [var.news_sg_id]
+      assign_public_ip = true
+    }
+  }
+
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "news-retrieval"
+        command = ["python", "__main__.py", "trigger", "--domain", "japan_market_signal", "--days-back", "31"]
       }
     ]
   })
@@ -1234,6 +1406,194 @@ resource "aws_cloudwatch_event_target" "signal_detection_agent_korea_signals_sum
       {
         name    = "signal-detection-agent"
         command = ["python", "-m", "src", "summarize-korea-signals"]
+      }
+    ]
+  })
+}
+
+resource "aws_cloudwatch_event_rule" "signal_detection_agent_japan_signals_pre_open" {
+  name        = "${var.env}-signal-detection-agent-japan-signals-pre-open"
+  description = "Classify pooled japan_market_signal news-retrieval runs (J1-J7 arithmetic/lookup + J7 model call + translate) - first of two daily passes, before TSE market open"
+  # Twice daily now, anchored to real TSE market hours the same way the
+  # two news-retrieval fetch rules above are (09:00-15:00 JST open/close,
+  # JST = UTC+9) - explicit user instruction 2026-09-30, replacing the
+  # earlier single 05:00 UTC pass.
+  #
+  # 00:00 UTC = 1 hour after the 23:00 UTC pre-open fetch (news_retrieval_
+  # japan_market_signal_pre_open above) - same "generous buffer, not a
+  # measured runtime" reasoning every other classify/fetch offset in this
+  # file uses; real IRBANK/Kabutan/EDINET/MONOist/press_jp article volume
+  # for a --days-back 1 daily run is small (a single day's worth of
+  # filings across 20 tracked companies), so 1 hour is ample.
+  #
+  # classify-japan-signals defaults from_date=to_date=today (UTC), which
+  # pools ALL of today's completed japan_market_signal runs so far and
+  # skips already-classified source_ids via the same dedup convention
+  # every other domain here uses (get_existing_japan_signal_source_ids),
+  # so this pass and the post-close pass below are additive/idempotent,
+  # not duplicative, even though both fall on the same UTC calendar day.
+  schedule_expression = "cron(0 0 * * ? *)"
+}
+
+resource "aws_cloudwatch_event_target" "signal_detection_agent_japan_signals_pre_open" {
+  rule     = aws_cloudwatch_event_rule.signal_detection_agent_japan_signals_pre_open.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+  ecs_target {
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.signal_detection_agent.family}"
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets         = var.private_subnet_ids
+      security_groups = [var.signal_detection_agent_sg_id]
+    }
+  }
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "signal-detection-agent"
+        command = ["python", "-m", "src", "classify-japan-signals"]
+      }
+    ]
+  })
+}
+
+resource "aws_cloudwatch_event_rule" "signal_detection_agent_japan_signals_post_close" {
+  name        = "${var.env}-signal-detection-agent-japan-signals-post-close"
+  description = "Classify pooled japan_market_signal news-retrieval runs (J1-J7 arithmetic/lookup + J7 model call + translate) - second of two daily passes, after TSE market close"
+  # 08:30 UTC = 2 hours after the 06:30 UTC post-close fetch
+  # (news_retrieval_japan_market_signal_post_close above) - same buffer
+  # reasoning as the pre-open pass above.
+  schedule_expression = "cron(30 8 * * ? *)"
+}
+
+resource "aws_cloudwatch_event_target" "signal_detection_agent_japan_signals_post_close" {
+  rule     = aws_cloudwatch_event_rule.signal_detection_agent_japan_signals_post_close.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+  ecs_target {
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.signal_detection_agent.family}"
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets         = var.private_subnet_ids
+      security_groups = [var.signal_detection_agent_sg_id]
+    }
+  }
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "signal-detection-agent"
+        command = ["python", "-m", "src", "classify-japan-signals"]
+      }
+    ]
+  })
+}
+
+resource "aws_cloudwatch_event_rule" "signal_detection_agent_japan_signals_summary_pre_open" {
+  name        = "${var.env}-signal-detection-agent-japan-signals-summary-pre-open"
+  description = "Generate the spec Section 10.3 trader summary from today's already-classified japan_market_signal rows - first of two daily passes, right after the pre-open classify pass"
+  # Twice daily now, one right after each of the two classify passes above
+  # - explicit user instruction 2026-09-30, replacing the earlier single
+  # 14:00 UTC pass.
+  #
+  # 01:00 UTC = 1 hour after the 00:00 UTC pre-open classify pass (same
+  # "buffer, not a measurement" reasoning as every other classify/summary
+  # offset in this file). summarize-japan-signals only reads agent_
+  # classifications (no news-retrieval fetch, no LLM calls beyond the one
+  # summary-writer call) - a fast job regardless of classify pass size,
+  # same reasoning Korea's own summary schedule comment gives.
+  schedule_expression = "cron(0 1 * * ? *)"
+}
+
+resource "aws_cloudwatch_event_target" "signal_detection_agent_japan_signals_summary_pre_open" {
+  rule     = aws_cloudwatch_event_rule.signal_detection_agent_japan_signals_summary_pre_open.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+  ecs_target {
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.signal_detection_agent.family}"
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets         = var.private_subnet_ids
+      security_groups = [var.signal_detection_agent_sg_id]
+    }
+  }
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "signal-detection-agent"
+        command = ["python", "-m", "src", "summarize-japan-signals"]
+      }
+    ]
+  })
+}
+
+resource "aws_cloudwatch_event_rule" "signal_detection_agent_japan_signals_summary_post_close" {
+  name        = "${var.env}-signal-detection-agent-japan-signals-summary-post-close"
+  description = "Generate the spec Section 10.3 trader summary from today's already-classified japan_market_signal rows - second of two daily passes, right after the post-close classify pass"
+  # 09:30 UTC = 1 hour after the 08:30 UTC post-close classify pass.
+  schedule_expression = "cron(30 9 * * ? *)"
+}
+
+resource "aws_cloudwatch_event_target" "signal_detection_agent_japan_signals_summary_post_close" {
+  rule     = aws_cloudwatch_event_rule.signal_detection_agent_japan_signals_summary_post_close.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+  ecs_target {
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.signal_detection_agent.family}"
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets         = var.private_subnet_ids
+      security_groups = [var.signal_detection_agent_sg_id]
+    }
+  }
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "signal-detection-agent"
+        command = ["python", "-m", "src", "summarize-japan-signals"]
+      }
+    ]
+  })
+}
+
+resource "aws_cloudwatch_event_rule" "signal_detection_agent_japan_habits_refresh" {
+  name        = "${var.env}-signal-detection-agent-japan-habits-refresh"
+  description = "Recompute japan_company_habits/japan_progress_habits/japan_company_reference from the FULL pooled history - occasional, not per-classification-pass"
+  # Monthly, not daily - see refresh-japan-habits' own CLI docstring
+  # (__main__.py): "a company's real multi-year habit does not
+  # meaningfully change day to day", so this is intentionally much rarer
+  # than the daily classify pass above, same "occasional refresh, not
+  # every pass" design already documented for this command.
+  #
+  # 25th of the month, 05:00 UTC - same DAY-of-month as news_retrieval_
+  # japan_market_signal_monthly's own SEAJ recovery rule above (also the
+  # 25th), so a fresh habit refresh always runs the day after that
+  # month's SEAJ recovery has had a full day to land (that rule fires at
+  # 04:00 UTC on the 25th; this one is a SEPARATE calendar day - the
+  # 25th here refers to the day this rule's cron fires, immediately
+  # following the 03:00 UTC daily fetch's own regular run, not
+  # specifically chained to the SEAJ rule's exact hour) - picked for
+  # calendar-alignment convenience (one memorable day-of-month for every
+  # monthly Japan Signals job), not a hard dependency between the two.
+  schedule_expression = "cron(0 5 25 * ? *)"
+}
+
+resource "aws_cloudwatch_event_target" "signal_detection_agent_japan_habits_refresh" {
+  rule     = aws_cloudwatch_event_rule.signal_detection_agent_japan_habits_refresh.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+  ecs_target {
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.signal_detection_agent.family}"
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets         = var.private_subnet_ids
+      security_groups = [var.signal_detection_agent_sg_id]
+    }
+  }
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "signal-detection-agent"
+        command = ["python", "-m", "src", "refresh-japan-habits"]
       }
     ]
   })

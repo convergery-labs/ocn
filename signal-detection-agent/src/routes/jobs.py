@@ -6,10 +6,12 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+import config
 from adapters.news_client import fetch_macro_series_total
 from auth import require_auth
-from controllers.run import generate_korea_signal_summary_for_date
+from controllers.run import generate_japan_signal_summary_for_date, generate_korea_signal_summary_for_date
 from models.jobs import get_job, get_results_summary, list_all_results, list_jobs, list_results, list_taiwan_periods
+from pipeline.japan_ticker_universe import JAPAN_TICKER_UNIVERSE
 
 router = APIRouter()
 
@@ -64,6 +66,87 @@ async def get_korea_signal_summary(
     date = date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     summary = generate_korea_signal_summary_for_date(date)
     return {"date": date, "summary": summary}
+
+
+@router.get("/japan-signals/summary")
+async def get_japan_signal_summary(
+    date: str | None = Query(default=None, description="YYYY-MM-DD (UTC). Defaults to today (UTC)."),
+    caller: dict[str, Any] = Depends(require_auth),
+) -> dict[str, Any]:
+    """Spec Section 10.3's twice-daily trader summary, generated on demand
+    for one day's already-classified japan_market_signal rows - exact
+    same shape as GET /korea-signals/summary above (reads
+    agent_classifications directly, no news-retrieval fetch, no
+    re-classification; see generate_japan_signal_summary_for_date's own
+    docstring on how J3/jp_missing_revision and WATCHING/jp_watching rows,
+    despite describing an absence with no real backing article, are still
+    found by this date-windowed read).
+    """
+    date = date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    summary = generate_japan_signal_summary_for_date(date)
+    return {"date": date, "summary": summary}
+
+
+@router.get("/japan-signals/universe")
+async def get_japan_signal_universe(
+    caller: dict[str, Any] = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return the static 20-company japan_market_signal tracked universe
+    (code, company, native_name, fiscal_year_end, customers) - reference
+    data, not classification results, so this reads directly from
+    JAPAN_TICKER_UNIVERSE in memory (same list japan_signal_classifier.py
+    itself uses), not agent_classifications.
+
+    Exists so a frontend can fetch this once and join it client-side by
+    metadata.code against GET /results rows, rather than every
+    japan_market_signal classification row repeating the same 20 real
+    company facts (in particular "customers", added 2026-09-30 - see
+    JAPAN_TICKER_UNIVERSE's own docstring: read-through major-customer
+    names per company, for descriptive display only, UNVERIFIED against
+    a primary source as of this addition).
+    """
+    return {"companies": JAPAN_TICKER_UNIVERSE}
+
+
+@router.get("/japan-signals/results")
+async def get_japan_signal_results(
+    limit: int = Query(default=50, ge=1, le=500),
+    cursor: str | None = Query(default=None),
+    signal_detection: str | None = Query(default=None, description="Filter by signal_detection: 'signal', 'weak_signal', or 'noise'"),
+    code: str | None = Query(default=None, description="Filter to one tracked company's TSE code, e.g. '6857' (Advantest) or '285A' (Kioxia) - case-insensitive, matches metadata.code"),
+    source_category: str | None = Query(default=None, description="Filter by metadata.source_category: 'jp_forecast' (J1/J2), 'jp_missing_revision' (J3), 'jp_industry' (J4), 'jp_capex' (J5), 'jp_buyback'/'jp_ownership' (J6), 'jp_press' (J7), or 'jp_watching'"),
+    published_from: str | None = Query(default=None, description="Filter to rows with published >= this date (YYYY-MM-DD), inclusive"),
+    published_to: str | None = Query(default=None, description="Filter to rows with published <= this date (YYYY-MM-DD), inclusive"),
+    caller: dict[str, Any] = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return paginated, filterable japan_market_signal classification
+    rows - the Japan-specific counterpart to the generic GET /results
+    above, for the two real filters that endpoint cannot express for this
+    domain: ticker there only matches metadata.ticker (sec_filing rows
+    only - Japan rows store their code under metadata.code instead, a
+    genuinely different field - see list_all_results' own docstring on
+    `code`), and source_type there requires spelling out the full
+    domain string ('japan_market_signal') on every call.
+
+    Pins source_type=config.JAPAN_SIGNAL_DOMAIN internally and delegates
+    straight to list_all_results (same cross-job, cursor-paginated
+    listing GET /results itself uses) - no separate query path, no risk
+    of drifting from that function's own ordering/pagination guarantees.
+    A caller who explicitly wants the raw generic endpoint with its full
+    filter set (grade/channel/impacted_ticker/etc., none of which any
+    japan_market_signal row ever populates) can still call GET /results
+    directly with source_type=japan_market_signal.
+    """
+    return list_all_results(
+        limit=limit,
+        cursor=cursor,
+        signal_detection=signal_detection,
+        source_type=config.JAPAN_SIGNAL_DOMAIN,
+        code=code,
+        source_category=source_category,
+        published_from=published_from,
+        published_to=published_to,
+    )
 
 
 @router.get("/results/periods")

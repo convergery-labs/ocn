@@ -33,10 +33,14 @@ reports/
 # Local notes / scratch docs (not for shared history)
 signal-detection-agent/TECHNICAL.md
 signal-detection-agent/DECK.md
+signal-detection-agent/DOMAIN_OUTPUT_SCHEMAS.md
 news-retrieval/SUBSTACK_SOURCES.md
 SENTIMENT_PROVIDERS.md
 SENTIMENT_PROVIDERS_SUMMARY.md
 OCN_ARCHITECTURE.md
+
+# Session scratchpad (verification exports, artifact source, ad-hoc test scripts)
+scratch/
 
 # Qdrant storage (if running locally outside Docker)
 qdrant_storage/

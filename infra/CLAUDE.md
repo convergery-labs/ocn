@@ -80,6 +80,9 @@ infra/
 | `DYNAMODB_TABLE_LOCK` | hardcoded | `ocn-market-lock` — distributed poller lock |
 | `DYNAMODB_TABLE_SEC_FILINGS` | hardcoded | `ocn-sec-filings` — SEC EDGAR 8-K/10-Q/10-K filing metadata |
 | `DYNAMODB_TABLE_MACRO` | hardcoded | `ocn-market-macro` — Fed funds rate, CPI, 10-year Treasury yield, unemployment, nonfarm payroll, real GDP, retail sales, durables, top gainers/losers/most-active (not ticker-keyed) |
+| `DART_API_KEY` | Secrets Manager | `ocn/{env}/news-retrieval:DART_API_KEY` - Korea FSS OpenAPI key, free/self-service at opendart.fss.or.kr; required for the `dart_filing` source_type (`korea_market_signal` domain) |
+| `FRED_API_KEY` | Secrets Manager | `ocn/{env}/news-retrieval:FRED_API_KEY` - St. Louis Fed API key, free/self-service at fred.stlouisfed.org/docs/api/api_key.html; required for `fetch-macro-signals` (`macro_signal` domain) |
+| `EDINET_API_KEY` | Secrets Manager | `ocn/{env}/news-retrieval:EDINET_API_KEY` - EDINET (Financial Services Agency) v2 API subscription key, free/self-service registration at disclosure2.edinet-fsa.go.jp; required for `edinet_filing`/`edinet_buyback_status`/`edinet_extraordinary_report` source_types (`japan_market_signal` domain) - confirmed live the v2 API returns a hard 401 with no key at all |
 
 ### signal-detection
 | Variable | Source | Notes |

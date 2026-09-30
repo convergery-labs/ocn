@@ -322,6 +322,146 @@ def summarize_korea_signals(date: str | None) -> None:
     logger.info("[KOREA_SIGNAL_SUMMARY] date=%s\n%s", date, summary)
 
 
+@cli.command("summarize-japan-signals")
+@click.option(
+    "--date",
+    default=None,
+    help="Date (YYYY-MM-DD, UTC) of classified japan_market_signal rows to "
+    "summarize. Defaults to today (UTC).",
+)
+def summarize_japan_signals(date: str | None) -> None:
+    """One-shot: read today's already-classified japan_market_signal rows
+    from this service's own DB and generate the spec Section 10.3 trader
+    summary text. No news-retrieval fetch, no classification - reads only
+    (see generate_japan_signal_summary_for_date's own docstring, same
+    shape as summarize-korea-signals above). Runs to completion and
+    exits (not a server).
+
+    Output goes to the log only (INFO level) - there is no email/delivery
+    mechanism wired up yet (see japan_signal_summary.py's own module
+    docstring on scope). GET /japan-signals/summary (routes/jobs.py) is
+    the on-demand equivalent of this same call.
+    """
+    from datetime import datetime, timezone
+
+    from controllers.run import generate_japan_signal_summary_for_date
+
+    logger.info("Initialising database...")
+    init_db()
+    seed()
+
+    date = date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    summary = generate_japan_signal_summary_for_date(date)
+    logger.info("[JAPAN_SIGNAL_SUMMARY] date=%s\n%s", date, summary)
+
+
+@cli.command("classify-japan-signals")
+@click.option(
+    "--from-date",
+    default=None,
+    help="Start date (YYYY-MM-DD) of the news-retrieval run window to pool. "
+    "Defaults to today (UTC) - i.e. classify all of today's completed "
+    "japan_market_signal runs so far.",
+)
+@click.option(
+    "--to-date",
+    default=None,
+    help="End date (YYYY-MM-DD) of the news-retrieval run window to pool. "
+    "Defaults to today (UTC).",
+)
+def classify_japan_signals(from_date: str | None, to_date: str | None) -> None:
+    """One-shot: pool today's completed japan_market_signal news-retrieval
+    runs, classify (J1 only, so far)/translate, persist. Entry point for
+    the scheduled task - runs to completion and exits (not a server).
+
+    Compares each new revision against the company's own PRE-COMPUTED
+    habit (models.japan_company_habits, refreshed separately by
+    refresh-japan-habits below) - not a fixed threshold, and not
+    recomputed from this narrow window's own articles.
+    """
+    import asyncio
+    from datetime import datetime, timezone
+
+    import config
+    from controllers.run import run_japan_signal_classification
+    from models.jobs import create_job
+
+    logger.info("Initialising database...")
+    init_db()
+    seed()
+
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    from_date = from_date or today
+    to_date = to_date or today
+
+    job_id = create_job(domain=config.JAPAN_SIGNAL_DOMAIN)
+    logger.info(
+        "Created japan_market_signal job_id=%s from_date=%s to_date=%s",
+        job_id, from_date, to_date,
+    )
+    asyncio.run(run_japan_signal_classification(job_id, from_date, to_date))
+    logger.info("japan_market_signal job_id=%s finished", job_id)
+
+
+@cli.command("refresh-japan-habits")
+@click.option(
+    "--from-date",
+    default=None,
+    help="Start date (YYYY-MM-DD) of the news-retrieval run window to pool "
+    "for habit computation - should span the FULL stored history (e.g. 10 "
+    "years back), not a narrow recent window. Defaults to 3650 days "
+    "(10 years) before today (UTC).",
+)
+@click.option(
+    "--to-date",
+    default=None,
+    help="End date (YYYY-MM-DD) of the news-retrieval run window to pool. "
+    "Defaults to today (UTC).",
+)
+def refresh_japan_habits_command(from_date: str | None, to_date: str | None) -> None:
+    """One-shot: recompute all THREE stored reference caches from the full
+    stored history in one pooled pass and overwrite them - J1's
+    forecast-revision habit (revisions/year, typical size, direction,
+    typical months; japan_company_habits table), J2's progress-vs-target
+    habit (typical progress per (code, period_type) pair;
+    japan_progress_habits table), and J5/J6's company reference facts
+    (total assets, shares outstanding; japan_company_reference table).
+    The first two read from the exact same pooled jp_forecast articles;
+    the third reads from the same pooled window's jp_company_reference
+    articles instead (see controllers.run.refresh_japan_habits's own
+    docstring on why all three are refreshed together, not as separate
+    CLI commands/schedules) - explicit user instruction 2026-09-28: these
+    numbers are computed once and stored, not recomputed inline on every
+    classification pass.
+
+    Intended to run occasionally (e.g. monthly via a separate CloudWatch
+    schedule), not on every classify-japan-signals pass - a company's real
+    multi-year habit does not meaningfully change day to day. Runs to
+    completion and exits (not a server), same shape as
+    classify-japan-signals.
+    """
+    import asyncio
+    from datetime import datetime, timedelta, timezone
+
+    from controllers.run import refresh_japan_habits
+
+    logger.info("Initialising database...")
+    init_db()
+    seed()
+
+    today = datetime.now(timezone.utc)
+    to_date = to_date or today.strftime("%Y-%m-%d")
+    from_date = from_date or (today - timedelta(days=3650)).strftime("%Y-%m-%d")
+    computed_from_years = round((today - datetime.strptime(from_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)).days / 365)
+
+    logger.info(
+        "Refreshing japan_company_habits from_date=%s to_date=%s (~%d years)",
+        from_date, to_date, computed_from_years,
+    )
+    count = asyncio.run(refresh_japan_habits(from_date, to_date, computed_from_years))
+    logger.info("refresh-japan-habits: wrote %d company habit(s)", count)
+
+
 @cli.command("classify-geopolitical-signals")
 @click.option(
     "--from-date",

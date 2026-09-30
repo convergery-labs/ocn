@@ -7,7 +7,7 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from functools import partial
 from typing import Any
 from urllib.parse import urlparse
@@ -95,6 +95,86 @@ def _clean_summary(raw: str) -> str:
 # Step 1 - fetch
 # ---------------------------------------------------------------------------
 
+_ARCHIVE_PH_TIMEOUT = 15  # confirmed live: a miss (no cached snapshot) returns
+# in well under 1s; this bounds the rare slow case, not the common one.
+
+# Confirmed live (2026-09-25/26) against 19 real URLs that had already
+# failed a direct fetch in this pipeline, spanning 12 publishers: archive.ph
+# coverage is real but genuinely partial, not a general fix for "sites that
+# block scraping" - it only has a snapshot if someone ELSE already
+# submitted that exact URL. These 6 domains were the confirmed hits
+# (bloomberg.com 3/3, wsj.com 2/2, politico.com 2/2, nytimes.com 1/1,
+# france24.com 1/1, economist.com 1/2 - weaker sample but a real 6515-char
+# extraction on the hit); every other tested domain - including reuters.com
+# (0/3) and apnews.com (0/1), despite being top-volume failure domains -
+# missed. Scoped to this allowlist rather than tried universally so a
+# failing fetch on an untested/no-coverage domain doesn't pay the extra
+# archive.ph round-trip for nothing; revisit by re-testing a domain's real
+# hit rate before adding it here, not by assumption.
+_ARCHIVE_PH_FALLBACK_DOMAINS: frozenset[str] = frozenset({
+    "bloomberg.com",
+    "nytimes.com",
+    "france24.com",
+    "wsj.com",
+    "politico.com",
+    "economist.com",
+})
+
+
+def _domain_for_archive_ph_check(url: str) -> str:
+    """Registrable domain for url, "www." stripped - same normalization as
+    _extract_domain_for_also_reported_by, so a value here is directly
+    comparable against _ARCHIVE_PH_FALLBACK_DOMAINS regardless of how the
+    source URL was formatted.
+    """
+    host = urlparse(url or "").hostname or ""
+    host = host.lower()
+    if host.startswith("www."):
+        host = host[len("www."):]
+    return host
+
+
+def _fetch_body_via_archive_ph(url: str) -> str | None:
+    """Fallback body fetch via archive.ph's cached snapshot of ``url``, for
+    when a direct Trafilatura fetch returns nothing (paywall/bot-detection
+    block, or a dead/unreachable source URL). Only called for domains in
+    _ARCHIVE_PH_FALLBACK_DOMAINS - see that constant's comment for why.
+
+    Returns None on any failure (no snapshot, network error, extraction
+    failure) - same fail-open contract as the direct fetch this backs up,
+    never raises.
+    """
+    try:
+        downloaded = trafilatura.fetch_url(
+            f"https://archive.ph/newest/{url}",
+            config=_get_trafilatura_config(),
+        )
+        return trafilatura.extract(downloaded) if downloaded else None
+    except Exception:
+        logger.warning(
+            "[archive.ph] fallback fetch failed for url=%r", url, exc_info=True,
+        )
+        return None
+
+
+def _fetch_body_with_fallback(url: str) -> str | None:
+    """Trafilatura direct fetch, falling back to archive.ph on a miss - but
+    only for domains in _ARCHIVE_PH_FALLBACK_DOMAINS, to avoid spending the
+    extra round-trip on domains with no confirmed archive.ph coverage.
+
+    Shared by all three Trafilatura-backed body-fetch call sites (RSS
+    content:encoded fallback, SerpAPI, GDELT) so the fallback behavior
+    stays identical across all of them rather than drifting.
+    """
+    downloaded = trafilatura.fetch_url(url, config=_get_trafilatura_config())
+    body = trafilatura.extract(downloaded) if downloaded else None
+    if body:
+        return body
+    if _domain_for_archive_ph_check(url) not in _ARCHIVE_PH_FALLBACK_DOMAINS:
+        return None
+    return _fetch_body_via_archive_ph(url)
+
+
 def _extract_body(entry: Any, url: str, no_fetch: bool) -> str | None:
     """Return the best available body text for an article entry.
 
@@ -118,8 +198,7 @@ def _extract_body(entry: Any, url: str, no_fetch: bool) -> str | None:
         return clean_body
     if no_fetch:
         return None
-    downloaded = trafilatura.fetch_url(url, config=_get_trafilatura_config())
-    return trafilatura.extract(downloaded) if downloaded else None
+    return _fetch_body_with_fallback(url)
 
 
 # feedparser's own default User-Agent identifies it as a bot and is
@@ -146,7 +225,7 @@ _RSS_USER_AGENT = (
 # UA (confirmed live: reuters.com, bloomberg.com return 401/403 even with
 # this same browser UA) - those still fail open to a null body, same as
 # before.
-#
+
 # One ConfigParser instance PER THREAD, not a single shared module-level
 # object - every call site above runs inside a ThreadPoolExecutor(max_workers=10)
 # (RSS body fetch, SerpAPI body fetch, GDELT body fetch), so a shared
@@ -352,8 +431,7 @@ def _fetch_one_serpapi(source: dict, days_back: int, api_key: str) -> list[dict]
     def _fetch_body(url: str) -> str | None:
         if not url:
             return None
-        downloaded = trafilatura.fetch_url(url, config=_get_trafilatura_config())
-        return trafilatura.extract(downloaded) if downloaded else None
+        return _fetch_body_with_fallback(url)
 
     with ThreadPoolExecutor(max_workers=10) as executor:
         bodies = list(executor.map(_fetch_body, [a["url"] for a in candidates]))
@@ -2025,8 +2103,7 @@ def _fetch_gdelt(sources: list[dict], days_back: int, domain_slug: str = "") -> 
         )
 
     def _fetch_body(url: str) -> str | None:
-        downloaded = trafilatura.fetch_url(url, config=_get_trafilatura_config())
-        return trafilatura.extract(downloaded) if downloaded else None
+        return _fetch_body_with_fallback(url)
 
     with ThreadPoolExecutor(max_workers=10) as executor:
         bodies = list(executor.map(_fetch_body, [a["url"] for a in articles]))
@@ -3301,6 +3378,2765 @@ def fetch_customs_export_backfill(max_pages: int = _CUSTOMS_BACKFILL_MAX_PAGES) 
     return articles
 
 
+# ---------------------------------------------------------------------------
+# Japan market signal - IRBANK (irbank.net)
+# ---------------------------------------------------------------------------
+#
+# No API key, no official rate-limit documentation - same conservative,
+# undocumented-limit posture as _dart_rate_sleep above (a small fixed delay
+# between requests, not tuned against a confirmed number).
+_irbank_rate_lock = threading.Lock()
+_irbank_last_call = [0.0]
+_IRBANK_MIN_INTERVAL = 1.0
+
+# IRBANK returns a plain 403 to a bare httpx client (no User-Agent) -
+# confirmed live 2026-09-27. A common desktop-browser UA is sufficient.
+_IRBANK_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                  " (KHTML, like Gecko) Chrome/128.0 Safari/537.36",
+}
+
+# /{ticker}/tdnet 301-redirects to /{edinet_code}/tdnet (e.g. /6857/tdnet ->
+# /E01950/tdnet) - confirmed live; httpx does not follow redirects by
+# default (unlike curl -L, used during manual verification, which silently
+# masked this). Every httpx.get() call against irbank.net below passes
+# follow_redirects=True for this reason - a plain httpx.get() here would
+# raise on the 301 rather than error clearly, so this is not optional.
+
+# Matches a "備考" (notes) block on a /{code}/tdnet page - each block groups
+# disclosures under a label ("修正"=revision, "説明"=presentation materials,
+# "配当"=dividend, etc.). Filtering on the BLOCK's label (rather than on
+# individual title text) is more robust: confirmed live a Disco (6146)
+# filing titled as a variance-vs-actual + forward-guidance combo notice
+# ("...業績予想値と実績値との差異ならびに...予想...に関するお知らせ") still
+# correctly lands in a 修正-labeled block despite not matching the simpler
+# "...の修正に関するお知らせ" title pattern used in an earlier version of
+# this fetcher.
+_IRBANK_NOTE_BLOCK_RE = re.compile(
+    r'<dd class="weaken" id="note_\d+"><sup>#\d+</sup> (?P<label>[^<]+)'
+    r'<ul class="ic">(?P<items>.*?)</ul></dd>',
+    re.S,
+)
+_IRBANK_NOTE_ITEM_RE = re.compile(
+    r'<li><a title="(?P<title>[^"]+)" href="(?P<href>/[^"]+)">[^<]*'
+    r'<span class="weaken">（(?P<date>[^）]+)）</span></a></li>',
+)
+
+# The PDF link is the one part of a /{code}/{doc_id} detail page confirmed
+# reliably present across every filing tested (Advantest, Tokyo Electron,
+# Disco, Shin-Etsu) - an earlier design depended on an opportunistic
+# /news/{id} HTML summary instead, confirmed via live testing NOT to be
+# reliably paired with every revision (see this function's own docstring
+# below for the full story) - dropped in favor of this PDF path, which also
+# recovers the company's own stated reason text that the /news/ page never
+# had at all.
+_IRBANK_PDF_LINK_RE = re.compile(r'href="(?P<pdf_url>https://f\.irbank\.net/pdf/[^"]+\.pdf)"')
+
+# Matches the start of a reason paragraph inside a filing PDF's extracted
+# text (e.g. "修正の理由", "業績予想の修正の理由", or a bare "理由" heading -
+# confirmed live across Advantest's, Disco's, and Fujikura's real filings,
+# the last one prefixed with a "※" bullet marker this pattern does not
+# anchor against, deliberately - so it still matches) up to the
+# forward-looking-statement disclaimer boilerplate that reliably follows
+# it. Confirmed live 3 distinct disclaimer openers occur: "※ 将来の事象"
+# (Advantest), "（注）上記の予想は" (Disco), and "※上記の予想は" (Fujikura -
+# no space after "※", and no "（注）" prefix at all; an earlier version of
+# this pattern only matched the first two openers and silently let a
+# Fujikura reason run on into its own disclaimer text).
+_IRBANK_REASON_RE = re.compile(
+    r"(?:修正の理由|理由)\s*\n(?P<reason>.*)",
+    re.S,
+)
+
+# The forward-looking-statement boilerplate disclaimer present on every
+# real filing (in some wording) is NOT reliably introduced by any single
+# marker character - confirmed live 2026-09-28 across all 154 real
+# revisions in the 20-company/5-year universe, collecting every real
+# variant found: some start with "※", some with "（注）", one filer uses a
+# bare "注．" (full-width period, no parens), and at least one filer's
+# disclaimer has NO leading marker at all, just starting mid-paragraph as
+# plain prose ("当資料に記載の業績見通し等の将来に関する記述は..."). A
+# marker-character-based stop rule (the earlier version of this function)
+# structurally cannot catch that last case, and kept needing new marker
+# variants added as more were found - confirmed live this pattern of
+# "one more variant" repeated at least 3 times before this rewrite.
+#
+# Every real variant found DOES share one content signature regardless of
+# marker: a lead-in word naming what the disclaimer covers - "業績見通し"/
+# "業績予想" (earnings outlook/forecast), or (confirmed live as a further,
+# narrower real variant - Tokyo Electron's own filing) a bare "上記の予想"/
+# "上記予想"/"本資料"/"当資料" (a plainer "the above forecast"/"this
+# document" opener with no "業績" prefix at all) - followed, within a short
+# window, by "入手可能な情報"/"入手している情報" (information [that was]
+# available/obtained). That second phrase is the standard Japanese forward-
+# looking-statement disclaimer's own core claim ("this forecast is based on
+# information available as of the announcement date"), confirmed live to
+# appear in EVERY real disclaimer variant collected regardless of lead-in
+# wording. A bare "contains 入手可能な情報" check with no lead-in
+# requirement at all was tried and rejected: confirmed live one real
+# filing (TDK) has genuine, substantive reason prose that happens to use
+# the same "当社が現在入手している情報に基づきますと" phrasing mid-sentence
+# while describing an actual production-volume outlook, not a disclaimer -
+# requiring one of these specific lead-in words immediately before it is
+# what correctly excludes that real content while still catching every
+# actual disclaimer (every disclaimer variant found opens with a "the
+# above forecast/report" framing word; no genuine reason sentence in the
+# dataset pairs the information-availability phrase with one of these
+# specific lead-ins).
+_IRBANK_REASON_BOILERPLATE_RE = re.compile(
+    r"(?:業績見通し|業績予想|上記の?予想|上記業績予想|本資料|当資料).{0,60}?(?:入手可能な情報|入手している情報)"
+    # A second, independent real boilerplate FAMILY - confirmed live
+    # 2026-09-28 as Advantest's own consistent house style across all 6 of
+    # its real revisions - uses none of the "入手可能な情報" family's
+    # vocabulary at all, instead opening with a dedicated heading
+    # ("※ 将来の事象に係る記述に関する注意" / "将来の事象についての... 記述
+    # に関する注意", note-optional leading space after ※) followed by
+    # safe-harbor language about "期待、見積り" (expectations, estimates)
+    # and "既知及び未知のリスク、不確実性" (known and unknown risks,
+    # uncertainties) - a genuinely different disclaimer template, not a
+    # wording variant of the first family. Matched as its own alternative
+    # rather than folded into the first pattern's lead-in list, since its
+    # anchor phrase ("将来の事象に係る記述に関する注意") is structurally
+    # different (a heading, not a lead-in immediately followed by the
+    # information-availability phrase).
+    r"|将来の事象(?:についての|に係る記述に関する注意)",
+    re.S,
+)
+
+
+def _trim_irbank_reason_at_boilerplate(raw_reason: str) -> str:
+    """Cut ``raw_reason`` (everything after the "理由" heading the regex
+    above anchors on) at the start of the first genuine boilerplate
+    disclaimer sentence found anywhere in it - see
+    _IRBANK_REASON_BOILERPLATE_RE's own comment for why this is detected
+    by content rather than by a leading marker character, and why a
+    "※...理由"-style reason sub-heading (e.g. a filing that states both an
+    earnings reason and a separate dividend reason) is naturally never
+    matched by this pattern and stays intact.
+
+    Confirmed live 2026-09-28: real boilerplate disclaimers come in
+    genuinely different, unrelated wording FAMILIES (see
+    _IRBANK_REASON_BOILERPLATE_RE's own comment on the two found so far) -
+    rather than keep discovering and enumerating every family's own exact
+    phrasing indefinitely, this function is deliberately written to make
+    adding a new family (a new alternative in that one regex) the only
+    change needed, with the actual trimming logic below staying generic
+    over whichever family matched.
+    """
+    match = _IRBANK_REASON_BOILERPLATE_RE.search(raw_reason)
+    if not match:
+        return raw_reason.strip()
+    # The regex anchors on "業績見通し"/"業績予想"/etc - the disclaimer
+    # SENTENCE (or, for the "将来の事象" family, its own heading LINE)
+    # itself starts earlier on the same line (e.g. "（注）業績見通し...",
+    # "注．本資料に掲載されている業績予想等...", "※ 将来の事象に係る記述に
+    # 関する注意") - trimming at match.start() would keep that marker/
+    # lead-in fragment dangling at the end of the real reason text instead
+    # of removing the whole disclaimer. Backing up to the start of the
+    # match's own line (or the very start of raw_reason if the disclaimer
+    # begins on the first line) removes the complete sentence/heading,
+    # marker included, regardless of which real family or marker variant
+    # (or none at all) precedes it.
+    line_start = raw_reason.rfind("\n", 0, match.start()) + 1
+    return raw_reason[:line_start].strip()
+
+# Row labels inside a filing PDF's extracted table always carry a bare
+# "(A)" marker for the previous-forecast row and a bare "(B)" marker for
+# the revised/actual row - but the prefix word varies far more than
+# expected across real filers (confirmed live, in order of discovery:
+# 前回発表予想(A)/今回発表予想(B); 前回発表予想(A)/今回修正予想(B);
+# 前回発表予想(A)/今回実績(B) - Disco's variance-vs-actual notice;
+# 前回発表予想(Ａ)/今回発表予想(Ｂ) using FULL-WIDTH Unicode Ａ/Ｂ, not ASCII
+# A/B - Fujikura; 前回発表予想(A)\n(2026年２月13日発表) - Resonac/Murata,
+# a trailing date-annotation line inside the SAME cell, ruling out an
+# end-anchored match; 前回発表予想 (Ａ) - Tokyo Ohka Kogyo, ASCII parens
+# around a full-width letter, a THIRD width combination; and finally
+# 実績値（Ｂ） - SUMCO's variance notice, which doesn't start with 前 or 今
+# at all, ruling out a start-anchored "must begin with 前/今" version of
+# this matcher that worked for every earlier variant but not this one).
+#
+# Given how many prefix variants exist and keep appearing, this matches on
+# nothing but the marker itself: a row is "previous" if it contains an
+# (A)/（Ａ） marker and NOT a (B)/（Ｂ） one, and vice versa for "revised" -
+# this correctly EXCLUDES the one row that contains both
+# ("増減額(B)－(A)"/"増減額（Ｂ－Ａ）", the increment/decrement row) without
+# needing to know anything about its own label text, and does not depend on
+# where in the label string the marker falls. `\s*` inside the brackets
+# tolerates a further variant confirmed live in Shin-Etsu Chemical's filing:
+# fully character-spaced labels like "前 期 実 績 （ Ａ ）"/"当 期 予 想
+# （ Ｂ ）" (Japanese typesetting convention, space between EVERY character
+# including around the letter itself, not just between kanji) - an earlier
+# version with no `\s*` matched every other variant seen but not this one.
+_IRBANK_PDF_A_MARK_RE = re.compile(r"[\(（]\s*[AＡ]\s*[\)）]")
+_IRBANK_PDF_B_MARK_RE = re.compile(r"[\(（]\s*[BＢ]\s*[\)）]")
+
+
+def _irbank_pdf_row_kind(label: str) -> str | None:
+    has_a = bool(_IRBANK_PDF_A_MARK_RE.search(label))
+    has_b = bool(_IRBANK_PDF_B_MARK_RE.search(label))
+    if has_a and not has_b:
+        return "previous"
+    if has_b and not has_a:
+        return "revised"
+    return None
+
+
+# Confirmed live 2026-09-28 (Fujikura, 140120221108559389): a filing whose
+# title contains "差異" (variance) genuinely combines TWO distinct table
+# kinds, not one ambiguous kind - a "results vs. the old forecast" table
+# ("前回発表予想(A)" vs "実績(B)" - actual results replace the (B) marker's
+# usual meaning of a NEW forecast) immediately followed by a separate,
+# genuine "old forecast vs. new forecast" revision table ("前回発表予想
+# (A)" vs "今回発表予想(B)"). Both tables use the identical (A)/(B) marker
+# convention _irbank_pdf_row_kind matches on - the only way to tell them
+# apart is the (B) row's OWN label text: "実績" (actual/results) marks the
+# first kind, any other (B) label ("発表予想"/"修正予想"/etc.) marks a
+# genuine revision. This distinction did not matter for J1 (forecast
+# revision), which already excludes any table where "previous" doesn't
+# resolve to a real number (an actual-vs-forecast table's own (A) row is a
+# real previous FORECAST value, not null, for a filing that only carries
+# actuals) - but IS the exact signal J2 (results against forecast) needs
+# to find and use this same table type deliberately, not stumble on it as
+# a J1 near-miss.
+_IRBANK_PDF_ACTUAL_MARK_RE = re.compile(r"実\s*績")
+
+
+def _irbank_pdf_table_kind(revised_row_label: str) -> str:
+    """Classify a matched previous/revised table pair by what its (B) row
+    actually represents - "actual_vs_forecast" (J2's data: quarterly
+    results measured against the OLD forecast) if the (B) row's own label
+    contains "実績" (actual/results), else "revision" (J1's data: a
+    genuine old-forecast-vs-new-forecast change) - see this module's own
+    comment on _irbank_pdf_row_kind for the real filing that surfaces
+    both kinds in one PDF and why the (A)/(B) marker alone can't tell them
+    apart.
+    """
+    return "actual_vs_forecast" if _IRBANK_PDF_ACTUAL_MARK_RE.search(revised_row_label) else "revision"
+
+
+def _irbank_rate_sleep() -> None:
+    with _irbank_rate_lock:
+        elapsed = time.monotonic() - _irbank_last_call[0]
+        if elapsed < _IRBANK_MIN_INTERVAL:
+            time.sleep(_IRBANK_MIN_INTERVAL - elapsed)
+        _irbank_last_call[0] = time.monotonic()
+
+
+def _parse_irbank_pdf_number(value: str | None) -> float | None:
+    """Parse one table-cell value from an IRBANK filing PDF, e.g.
+    "百万円\\n1,714,000" or "20.7%" or "―" (no data placeholder).
+    Returns None for a "―" placeholder (used for not-yet-forecast line
+    items, e.g. Disco's Q2 dividend table before any dividend is set) - and
+    for a genuinely empty/None cell (confirmed live: a real Lasertec (6920)
+    filing's table has a short row that pdfplumber returns with a None
+    cell, not an empty string, which crashed an earlier version of this
+    function that assumed every cell was always a string).
+
+    Some filers (confirmed live 2026-09-28: TDK) issue a RANGE forecast
+    ("180,000〜225,000") rather than a single point figure - the cell's
+    raw text renders across THREE lines: unit ("百万円"), the low bound
+    ("180,000"), then a full-width wave dash (U+FF5E) immediately
+    followed by the high bound ("～225,000") on its own final line, no
+    space. The old code took only the single last line
+    (split("\n")[-1]), which for a range cell is just "～225,000" - the
+    low bound one line up was discarded before it was ever seen, so this
+    silently returned None for the whole cell rather than a number: a
+    real forecast value was being read as missing. When the last line
+    starts with the wave dash, the low bound is recovered from the
+    SECOND-to-last line instead, and the midpoint of the two is returned -
+    the standard, defensible single-number reading of a min-max range
+    (the same way a trader reads "180,000〜225,000" as "about 202,500
+    expected"), not an arbitrary pick of one bound over the other.
+
+    A negative figure (an operating LOSS forecast, not just a smaller
+    profit) is marked with a leading "△" (triangle), the standard
+    Japanese accounting convention for a negative number (the equivalent
+    of parentheses in Western accounting) - confirmed live 2026-09-28:
+    Resonac Holdings' real filings forecast an operating loss this way
+    ("△20,000" = -20,000 million yen). The old code had no handling for
+    this character at all - float("△20,000") raises ValueError, so a
+    real loss figure was silently returned as None (missing), not
+    misread as a wrong number, but a genuine loss forecast disappearing
+    entirely is exactly the kind of habit-computation-corrupting gap this
+    whole audit exists to catch. Stripped and negated before the normal
+    float conversion, checked on both a plain value and each bound of a
+    range (a range can itself have a negative bound, e.g. a
+    loss-narrowing-to-a-smaller-loss forecast).
+    """
+    if value is None:
+        return None
+    lines = value.strip().split("\n")
+    last_line = lines[-1].strip()
+
+    # A range's low/high bounds can render two different ways - confirmed
+    # live 2026-09-28 against two different real filers: TDK splits them
+    # across lines ("180,000" then, on its own final line, "～225,000"),
+    # while Kioxia renders both bounds on the SAME line ("4,316～4,536",
+    # no line break at all). Checking for "～" anywhere in the last line
+    # (not just as its leading character) covers both shapes with one
+    # code path - when the wave dash sits at the very start of the last
+    # line, the low bound is on the line above instead of being part of
+    # this line at all.
+    if "～" in last_line:
+        if last_line.startswith("～") and len(lines) >= 2:
+            low_str = lines[-2].strip()
+            high_str = last_line[1:].strip()
+        else:
+            low_str, high_str = last_line.split("～", 1)
+        low = _parse_irbank_pdf_signed_number(low_str)
+        high = _parse_irbank_pdf_signed_number(high_str)
+        if low is None or high is None:
+            return None
+        return (low + high) / 2
+
+    value = last_line
+    if not value or value in ("―", "-"):
+        return None
+    # Some real filers (confirmed live: Renesas Electronics 6723's own
+    # Non-GAAP margin columns, e.g. "58.2％") render the percent sign as
+    # the full-width Japanese character U+FF05, not the ASCII "%"
+    # (U+0025) - rstrip("%") silently leaves it in place, which then made
+    # float() raise and the whole cell return None, discarding a real,
+    # present percentage figure rather than a genuinely absent one. Both
+    # forms are stripped, not just one - a real mix of both across
+    # different filers/columns in the same document has not been ruled
+    # out, and stripping the ASCII form when it's absent is a no-op.
+    value = value.rstrip("%％")
+    return _parse_irbank_pdf_signed_number(value)
+
+
+def _parse_irbank_pdf_signed_number(value: str) -> float | None:
+    """Parse a single (non-range) numeric token, honoring a leading "△"
+    (Japanese accounting negative marker) - see _parse_irbank_pdf_number's
+    own docstring for why this exists. Shared by both the plain-value and
+    range-bound parsing paths in that function.
+    """
+    value = value.strip()
+    is_negative = value.startswith("△")
+    if is_negative:
+        value = value[1:].strip()
+    value = value.replace(",", "")
+    try:
+        number = float(value)
+    except ValueError:
+        return None
+    return -number if is_negative else number
+
+
+# pdfplumber's default table-detection settings are not consistently
+# reliable across real filings - confirmed live: the default (equivalent to
+# "lines") finds Advantest's and Disco's tables correctly but finds ZERO
+# tables in Fujikura's filing despite the same table genuinely being
+# present and readable via extract_text(); explicitly forcing
+# "lines_strict" finds Fujikura's 2 tables correctly but then finds ZERO in
+# Advantest's/Disco's. There is no single strategy that works for all three
+# - _extract_irbank_pdf_tables tries each in turn per page and keeps
+# whichever one actually yields a recognizable previous/revised-forecast
+# table, rather than assuming one upfront.
+_IRBANK_PDF_TABLE_STRATEGIES = ["lines", "lines_strict", "text"]
+
+
+def _irbank_pdf_header_row(raw_table: list[list[str | None]], previous_row_index: int) -> list[str | None] | None:
+    """Find the real header row for a previous/revised pair at
+    ``previous_row_index`` within ``raw_table``.
+
+    Confirmed live 2026-09-28 against a real Fujikura filing
+    (140120250806532652): pdfplumber's own extract_tables() can merge
+    MULTIPLE distinct forecast blocks (e.g. a Q2/half-year block and a
+    separate full-year block) into ONE raw_table object when they sit on
+    the same page with no detected separator - always using raw_table[0]
+    as the header (the previous version's assumption) is only correct for
+    the FIRST such block; every later block's real header (line-item
+    names like 売上高/営業利益) sits a few rows above ITS OWN previous row,
+    not at the very top of the merged table. Walking backward from the
+    previous row to the nearest row with 2+ non-empty cells finds each
+    block's own header correctly regardless of how many blocks got merged
+    into one raw_table - confirmed against the real Fujikura filing this
+    correctly recovers both blocks' headers (its own row 5 for the Q2
+    block, row 14 for the full-year block) instead of picking row 0's
+    garbage cells for both.
+    """
+    for i in range(previous_row_index - 1, -1, -1):
+        candidate = raw_table[i]
+        if sum(1 for cell in candidate if cell and cell.strip()) >= 2:
+            return candidate
+    return None
+
+
+def _extract_tables_matching(raw_tables: list[list[list[str | None]]]) -> list[dict[str, Any]]:
+    """From a list of raw pdfplumber tables, keep only the ones that look
+    like a forecast-revision table (has both a previous- and a
+    revised-forecast row) and reshape each into {line_item: {previous,
+    revised}}.
+
+    A single raw_table can contain more than one previous/revised pair
+    (see _irbank_pdf_header_row's own docstring for the confirmed-live
+    Fujikura case where two forecast blocks merge into one pdfplumber
+    table) - every previous/revised pair found is processed with its own
+    nearest header, not just the first one, so a merged multi-block table
+    yields multiple result dicts instead of silently only ever reading the
+    first block.
+    """
+    tables: list[dict[str, Any]] = []
+    for raw_table in raw_tables:
+        if len(raw_table) < 2:
+            continue
+
+        for idx, row in enumerate(raw_table):
+            # The previous/revised marker usually sits in column 0, but
+            # confirmed live 2026-09-28 NOT always: some real filings
+            # (Fujikura consistently; one real Disco filing too - 5 of 154
+            # real revisions across the 20-company universe) render an
+            # empty leading cell, pushing every label one column to the
+            # right (e.g. ['', '前回発表予想(Ａ)', '481,000', ...] instead
+            # of ['前回発表予想(Ａ)', '481,000', ...]). Scanning the first
+            # 2 cells for the marker (rather than assuming column 0)
+            # covers both real layouts seen so far without needing a
+            # per-filer special case; marker_col is then reused for the
+            # revised-row lookup and the header/data column alignment
+            # below so the whole row stays internally consistent.
+            marker_col = next(
+                (c for c in (0, 1) if c < len(row) and row[c] and _irbank_pdf_row_kind(row[c]) == "previous"),
+                None,
+            )
+            if marker_col is None:
+                continue
+            previous_row = row
+
+            # Some real filings (confirmed live 2026-09-28: 2 of Resonac
+            # Holdings' 15 real revisions) render the previous-forecast
+            # row's own VALUES wrapped onto a second physical row that
+            # pdfplumber splits off as its own table row - the marker row
+            # itself then has only a bare unit string ("百万円"/"円 銭",
+            # no digits) in place of each real figure, e.g.:
+            #   ['前回発表予想(A)\n...', '百万円\n1,270,000', '百万円', '百万円', ...]
+            #   [None, None, '△20,000', '△26,000', '△37,000', '△204.27']
+            # The continuation row's own leading cells (through marker_col)
+            # are None/empty, distinguishing it from a genuine new labelled
+            # row (revised/increase-decrease/etc.), which always has real
+            # text in its own marker_col. Where the marker row's cell has
+            # no digits at all, the continuation row's same-index cell
+            # (if it has one) is used instead - this only ever fills a gap,
+            # never overwrites a real value the marker row already had.
+            if idx + 1 < len(raw_table):
+                next_row = raw_table[idx + 1]
+                looks_like_continuation = (
+                    len(next_row) > marker_col
+                    and all(not (c and c.strip()) for c in next_row[: marker_col + 1])
+                    and any(c and re.search(r"\d", c) for c in next_row[marker_col + 1:])
+                )
+                if looks_like_continuation:
+                    merged = list(previous_row)
+                    for i in range(marker_col + 1, min(len(merged), len(next_row))):
+                        cell = merged[i]
+                        if (not cell or not re.search(r"\d", cell)) and next_row[i] and re.search(r"\d", next_row[i]):
+                            merged[i] = next_row[i]
+                    previous_row = merged
+
+            revised_row = next(
+                (
+                    r for r in raw_table[idx + 1:]
+                    if marker_col < len(r) and r[marker_col] and _irbank_pdf_row_kind(r[marker_col]) == "revised"
+                ),
+                None,
+            )
+            if not revised_row:
+                continue
+            header_row = _irbank_pdf_header_row(raw_table, idx)
+            if not header_row:
+                continue
+            header = header_row[marker_col + 1:]
+
+            # Some real filers (confirmed live: Renesas Electronics 6723,
+            # every one of its 20 real filings checked) never state a
+            # previous FORECAST at all - the (A) row is a literal dash
+            # ("－") in every column, every time, not a parsing failure.
+            # The only other real figure in these filings is a separate
+            # "reference" row - labelled with both "前期" (previous
+            # period) and "実績" (actual results), e.g. "（ご参考）前期
+            # （2025年12月期）実績" - giving the SAME period last YEAR's
+            # real actual result, not this year's earlier forecast. This
+            # is a genuinely different concept from (A) (a real result vs.
+            # a stated forecast), so it is captured under its own key
+            # (reference_prior_year_actual), never substituted for
+            # "previous" - a consumer that wants "did the forecast change"
+            # still correctly sees previous=None for a company that never
+            # discloses one, rather than being fed a same-value-different-
+            # meaning number silently mislabeled as a forecast.
+            reference_row = next(
+                (
+                    r for r in raw_table
+                    if marker_col < len(r) and r[marker_col]
+                    and "前期" in r[marker_col] and "実績" in r[marker_col]
+                ),
+                None,
+            )
+
+            line_items = {}
+            for i, label in enumerate(header, start=marker_col + 1):
+                if not label:
+                    continue
+                # Some filers' PDFs render a header label with a space
+                # injected between every character (confirmed live
+                # 2026-09-28: Murata Manufacturing's own tables
+                # consistently extract "営 業 利 益" instead of "営業利益"
+                # for the exact same line item other filers render
+                # without spacing - a PDF kerning/layout artifact, not a
+                # different label) - stripping ALL whitespace (not just
+                # "\n") merges these back to the same key a normally-
+                # rendered filing already uses. Confirmed safe via the
+                # real label set collected across all 20 companies'
+                # 5-year history: every case two labels collapse to the
+                # same whitespace-stripped form is a genuine duplicate
+                # (e.g. "税 引 前 利 益"/"税引前利益"), never two distinct
+                # concepts merged incorrectly.
+                label = re.sub(r"\s+", "", label)
+                line_items[label] = {
+                    "previous": _parse_irbank_pdf_number(previous_row[i]) if i < len(previous_row) else None,
+                    "revised": _parse_irbank_pdf_number(revised_row[i]) if i < len(revised_row) else None,
+                    "reference_prior_year_actual": (
+                        _parse_irbank_pdf_number(reference_row[i])
+                        if reference_row and i < len(reference_row) else None
+                    ),
+                }
+            if line_items:
+                # "_kind" is a synthetic key, not a real Japanese line-item
+                # label (every real label is Japanese text) - safe to mix
+                # into the same dict without risking a collision, and lets
+                # every existing consumer that only ever reads real
+                # line-item keys keep working unchanged (json.dumps/reads
+                # untouched, dict shape untouched) while new J2 code can
+                # check table["_kind"] to find the actual-vs-forecast
+                # tables it needs. See _irbank_pdf_table_kind's own
+                # docstring for what the two possible values mean.
+                line_items["_kind"] = _irbank_pdf_table_kind(revised_row[marker_col] or "")
+                tables.append(line_items)
+    return tables
+
+
+def _irbank_pdf_table_looks_headerless(raw_table: list[list[str | None]]) -> bool:
+    """True if raw_table's very first row is already a previous/revised
+    marker row (no header row above it) - the shape of a table whose
+    header was left behind on the PREVIOUS page (see
+    _extract_irbank_pdf_tables's own docstring on the confirmed-live TDK
+    cross-page split).
+    """
+    if not raw_table:
+        return False
+    first_row = raw_table[0]
+    return any(
+        first_row[c] and _irbank_pdf_row_kind(first_row[c]) == "previous"
+        for c in (0, 1) if c < len(first_row)
+    )
+
+
+def _irbank_pdf_table_looks_headeronly(raw_table: list[list[str | None]]) -> bool:
+    """True if raw_table has no previous/revised marker row anywhere but
+    its own final row has 2+ non-empty cells (looks like a real header,
+    e.g. 売上高/営業利益/...) - the shape of a table whose data rows
+    haven't arrived yet because they spilled onto the NEXT page (see
+    _extract_irbank_pdf_tables's own docstring).
+    """
+    if not raw_table:
+        return False
+    has_marker = any(
+        row[c] and _irbank_pdf_row_kind(row[c]) in ("previous", "revised")
+        for row in raw_table for c in (0, 1) if c < len(row)
+    )
+    if has_marker:
+        return False
+    last_row = raw_table[-1]
+    return sum(1 for cell in last_row if cell and cell.strip()) >= 2
+
+
+def _extract_irbank_pdf_tables(pdf_bytes: bytes) -> list[dict[str, Any]]:
+    """Extract every forecast-revision table from a filing PDF's pages.
+
+    A single PDF can contain multiple such tables - confirmed live for
+    Disco's variance-vs-actual notice, which carried 4 (Q1 consolidated
+    variance, Q1 standalone variance, Q2 consolidated forecast, Q2
+    standalone forecast) plus a separate dividend table (skipped - no
+    previous/revised row labels match, so it is naturally excluded rather
+    than needing an explicit skip rule).
+
+    A table can also split ACROSS a page boundary - confirmed live
+    2026-09-28 against a real TDK filing (140120220418523467): the
+    header row (売上高/営業利益/...) lands as the very last row extracted
+    on page 0, with its own previous/revised data rows appearing as the
+    FIRST rows of a separate raw_table on page 1 - pdfplumber's own
+    per-page extraction has no way to know these are one logical table,
+    so processing each page independently (the old code) silently
+    produced a header-only table with no data on page 0 and a markerless,
+    header-less table on page 1, neither of which _extract_tables_matching
+    could turn into a result. Detected here (not inside
+    _extract_tables_matching, which has no cross-page visibility) by
+    checking whether the PREVIOUS page's last raw table looks header-only
+    (_irbank_pdf_table_looks_headeronly) and the CURRENT page's first raw
+    table looks headerless (_irbank_pdf_table_looks_headerless) - when
+    both hold, the two are spliced into one combined raw_table before
+    matching, exactly as if pdfplumber had extracted them as a single
+    table in the first place.
+    """
+    import pdfplumber
+    from io import BytesIO
+
+    tables: list[dict[str, Any]] = []
+    pending_header_only: list[list[str | None]] | None = None
+    with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
+        for page in pdf.pages:
+            for strategy in _IRBANK_PDF_TABLE_STRATEGIES:
+                settings = {"vertical_strategy": strategy, "horizontal_strategy": strategy}
+                try:
+                    raw_tables = page.extract_tables(table_settings=settings)
+                except Exception:
+                    continue
+
+                if raw_tables and pending_header_only is not None and _irbank_pdf_table_looks_headerless(raw_tables[0]):
+                    raw_tables = [pending_header_only + raw_tables[0]] + raw_tables[1:]
+                pending_header_only = None
+
+                matched = _extract_tables_matching(raw_tables)
+                if matched:
+                    tables.extend(matched)
+                if raw_tables and _irbank_pdf_table_looks_headeronly(raw_tables[-1]):
+                    pending_header_only = raw_tables[-1]
+                if matched or raw_tables:
+                    break
+    return tables
+
+
+# IRBANK occasionally renders a stale date-folder prefix in a detail page's
+# PDF link (confirmed live: Screen Holdings 7735's 2021/10/26 filing showed
+# "/pdf/20211026/{doc_id}.pdf" - a 403 AccessDenied S3-style error, not a
+# PDF - while re-fetching the SAME detail page moments later, and every
+# time since, correctly shows "/pdf/20211027/{doc_id}.pdf", a real PDF; the
+# filing's own title text confirms 2021/10/27 as the true TDnet submission
+# time, one day after the doc_id's embedded drafting date). This self-
+# corrects on IRBANK's side - retrying the SAME (wrong) pdf_url would just
+# repeat the same 403, so the retry re-fetches and re-parses the detail
+# page each attempt, unlike _get_with_ssl_retry above (which retries one
+# fixed URL for a different, transient-connection failure mode).
+_IRBANK_PDF_RETRY_ATTEMPTS = 2
+_IRBANK_PDF_RETRY_BACKOFF_SECONDS = 3.0
+
+# Some IRBANK-hosted filing PDFs embed Type3 fonts with no ToUnicode CMap -
+# confirmed live for Towa (6315) and Tokyo Ohka Kogyo (4186), 3 of 154 real
+# filings (~2%) in a 20-company/5-year sample: pdfplumber, pdfminer,
+# poppler's pdftotext, and PyMuPDF all extract identical (cid:N) glyph-code
+# garbage, not readable text, because Type3 glyphs are raw drawing
+# procedures with no character-identity table to recover from at all (not
+# the more common "subsetted font missing its map" case, which sometimes
+# has a recoverable encoding). Recurring across 2 different filers (not a
+# one-off) is why an OCR fallback is worth the dependency cost here -
+# tesseract-ocr + tesseract-ocr-jpn are this Dockerfile's first apt-get
+# system dependency (everything else is pip-only).
+_CID_GARBAGE_RE = re.compile(r"\(cid:\d+\)")
+
+
+def _looks_like_cid_garbage(text: str) -> bool:
+    if not text or not text.strip():
+        return True
+    cid_chars = sum(len(m.group()) for m in _CID_GARBAGE_RE.finditer(text))
+    real_chars = len(re.sub(r"\s", "", text))
+    if real_chars == 0:
+        return True
+    return cid_chars / real_chars > 0.3
+
+
+# Confirmed live via manual testing against Towa's real CID-garbage PDF:
+# dpi=400 + "--psm 6" (Tesseract's "assume a single uniform block of text"
+# page-segmentation mode) produces materially cleaner output than the
+# default psm or a lower DPI - other combinations tried (dpi=300 psm=4,
+# dpi=400 psm=4) left visible garbled fragments in the reason paragraph
+# that this combination does not. OCR quality is still noticeably rougher
+# than the PDF text layer (occasional misread characters, stray line-break
+# artifacts) - "readable and substantially correct," not "verbatim." Table
+# numbers are NOT attempted here at all: the same manual test found numeric
+# OCR meaningfully less reliable than prose OCR, and a silently-wrong
+# figure feeding a classification rule downstream is worse than a missing
+# one - so this only ever returns reason text, tables stay unset for any
+# filing that reaches this fallback.
+_IRBANK_OCR_DPI = 400
+_IRBANK_OCR_CONFIG = "--psm 6"
+
+
+def _ocr_extract_irbank_reason(pdf_bytes: bytes) -> str | None:
+    """OCR fallback for a Type3-font PDF with no extractable text layer -
+    renders each page to an image and runs Tesseract (Japanese) over it,
+    then applies the same reason-paragraph pattern used for normal
+    PDF-text-layer extraction. Returns None if OCR itself fails or no
+    reason paragraph is found in the OCR'd text.
+    """
+    import pymupdf
+    import pytesseract
+    from PIL import Image
+    from io import BytesIO
+
+    try:
+        doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+        page_texts = []
+        for page in doc:
+            pix = page.get_pixmap(dpi=_IRBANK_OCR_DPI)
+            img = Image.open(BytesIO(pix.tobytes("png")))
+            page_texts.append(pytesseract.image_to_string(img, lang="jpn", config=_IRBANK_OCR_CONFIG))
+        ocr_text = "\n".join(page_texts)
+    except Exception as exc:
+        logger.warning("[IRBANK] OCR fallback failed: %s", exc)
+        return None
+
+    reason_match = _IRBANK_REASON_RE.search(ocr_text)
+    return _trim_irbank_reason_at_boilerplate(reason_match.group("reason")) if reason_match else None
+
+
+def _fetch_irbank_filing_pdf(doc_href: str) -> dict[str, Any] | None:
+    """Fetch one irbank.net/{code}/{doc_id} detail page, find its PDF link,
+    download the PDF, and extract forecast tables plus the company's own
+    stated reason text.
+
+    Returns None on any failure (detail page unreachable, no PDF link found,
+    PDF unparseable) - callers treat a missing result as "figures not yet
+    available", not an error, same fail-open convention _fetch_dart_document_
+    body uses.
+    """
+    pdf_bytes: bytes | None = None
+    pdf_url: str | None = None
+    last_exc: Exception | None = None
+
+    for attempt in range(1, _IRBANK_PDF_RETRY_ATTEMPTS + 1):
+        _irbank_rate_sleep()
+        try:
+            resp = httpx.get(
+                f"https://irbank.net{doc_href}", headers=_IRBANK_HEADERS, timeout=30.0,
+                follow_redirects=True,
+            )
+            resp.raise_for_status()
+            detail_html = resp.text
+        except Exception as exc:
+            last_exc = exc
+            continue
+
+        pdf_match = _IRBANK_PDF_LINK_RE.search(detail_html)
+        if not pdf_match:
+            last_exc = ValueError("no PDF link found on detail page")
+            continue
+
+        _irbank_rate_sleep()
+        try:
+            pdf_resp = httpx.get(
+                pdf_match.group("pdf_url"), headers=_IRBANK_HEADERS, timeout=30.0,
+                follow_redirects=True,
+            )
+            pdf_resp.raise_for_status()
+            pdf_bytes = pdf_resp.content
+            pdf_url = pdf_match.group("pdf_url")
+            break
+        except Exception as exc:
+            last_exc = exc
+            logger.warning(
+                "[IRBANK] PDF fetch failed (attempt %d/%d) href=%s url=%s error=%s"
+                " - re-fetching detail page for a possibly-corrected link",
+                attempt, _IRBANK_PDF_RETRY_ATTEMPTS, doc_href, pdf_match.group("pdf_url"), exc,
+            )
+            if attempt < _IRBANK_PDF_RETRY_ATTEMPTS:
+                time.sleep(_IRBANK_PDF_RETRY_BACKOFF_SECONDS)
+
+    if pdf_bytes is None:
+        logger.warning("[IRBANK] PDF fetch exhausted retries href=%s error=%s", doc_href, last_exc)
+        return None
+
+    try:
+        import pdfplumber
+        from io import BytesIO
+
+        with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
+            full_text = "\n".join(p.extract_text() or "" for p in pdf.pages)
+        tables = _extract_irbank_pdf_tables(pdf_bytes)
+    except Exception as exc:
+        logger.warning("[IRBANK] PDF parse failed url=%s error=%s", pdf_url, exc)
+        return None
+
+    if _looks_like_cid_garbage(full_text):
+        logger.warning(
+            "[IRBANK] PDF text looks like CID-only garbage (likely a Type3"
+            " font with no ToUnicode map) - falling back to OCR for reason"
+            " text; tables stay unset (numeric OCR is unreliable): url=%s",
+            pdf_url,
+        )
+        reason = _ocr_extract_irbank_reason(pdf_bytes)
+        return {"tables": [], "reason": reason, "pdf_url": pdf_url}
+
+    reason_match = _IRBANK_REASON_RE.search(full_text)
+    reason = _trim_irbank_reason_at_boilerplate(reason_match.group("reason")) if reason_match else None
+
+    return {"tables": tables, "reason": reason, "pdf_url": pdf_url}
+
+
+# Once this many consecutive already-stored revisions are seen while
+# walking a company's note_N history newest-first, stop walking further
+# back rather than keep checking (cheaply) or fetching (expensively) items
+# almost certain to already be stored too. A small buffer (not 1) tolerates
+# a single out-of-order edge case without losing much of the speed benefit -
+# see _fetch_one_irbank_financials's docstring for why this is safe to rely
+# on at all (confirmed live: both note_N block order and each block's own
+# item order are consistently newest-first, no interleaving observed across
+# 19 real revisions for Advantest).
+_IRBANK_STOP_AFTER_CONSECUTIVE_SEEN = 3
+
+
+def _fetch_one_irbank_financials(code: str, company: str, days_back: int) -> list[dict]:
+    """Fetch forecast-revision notices for one company from its IRBANK
+    /{code}/tdnet disclosure-history page.
+
+    Confirmed live 2026-09-27 against Advantest (6857) and Disco (6146): the
+    page holds the company's full disclosure history (13+ years deep for
+    Advantest), covering far more than revisions (results, buybacks,
+    dividends, administrative notices) - filtering to "備考" blocks labelled
+    "修正" isolates forecast-revision notices only; every other disclosure
+    type on this same page is a distinct source_type's job (see
+    kabutan_tdnet_mirror, irbank_buyback, etc.), not fetched again from here.
+
+    Only fetches (and PDF-parses) revisions not already stored - the first
+    run for a company naturally becomes a full backfill (nothing stored yet,
+    so every revision is fetched), and every run after that is naturally
+    incremental (get_already_stored_urls skips the PDF fetch entirely for
+    anything already in the DB, and _IRBANK_STOP_AFTER_CONSECUTIVE_SEEN
+    stops walking the list once enough already-stored items are seen in a
+    row) - one code path serves both purposes, no separate backfill mode or
+    CLI flag needed. This matters in practice: a company's full history can
+    be 19-50+ revisions, each requiring its own PDF download and parse -
+    re-doing that every day for years of unchanged history would make daily
+    runs slow for no benefit, given every filing here is immutable once
+    published.
+    """
+    _irbank_rate_sleep()
+    try:
+        resp = httpx.get(
+            f"https://irbank.net/{code}/tdnet", headers=_IRBANK_HEADERS, timeout=30.0,
+            follow_redirects=True,
+        )
+        resp.raise_for_status()
+        text = resp.text
+    except Exception as exc:
+        logger.warning("[IRBANK] tdnet fetch failed code=%s error=%s", code, exc)
+        return []
+
+    revision_blocks = [
+        b for b in _IRBANK_NOTE_BLOCK_RE.finditer(text) if b.group("label").strip() == "修正"
+    ]
+    # Flatten to one newest-first list of (doc_href, doc_id, url, title,
+    # date, pub_date) before doing anything expensive - candidate_urls below
+    # needs the full list up front for one batched get_already_stored_urls()
+    # call rather than a query per item, and pub_date is parsed here (rather
+    # than only for items that survive filtering) so the days_back cutoff
+    # below can use it as an early-stop condition too.
+    candidates = []
+    for block in revision_blocks:
+        for item in _IRBANK_NOTE_ITEM_RE.finditer(block.group("items")):
+            # date group e.g. "2026年7月29日 15:30" - parse the date portion
+            # only (time is kept in the title/metadata, not needed for
+            # _pub_date's day-level sort).
+            date_match = re.match(r"(\d{4})年(\d{1,2})月(\d{1,2})日", item.group("date"))
+            pub_date = (
+                datetime(int(date_match.group(1)), int(date_match.group(2)), int(date_match.group(3)), tzinfo=timezone.utc)
+                if date_match else None
+            )
+            doc_id = item.group("href").rsplit("/", 1)[-1]
+            candidates.append({
+                "doc_href": item.group("href"),
+                "doc_id": doc_id,
+                "url": f"irbank-financials://{code}/{doc_id}",
+                "title": item.group("title"),
+                "date": item.group("date"),
+                "pub_date": pub_date,
+            })
+    if not candidates:
+        return []
+
+    # days_back is a client-side cutoff (not a query param - IRBANK's
+    # /{code}/tdnet page has no date-range filter, confirmed live it always
+    # returns the full history) - combined with the newest-first ordering,
+    # once an item older than the cutoff is reached every remaining item is
+    # too, so this doubles as an early-stop, same rationale as the
+    # already-stored check below.
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
+
+    stored_urls = get_already_stored_urls([c["url"] for c in candidates])
+
+    results: list[dict] = []
+    consecutive_seen = 0
+    for c in candidates:
+        if c["pub_date"] and c["pub_date"] < cutoff:
+            break
+        if c["url"] in stored_urls:
+            consecutive_seen += 1
+            if consecutive_seen >= _IRBANK_STOP_AFTER_CONSECUTIVE_SEEN:
+                break
+            continue
+        consecutive_seen = 0
+
+        detail = _fetch_irbank_filing_pdf(c["doc_href"])
+        pub_date = c["pub_date"]
+
+        results.append({
+            # IRBANK genuinely reuses generic title text across many
+            # distinct filings for the same company - confirmed live
+            # 2026-09-28: Disco alone has 5 title strings (e.g. "業績予想
+            # のお知らせ") repeated across 49 of its 50 real revisions,
+            # each a real, separate filing with its own date and doc_id.
+            # articles' own uq_articles_run_title unique index is
+            # (run_id, lower(title)) - without the date folded in here,
+            # a single run inserting more than one revision sharing a
+            # title silently drops every collision after the first via
+            # ON CONFLICT DO NOTHING (confirmed live: a 20-company/5-year
+            # backfill inserted only 78 of 154 real fetched revisions
+            # before this fix). c["date"]'s own minute-precision text is
+            # unique per filing in practice (two distinct TDnet filings
+            # for the same company at the exact same minute has never
+            # been observed), so prefixing it makes every title distinct
+            # without changing what a reader sees the filing as.
+            "title": f"{company} ({code}) [{c['date']}]: {c['title']}",
+            "url": c["url"],
+            "published": c["date"],
+            "source": "IRBANK",
+            # Not duplicated into "summary" - metadata.reason below is the
+            # only field any real consumer (classify_forecast_revision)
+            # reads; nothing in either service reads this article's own
+            # "summary" column for jp_forecast, confirmed by a full grep
+            # of both services before this was changed.
+            "summary": None,
+            "body": None,
+            "_pub_date": pub_date,
+            "metadata": {
+                "code": code,
+                "company": company,
+                "figures": detail["tables"] if detail else None,
+                "reason": detail["reason"] if detail else None,
+                "pdf_url": detail["pdf_url"] if detail else None,
+                    "source_category": "jp_forecast",
+                    "doc_href": c["doc_href"],
+                },
+            })
+    return results
+
+
+def _fetch_irbank_financials(sources: list[dict], days_back: int) -> list[dict]:
+    """Fetch forecast-revision notices for all companies across all
+    irbank_financials sources.
+    """
+    companies: list[dict[str, str]] = []
+    for source in sources:
+        config = source.get("config") or {}
+        companies.extend(config.get("companies", []))
+    if not companies:
+        return []
+
+    articles: list[dict] = []
+    for c in companies:
+        articles.extend(_fetch_one_irbank_financials(c["code"], c["company"], days_back))
+    return articles
+
+
+# ---------------------------------------------------------------------------
+# Japan market signal - IRBANK buyback status (irbank.net/{code}/buyback)
+# ---------------------------------------------------------------------------
+#
+# Confirmed live 2026-09-28 against Advantest (6857): /{code}/buyback
+# 301-redirects to /{edinet_code}/buyback (same pattern as /tdnet above -
+# follow_redirects=True required). The page groups entries by year under
+# an <h2 id="cYYYY"> heading, each year one board-resolution PROGRAM (its
+# own share/yen upper limit and acquisition window), with one <dl class=
+# "gdl"> holding one dated entry per monthly status report: date, this
+# month's share-count CHANGE, cumulative yen amount, and cumulative %
+# of the program's authorized upper limit. This is genuinely clean,
+# already-structured per-report data - unlike EDINET's own buyback-status
+# filing (docTypeCode 220/230, see edinet_buyback_status), which has NO
+# discrete numeric field at all for the same information (confirmed live
+# it is only a free-text XBRL block) - this source is the intended PRIMARY
+# source for buyback figures; EDINET's is same-day corroboration only.
+_IRBANK_BUYBACK_PROGRAM_RE = re.compile(
+    r'<h2 id="c(?P<year>\d{4})">\d{4}年</h2>'
+    r'<h3>(?P<resolution>[^<]+)<br><small>(?P<limits>[^<]+)</small><br>'
+    r'<small>取得期間：(?P<period>[^<]+)</small></h3>'
+    r'<dl class="gdl">(?P<entries>.*?)</dl>',
+    re.S,
+)
+_IRBANK_BUYBACK_ENTRY_RE = re.compile(
+    r'<dt><a title="[^"]*" href="(?P<href>/[^"]+)">(?P<date>\d{4}年\d{1,2}月\d{1,2}日)</a>'
+    r'<br>&thinsp;<span class="co_red">(?P<change>[^<]*)</span></dt>'
+    r'<dd><span class="ratio"[^>]*></span><span class="text">(?P<cumulative>[^<]*)<br>'
+    r'<span class="weaken">\((?P<pct>[^)]*)\)</span></span></dd>',
+)
+
+
+def _parse_japanese_date(date_str: str) -> datetime | None:
+    m = re.match(r"(\d{4})年(\d{1,2})月(\d{1,2})日", date_str)
+    if not m:
+        return None
+    return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), tzinfo=timezone.utc)
+
+
+def _fetch_one_irbank_buyback(code: str, company: str) -> list[dict]:
+    """Fetch a company's full buyback-program history from its IRBANK
+    /{code}/buyback page - confirmed live this page holds every board-
+    resolution program the company has run (Advantest: 4 programs back to
+    2020), each with its own monthly status-report entries.
+
+    Not days_back-scoped, unlike irbank_financials - confirmed live this
+    page is far smaller (a handful of programs, a few entries each) than a
+    company's full disclosure history, so walking the whole thing and
+    relying on dedup (rather than a client-side date cutoff) is simpler and
+    still cheap. No PDF fetch needed either - every figure needed is
+    already in this page's own HTML, unlike irbank_financials.
+    """
+    _irbank_rate_sleep()
+    try:
+        resp = httpx.get(
+            f"https://irbank.net/{code}/buyback", headers=_IRBANK_HEADERS, timeout=30.0,
+            follow_redirects=True,
+        )
+        resp.raise_for_status()
+        text = resp.text
+    except Exception as exc:
+        logger.warning("[IRBANK] buyback page fetch failed code=%s error=%s", code, exc)
+        return []
+
+    results: list[dict] = []
+    for program in _IRBANK_BUYBACK_PROGRAM_RE.finditer(text):
+        for entry in _IRBANK_BUYBACK_ENTRY_RE.finditer(program.group("entries")):
+            href = entry.group("href")
+            # href e.g. "/E01950/offer?f=S100X9OX" - the query value is the
+            # underlying EDINET docID, globally unique, used as dedup key.
+            doc_id_match = re.search(r"f=([^&]+)", href)
+            doc_id = doc_id_match.group(1) if doc_id_match else href
+
+            results.append({
+                # Two distinct buyback-status entries for the same company
+                # can share the identical date+change text (confirmed live
+                # 2026-09-28: Renesas Electronics has 2 real, separate
+                # entries both dated 2020年7月14日 with "+0株" - two
+                # different programs both reporting zero activity that
+                # day) - same uq_articles_run_title collision risk as
+                # every other Japan fetcher's generic-title case (see
+                # _fetch_one_irbank_financials's comment on this bug
+                # class). doc_id is already this row's own unique dedup
+                # key (used in its url), so appending it here guarantees a
+                # distinct title too.
+                "title": f"{company} ({code}) buyback status [{doc_id}]: {entry.group('date')}, {entry.group('change')}",
+                "url": f"irbank-buyback://{code}/{doc_id}",
+                "published": entry.group("date"),
+                "source": "IRBANK",
+                "summary": None,
+                "body": None,
+                "_pub_date": _parse_japanese_date(entry.group("date")),
+                "metadata": {
+                    "code": code,
+                    "company": company,
+                    "program_year": program.group("year"),
+                    "program_resolution": program.group("resolution"),
+                    "program_limits": program.group("limits"),
+                    "program_period": program.group("period"),
+                    "share_change": entry.group("change"),
+                    "cumulative_amount": entry.group("cumulative"),
+                    "cumulative_pct_of_limit": entry.group("pct"),
+                    "source_category": "jp_buyback",
+                },
+            })
+    return results
+
+
+def _fetch_irbank_buyback(sources: list[dict]) -> list[dict]:
+    """Fetch buyback-program history for all companies across all
+    irbank_buyback sources.
+    """
+    companies: list[dict[str, str]] = []
+    for source in sources:
+        config = source.get("config") or {}
+        companies.extend(config.get("companies", []))
+    if not companies:
+        return []
+
+    articles: list[dict] = []
+    for c in companies:
+        articles.extend(_fetch_one_irbank_buyback(c["code"], c["company"]))
+    return articles
+
+
+# ---------------------------------------------------------------------------
+# Japan market signal - IRBANK company reference facts (total assets,
+# shares outstanding)
+# ---------------------------------------------------------------------------
+#
+# Two slow-changing per-company REFERENCE facts - not news, not events -
+# needed as denominators by signal-detection-agent's J5/J6 classifiers
+# (see japan_signal_classifier.py):
+#   - Total assets: J5's "investment >= 10% of total assets" rule.
+#   - Shares outstanding: J6's "buyback >= 5% of shares outstanding" rule.
+# Folded into ONE source_type/fetcher rather than two, since both are
+# fetched from the same IRBANK domain in the same per-company loop, both
+# change at the same slow (quarterly-at-most) cadence, and both exist
+# purely to serve the same pair of downstream classifiers - splitting them
+# would mean two near-identical fetchers and two redundant DB rows per
+# company per poll for no benefit (unlike irbank_financials vs.
+# irbank_buyback, which really are two independently-scoped feeds).
+#
+# Total assets: confirmed live 2026-09-29 on IRBANK's own /{code}/bs
+# ("financial condition") page - reachable via the same
+# follow_redirects=True /{code}/... pattern irbank_financials/
+# irbank_buyback already use - a clean per-fiscal-period history table
+# (JPY millions) with 総資産 (total assets) as its own labelled column,
+# one row per fiscal period back many years (confirmed live: 23 real
+# quarterly/annual rows for Disco, back to 2007/03). Only the single
+# newest row is kept per run (no habit computation needed here, unlike
+# irbank_financials - J5 only ever needs the LATEST known figure).
+#
+# Shares outstanding: NOT published directly anywhere on IRBANK's pages
+# checked (confirmed live: no 発行済株式/上場株式数 field on the main
+# /{code} page or the /dividend page) - derived instead as
+# market_cap / previous_close_price, both of which ARE present on the
+# main /{code} page (confirmed live for Advantest: 時価総額 24兆8880億 /
+# 前日終値 33,060 -> ~752M shares). Confirmed live three distinct real
+# market-cap label formats exist depending on company size (trillion+oku,
+# e.g. "24兆8880億"; oku+man only for smaller caps, e.g. "1660億2262万";
+# oku alone with no man remainder, e.g. "1兆681億") - _parse_irbank_
+# market_cap_yen handles all three.
+#
+# Dedup: synthetic url "irbank-company-reference://{code}/{period}" -
+# period is the /bs page's own newest fiscal-period label (e.g.
+# "2026/06"), so a company's reference row is only re-stored once its
+# next real fiscal-period row actually appears on IRBANK - the same
+# reasoning irbank_buyback already uses (small page, dedup handles
+# staleness, no days_back scoping needed). Note shares-outstanding is
+# tagged with the SAME period as total-assets for one combined dedup key,
+# even though it technically comes from a live market-cap snapshot (which
+# changes daily with the share price) rather than a fiscal filing - this
+# is deliberate: J6's 5%-of-shares-outstanding rule only needs a
+# reasonably current share count, not a point-in-time-exact one, and
+# tying it to the same slow refresh cadence as total assets avoids a
+# second independent dedup key for what is, for this rule's purposes, the
+# same "company reference snapshot" concept.
+_IRBANK_BS_TABLE_RE = re.compile(
+    r"<caption[^>]*>財務履歴（百万円）.*?</caption>.*?<tbody>(?P<tbody>.*?)</tbody>", re.S,
+)
+_IRBANK_BS_ROW_RE = re.compile(r"<tr[^>]*>(?P<row>.*?)</tr>", re.S)
+_IRBANK_BS_CELL_RE = re.compile(r"<t[dh][^>]*>(?P<cell>.*?)</t[dh]>", re.S)
+
+
+def _parse_irbank_yen_millions(cell_text: str) -> int | None:
+    """Parse a bs-table cell like "751,159" into an int (JPY millions).
+    Returns None for a blank/placeholder cell ("-", empty string) -
+    confirmed live IRBANK uses a bare "-" for periods before a company
+    started reporting a given line item (see Disco's own 2007/03 row,
+    which has a real 総資産 value but a blank 有利子負債).
+    """
+    cleaned = re.sub(r"<[^>]+>", "", cell_text).strip().replace(",", "")
+    if not cleaned or cleaned == "-":
+        return None
+    try:
+        return int(cleaned)
+    except ValueError:
+        return None
+
+
+def _parse_irbank_bs_period(period: str) -> datetime | None:
+    """Parse a bs-table period label like "2026/06" (fiscal year/month,
+    NOT year/month/day - _parse_japanese_date expects a full Y-M-D string
+    and does not apply here) into a UTC datetime on that month's last day.
+    The exact day within the month is never used for anything beyond
+    sort order (there is no finer-grained date on this page), so using
+    the reported month's first day is a fine, simple stand-in - never
+    compared against a real day-level date elsewhere.
+    """
+    m = re.match(r"(\d{4})/(\d{1,2})$", period)
+    if not m:
+        return None
+    return datetime(int(m.group(1)), int(m.group(2)), 1, tzinfo=timezone.utc)
+
+
+_IRBANK_MARKET_CAP_RE = re.compile(
+    r"時価総額</dt><dd>.*?<span class=\"text\">(?P<label>[^<]+)</span>", re.S,
+)
+_IRBANK_PRICE_RE = re.compile(
+    r"前日終値.*?<span class=\"text\">(?P<price>[\d,]+)</span>", re.S,
+)
+
+
+def _parse_irbank_market_cap_yen(label: str) -> int | None:
+    """Parse an IRBANK market-cap label into a plain yen int. Confirmed
+    live three real formats exist depending on company size: trillion+oku
+    ("24兆8880億"), oku+man ("1660億2262万"), and oku alone with no man
+    remainder ("1兆681億") - all three are handled here since which one a
+    given universe company gets is a function of its own market cap, not
+    something to special-case per company.
+    """
+    trillion_match = re.search(r"(\d+)兆", label)
+    oku_match = re.search(r"(\d+)億", label)
+    man_match = re.search(r"億(\d+)万", label)
+    if not trillion_match and not oku_match:
+        return None
+    trillion = int(trillion_match.group(1)) if trillion_match else 0
+    oku = int(oku_match.group(1)) if oku_match else 0
+    man = int(man_match.group(1)) if man_match else 0
+    return trillion * 1_0000_0000_0000 + oku * 1_0000_0000 + man * 1_0000
+
+
+def _fetch_one_irbank_company_reference(code: str, company: str) -> list[dict]:
+    """Fetch one company's latest known total-assets figure (from its
+    IRBANK /{code}/bs page) and shares-outstanding estimate (derived from
+    market cap / previous-close price on its main /{code} page). Returns a
+    single-item list (one synthetic "article" combining both reference
+    facts) or an empty list if the total-assets half can't be parsed -
+    fail-open, same contract as every other Japan fetcher in this file, so
+    one company's malformed page never blocks the other 19 in the same
+    run. shares_outstanding is allowed to be independently None (kept as
+    a separate optional field, not a reason to drop the whole row) since
+    total assets alone is still useful to J5 even if the market-cap page
+    format changes unexpectedly for one company.
+    """
+    _irbank_rate_sleep()
+    try:
+        resp = httpx.get(
+            f"https://irbank.net/{code}/bs", headers=_IRBANK_HEADERS, timeout=30.0,
+            follow_redirects=True,
+        )
+        resp.raise_for_status()
+        bs_text = resp.text
+    except Exception as exc:
+        logger.warning("[IRBANK] bs page fetch failed code=%s error=%s", code, exc)
+        return []
+
+    table_match = _IRBANK_BS_TABLE_RE.search(bs_text)
+    if not table_match:
+        logger.warning("[IRBANK] bs table not found code=%s", code)
+        return []
+
+    rows = _IRBANK_BS_ROW_RE.findall(table_match.group("tbody"))
+    if not rows:
+        return []
+
+    # Confirmed live (Disco 6146, 2026-09-29): rows are oldest-first, so
+    # the newest fiscal period is the LAST row, not the first.
+    newest_row = rows[-1]
+    cells = _IRBANK_BS_CELL_RE.findall(newest_row)
+    if len(cells) < 2:
+        return []
+
+    period = re.sub(r"<[^>]+>", "", cells[0]).strip()
+    total_assets_jpy_millions = _parse_irbank_yen_millions(cells[1])
+    if not period or total_assets_jpy_millions is None:
+        return []
+
+    shares_outstanding: int | None = None
+    try:
+        _irbank_rate_sleep()
+        resp = httpx.get(
+            f"https://irbank.net/{code}", headers=_IRBANK_HEADERS, timeout=30.0,
+            follow_redirects=True,
+        )
+        resp.raise_for_status()
+        main_text = resp.text
+        mc_match = _IRBANK_MARKET_CAP_RE.search(main_text)
+        price_match = _IRBANK_PRICE_RE.search(main_text)
+        if mc_match and price_match:
+            market_cap_yen = _parse_irbank_market_cap_yen(mc_match.group("label"))
+            price = int(price_match.group("price").replace(",", ""))
+            if market_cap_yen and price:
+                shares_outstanding = round(market_cap_yen / price)
+    except Exception as exc:
+        logger.warning("[IRBANK] main page fetch failed code=%s error=%s", code, exc)
+
+    return [{
+        "title": (
+            f"{company} ({code}) company reference [{period}]:"
+            f" total assets {total_assets_jpy_millions:,} JPY millions,"
+            f" shares outstanding {shares_outstanding:,}" if shares_outstanding
+            else f"{company} ({code}) company reference [{period}]:"
+            f" total assets {total_assets_jpy_millions:,} JPY millions"
+        ),
+        "url": f"irbank-company-reference://{code}/{period}",
+        "published": period,
+        "source": "IRBANK",
+        "summary": None,
+        "body": None,
+        "_pub_date": _parse_irbank_bs_period(period),
+        "metadata": {
+            "code": code,
+            "company": company,
+            "fiscal_period": period,
+            "total_assets_jpy_millions": total_assets_jpy_millions,
+            "shares_outstanding": shares_outstanding,
+            "source_category": "jp_company_reference",
+        },
+    }]
+
+
+def _fetch_irbank_company_reference(sources: list[dict]) -> list[dict]:
+    """Fetch the latest total-assets + shares-outstanding reference facts
+    for all companies across all irbank_company_reference sources.
+    """
+    companies: list[dict[str, str]] = []
+    for source in sources:
+        config = source.get("config") or {}
+        companies.extend(config.get("companies", []))
+    if not companies:
+        return []
+
+    articles: list[dict] = []
+    for c in companies:
+        articles.extend(_fetch_one_irbank_company_reference(c["code"], c["company"]))
+    return articles
+
+
+# ---------------------------------------------------------------------------
+# Japan market signal - Kabutan TDnet disclosure mirror (kabutan.jp)
+# ---------------------------------------------------------------------------
+#
+# Same no-key, undocumented-rate-limit posture as IRBANK above - reuses the
+# identical browser User-Agent (confirmed live both sites need one) and a
+# conservative fixed inter-request delay.
+_kabutan_rate_lock = threading.Lock()
+_kabutan_last_call = [0.0]
+_KABUTAN_MIN_INTERVAL = 1.0
+
+_KABUTAN_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                  " (KHTML, like Gecko) Chrome/128.0 Safari/537.36",
+}
+
+# Matches one row of kabutan.jp/disclosures/'s disclosure table
+# (class="stock_table") - confirmed live against real fetched HTML. Deliber-
+# ately does NOT match the page's separate market-index widget (a
+# different, unrelated <table> earlier in the same page, which has its own
+# <tbody> with no <a href="/stock/?code=..."> links at all - excluded
+# simply by requiring that link shape, not by any special-casing).
+# company/market can be legitimately blank for some smaller listings
+# (confirmed live, e.g. code 171A) - not a parse failure, just missing
+# metadata on Kabutan's own side.
+_KABUTAN_ROW_RE = re.compile(
+    r'<tr>\s*'
+    r'<td class="tac"><a href="/stock/\?code=(?P<code>[^"]+)">[^<]*</a></td>\s*'
+    r'<th scope="row" class="tal">(?P<company>[^<]*)</th>\s*'
+    r'<td class="tac">(?P<market>[^<]*)</td>\s*'
+    r'<td class="tal">(?P<category>[^<]*)</td>\s*'
+    r'<td class="tal wsnormal"[^>]*><a href="(?P<pdf_url>[^"]+)"[^>]*>(?P<title>[^<]*)[^<]*<[^>]*/?>?</a></td>\s*'
+    r'<td><time datetime="(?P<datetime>[^"]+)">[^<]*</time></td>',
+    re.S,
+)
+
+
+def _kabutan_rate_sleep() -> None:
+    with _kabutan_rate_lock:
+        elapsed = time.monotonic() - _kabutan_last_call[0]
+        if elapsed < _KABUTAN_MIN_INTERVAL:
+            time.sleep(_KABUTAN_MIN_INTERVAL - elapsed)
+        _kabutan_last_call[0] = time.monotonic()
+
+
+def _fetch_kabutan_disclosures(sources: list[dict], kubun: str | None, url_scheme: str, source_category: str) -> list[dict]:
+    """Walk kabutan.jp/disclosures/'s paginated, newest-first disclosure
+    feed page by page, stopping once a page's dates roll over to a prior
+    trading day, and keep only rows for tickers in JAPAN_TICKER_UNIVERSE.
+
+    kubun optionally scopes the feed server-side to one category (e.g. "j"
+    = 自社株取得/buyback, confirmed live to return ONLY that category and to
+    span far fewer pages per day than the unfiltered feed - one real page
+    covered 3 trading days of buyback-only filings, vs. ~30 pages/day for
+    the unfiltered feed) - shared by _fetch_kabutan_tdnet_mirror (kubun=None)
+    and _fetch_kabutan_buyback (kubun="j") rather than two near-duplicate
+    functions, same reuse pattern as _fetch_edinet_by_mode above.
+
+    Deliberately daily-only (no days_back parameter, unlike
+    _fetch_irbank_financials) for either kubun value - irbank_financials/
+    irbank_buyback already own historical data; this source's job is
+    same-day corroboration only.
+    """
+    codes: set[str] = set()
+    for source in sources:
+        config = source.get("config") or {}
+        codes.update(config.get("codes", []))
+    if not codes:
+        return []
+
+    articles: list[dict] = []
+    seen_date: str | None = None
+    page = 1
+    # Bounded generously above the ~30 pages/day confirmed live for the
+    # unfiltered feed (a kubun-scoped feed needs far fewer), so a freak
+    # high-volume day cannot spin this into an unbounded crawl.
+    max_pages = 60
+    while page <= max_pages:
+        params = []
+        if kubun:
+            params.append(f"kubun={kubun}")
+        if page > 1:
+            params.append(f"page={page}")
+        url = "https://kabutan.jp/disclosures/" + (f"?{'&'.join(params)}" if params else "")
+        _kabutan_rate_sleep()
+        try:
+            resp = httpx.get(url, headers=_KABUTAN_HEADERS, timeout=30.0, follow_redirects=True)
+            resp.raise_for_status()
+            text = resp.text
+        except Exception as exc:
+            logger.warning("[KABUTAN] disclosures fetch failed page=%d kubun=%s error=%s", page, kubun, exc)
+            break
+
+        rows = list(_KABUTAN_ROW_RE.finditer(text))
+        if not rows:
+            break
+
+        stop = False
+        for row in rows:
+            row_date = row.group("datetime")[:10]
+            if seen_date is None:
+                seen_date = row_date
+            elif row_date != seen_date:
+                stop = True
+                break
+
+            code = row.group("code")
+            if code not in codes:
+                continue
+
+            pdf_url = row.group("pdf_url")
+            doc_id = pdf_url.rstrip("/").rsplit("/", 1)[-1]
+            pub_date = datetime.fromisoformat(row.group("datetime"))
+
+            articles.append({
+                # Kabutan reuses generic disclosure-title text across
+                # different companies/times routinely (e.g. plain "自己株式
+                # の取得状況に関するお知らせ" with no distinguishing detail) -
+                # same collision shape confirmed live for IRBANK's own
+                # title text (see _fetch_one_irbank_financials's comment on
+                # this exact bug class). articles' uq_articles_run_title
+                # unique index is (run_id, lower(title)), so two same-day
+                # same-title rows in one run would silently drop the
+                # second via ON CONFLICT DO NOTHING. The minute-precision
+                # datetime is unique per disclosure in practice (confirmed
+                # live: Kabutan's own feed has never shown two different
+                # disclosures at the identical minute), so folding it in
+                # here prevents that without changing what a reader sees.
+                "title": f"{row.group('company').strip() or code} ({code}) [{row.group('datetime')}]: {row.group('title').strip()}",
+                "url": f"{url_scheme}://{code}/{doc_id}",
+                "published": row.group("datetime"),
+                "source": "Kabutan",
+                "summary": None,
+                "body": None,
+                "_pub_date": pub_date,
+                "metadata": {
+                    "code": code,
+                    "company": row.group("company").strip() or None,
+                    "market": row.group("market").strip() or None,
+                    "category": row.group("category").strip(),
+                    "source_category": source_category,
+                    "pdf_url": pdf_url,
+                },
+            })
+
+        if stop:
+            break
+        page += 1
+    else:
+        # Loop exhausted max_pages without the date ever rolling over -
+        # confirmed live this is a real gap (an earlier version had no
+        # warning here at all): a genuinely massive single-day volume
+        # (e.g. results season) could silently truncate mid-day with zero
+        # signal that anything was cut off, unlike every other
+        # truncation/failure path in this fetcher, which logs a warning.
+        logger.warning(
+            "[KABUTAN] hit max_pages=%d for kubun=%s without the date rolling"
+            " over (date=%s) - today's results may be incomplete",
+            max_pages, kubun, seen_date,
+        )
+
+    return articles
+
+
+def _fetch_kabutan_tdnet_mirror(sources: list[dict]) -> list[dict]:
+    return _fetch_kabutan_disclosures(sources, kubun=None, url_scheme="kabutan-tdnet", source_category="jp_disclosure")
+
+
+def _fetch_kabutan_buyback(sources: list[dict]) -> list[dict]:
+    return _fetch_kabutan_disclosures(sources, kubun="j", url_scheme="kabutan-buyback", source_category="jp_buyback_announce")
+
+
+# ---------------------------------------------------------------------------
+# Japan market signal - EDINET (Financial Services Agency filing API)
+# ---------------------------------------------------------------------------
+#
+# Free, official REST API, but requires a registered Subscription-Key
+# (EDINET_API_KEY) - confirmed live 2026-09-27/28 with a real key: the
+# v2 API returns a hard 401 without one, no anonymous access exists at all
+# (unlike IRBANK/Kabutan, which need no key).
+_EDINET_DOCUMENTS_URL = "https://api.edinet-fsa.go.jp/api/v2/documents.json"
+_EDINET_DOCUMENT_URL_TMPL = "https://api.edinet-fsa.go.jp/api/v2/documents/{doc_id}"
+
+# docTypeCode 350 = 大量保有報告書 (large shareholding report, the 5%-rule
+# filing) - confirmed live via a real date's documents.json response. The
+# metadata list NEVER carries the actual percentage held (secCode is null
+# on every 350-type row, and no ratio field exists in documents.json at
+# all) - that value is only inside the filing's own CSV export (type=5),
+# fetched per-filing below, same two-step shape as irbank_financials'
+# list-then-detail design.
+_EDINET_DOC_TYPE_SHAREHOLDING = "350"
+
+# docTypeCode 220 = 自己株券買付状況報告書 (report on status of share
+# repurchase) - confirmed live via a real filing (Godo Steel, 2026-09-15).
+# UNLIKE the 350-type filing above, this one's list-metadata carries
+# secCode/edinetCode DIRECTLY (issuerEdinetCode is null instead - a company
+# reporting its OWN buyback has no separate "issuer," it IS the issuer),
+# so the ticker join uses a different field. Also unlike 350, the CSV
+# export here has NO discrete numeric field for shares/amount/progress at
+# all - every figure lives inside free-text [TextBlock] XBRL elements
+# (confirmed live: AcquisitionsByResolutionOfBoardOfDirectorsMeetingText
+# Block contains a long unstructured Japanese paragraph with dates, share
+# counts, and yen amounts run together, not a table pdfplumber-style
+# extraction could parse cleanly). Per explicit decision: this fetcher
+# stores the filing's existence/dates/raw text block as-is and does NOT
+# attempt to parse it into numeric fields - IRBANK's own dedicated
+# /{code}/buyback page (a separate, not-yet-built source_type,
+# irbank_buyback) already has this data as genuinely clean structured
+# fields (date, shares, cumulative %, program size - confirmed live in
+# earlier research), so it is the intended primary source for buyback
+# NUMBERS; this source's job is same-day EDINET corroboration only.
+# 230 (an amendment to 220) was never observed live in this session's
+# testing but is included on the same assumption, given it is documented
+# as the analogous amendment code, same pattern as SEC 10-K/A.
+_EDINET_DOC_TYPE_BUYBACK = ("220", "230")
+_EDINET_BUYBACK_TEXT_ELEMENT_ID = "jpcrp-sbr_cor:AcquisitionsByResolutionOfBoardOfDirectorsMeetingTextBlock"
+
+# docTypeCode 180 = 臨時報告書 (extraordinary report), 190 = its amendment -
+# the design spec's Step 3 explicitly asks for "5% shareholding filings
+# AND extraordinary reports" and this docType was missed in the initial
+# build (only 350/220/230 were implemented) - confirmed live 2026-09-28
+# via a real filing search across several cached dates: Shin-Etsu Chemical
+# (4063) filed one on 2026-09-15 (docID S100Z2DU) - a stock-option/warrant
+# issuance to directors and employees, joined via edinetCode DIRECTLY
+# (issuerEdinetCode was null, same as buyback status - a company reporting
+# its OWN extraordinary event has no separate "issuer" field either).
+#
+# currentReportReason (a legal-clause code, e.g. "第19条第2項第2号の2" for
+# the stock-option case found) is present directly in documents.json's
+# list metadata for this doctype - unlike shareholding/buyback, no
+# per-filing CSV/PDF fetch is needed just to know WHAT KIND of
+# extraordinary event this is, though the specific numeric details (in
+# the Shin-Etsu case: warrant count, strike price, share count) still
+# only live in the filing's own PDF/CSV body. "Extraordinary report" is a
+# broad, varied category (confirmed live it can mean anything from a
+# stock-option grant to M&A to a disaster disclosure, distinguished only
+# by the reason-code) - same reasoning as edinet_buyback_status applies:
+# store the filing's existence, reason code, and (when the CSV export
+# succeeds) its raw text, rather than attempt a single numeric-field
+# extraction that would not generalize across such a varied doctype.
+_EDINET_DOC_TYPE_EXTRAORDINARY = ("180", "190")
+
+# The exact XBRL element ID for the holding-percentage value inside a
+# type=5 CSV export - confirmed live against a real filing (E06477's
+# 2026-09-15 report on issuer E27585): "jplvh_cor:
+# HoldingRatioOfShareCertificatesEtc", value "0.0504" (i.e. 5.04%). A
+# filing can report this MULTIPLE times (once per named holder/context, and
+# again as a filing-level total) - confirmed live 3 occurrences in one real
+# CSV, all carrying the same final value - so this takes the LAST matching
+# row (the filing-level total, confirmed live to always appear last),
+# rather than the first (a per-holder breakdown, which undercounts a joint
+# filing).
+_EDINET_HOLDING_RATIO_ELEMENT_ID = "jplvh_cor:HoldingRatioOfShareCertificatesEtc"
+
+_edinet_rate_lock = threading.Lock()
+_edinet_last_call = [0.0]
+_EDINET_MIN_INTERVAL = 3.0  # no official rate limit published - confirmed live no 429 seen at this pace
+
+
+def _edinet_rate_sleep() -> None:
+    with _edinet_rate_lock:
+        elapsed = time.monotonic() - _edinet_last_call[0]
+        if elapsed < _EDINET_MIN_INTERVAL:
+            time.sleep(_EDINET_MIN_INTERVAL - elapsed)
+        _edinet_last_call[0] = time.monotonic()
+
+
+def _fetch_edinet_holding_ratio(doc_id: str, api_key: str) -> float | None:
+    """Fetch a docTypeCode-350 filing's CSV export (type=5) and extract the
+    holding-ratio percentage. Returns None on any failure or if the field
+    is not found (fail-open, same convention as every other Japan fetcher).
+    """
+    _edinet_rate_sleep()
+    try:
+        resp = httpx.get(
+            _EDINET_DOCUMENT_URL_TMPL.format(doc_id=doc_id),
+            params={"type": "5", "Subscription-Key": api_key},
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        import zipfile
+        from io import BytesIO
+
+        with zipfile.ZipFile(BytesIO(resp.content)) as zf:
+            names = [n for n in zf.namelist() if n.endswith(".csv")]
+            if not names:
+                return None
+            raw = zf.read(names[0])
+        text = raw.decode("utf-16")
+    except Exception as exc:
+        logger.warning("[EDINET] CSV export fetch failed doc_id=%s error=%s", doc_id, exc)
+        return None
+
+    ratio: float | None = None
+    for line in text.split("\n"):
+        if not line.startswith(f'"{_EDINET_HOLDING_RATIO_ELEMENT_ID}"'):
+            continue
+        fields = line.strip().split("\t")
+        if len(fields) < 9:
+            continue
+        value = fields[8].strip('"')
+        try:
+            ratio = float(value)
+        except ValueError:
+            continue
+    return ratio
+
+
+# jpcrp-esr_cor:ReasonForFilingTextBlock ("提出理由") - confirmed live in a
+# real extraordinary report (Shin-Etsu Chemical, docID S100Z2DU, a
+# stock-option issuance) - the free-text explanation of why the report was
+# filed. Unlike the buyback text block, this is present alongside a
+# consistent currentReportReason legal-clause code already in
+# documents.json's own list metadata, so the WHAT-KIND-OF-EVENT signal
+# doesn't require this fetch at all - only the free-text detail does.
+_EDINET_EXTRAORDINARY_TEXT_ELEMENT_ID = "jpcrp-esr_cor:ReasonForFilingTextBlock"
+
+
+def _fetch_edinet_csv_text_element(doc_id: str, api_key: str, element_id: str) -> str | None:
+    """Fetch a filing's CSV export (type=5) and return one XBRL element's
+    raw text value, unparsed. Shared by edinet_buyback_status
+    (_EDINET_BUYBACK_TEXT_ELEMENT_ID) and edinet_extraordinary_report
+    (_EDINET_EXTRAORDINARY_TEXT_ELEMENT_ID) - both doctypes carry their
+    real content as a single free-text XBRL block rather than discrete
+    numeric fields, so both are stored as-is rather than parsed further -
+    see each doctype's own comment above for why.
+    """
+    _edinet_rate_sleep()
+    try:
+        resp = httpx.get(
+            _EDINET_DOCUMENT_URL_TMPL.format(doc_id=doc_id),
+            params={"type": "5", "Subscription-Key": api_key},
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        import zipfile
+        from io import BytesIO
+
+        with zipfile.ZipFile(BytesIO(resp.content)) as zf:
+            names = [n for n in zf.namelist() if n.endswith(".csv")]
+            if not names:
+                return None
+            raw = zf.read(names[0])
+        text = raw.decode("utf-16")
+    except Exception as exc:
+        logger.warning("[EDINET] CSV export fetch failed doc_id=%s element=%s error=%s", doc_id, element_id, exc)
+        return None
+
+    for line in text.split("\n"):
+        if not line.startswith(f'"{element_id}"'):
+            continue
+        fields = line.strip().split("\t")
+        if len(fields) < 9:
+            continue
+        return fields[8].strip('"').strip()
+    return None
+
+
+def _fetch_one_edinet_date(
+    date: str,
+    edinet_code_to_ticker: dict[str, str],
+    api_key: str,
+    mode: str,
+) -> list[dict]:
+    """Fetch EDINET's documents list for one date, filtered by mode:
+
+    - "shareholding": docTypeCode 350, joined via issuerEdinetCode (the
+      company whose shares were bought - NOT the filer), holding-ratio
+      percentage fetched per-filing from its CSV export.
+    - "buyback": docTypeCode 220/230, joined via edinetCode/secCode
+      DIRECTLY (a buyback filer IS the issuer, there is no separate issuer
+      field for this doctype - confirmed live), raw acquisition text block
+      fetched per-filing from its CSV export and stored unparsed.
+    - "extraordinary": docTypeCode 180/190, joined via edinetCode DIRECTLY
+      (same as buyback - confirmed live via Shin-Etsu Chemical's real
+      stock-option filing, issuerEdinetCode was null there too). The
+      currentReportReason legal-clause code is already present in
+      documents.json's own list metadata for this doctype (no per-filing
+      fetch needed just to know what KIND of extraordinary event this is);
+      the free-text detail is fetched per-filing and stored unparsed, same
+      as buyback status.
+
+    One shared list-fetch + dispatch, not three separate near-duplicate
+    functions, mirroring how Taiwan's _fetch_one_material_dump handles
+    TWSE vs TPEx via a key_map rather than being two functions.
+    """
+    _edinet_rate_sleep()
+    try:
+        resp = httpx.get(
+            _EDINET_DOCUMENTS_URL,
+            params={"date": date, "type": "2", "Subscription-Key": api_key},
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        logger.warning("[EDINET] documents list fetch failed date=%s error=%s", date, exc)
+        return []
+
+    articles: list[dict] = []
+    for doc in data.get("results") or []:
+        doc_type = doc.get("docTypeCode")
+
+        if mode == "shareholding":
+            if doc_type != _EDINET_DOC_TYPE_SHAREHOLDING:
+                continue
+            join_code = doc.get("issuerEdinetCode")
+        elif mode == "buyback":
+            if doc_type not in _EDINET_DOC_TYPE_BUYBACK:
+                continue
+            join_code = doc.get("edinetCode")
+        elif mode == "extraordinary":
+            if doc_type not in _EDINET_DOC_TYPE_EXTRAORDINARY:
+                continue
+            join_code = doc.get("edinetCode")
+        else:
+            raise ValueError(f"unknown mode: {mode}")
+
+        ticker = edinet_code_to_ticker.get(join_code) if join_code else None
+        if not ticker:
+            continue
+
+        doc_id = doc["docID"]
+        try:
+            pub_date = datetime.strptime(doc["submitDateTime"], "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
+        except (KeyError, ValueError):
+            pub_date = None
+
+        base_metadata = {
+            "code": ticker,
+            "filer_edinet_code": doc.get("edinetCode"),
+            "filer_name": doc.get("filerName"),
+            "doc_id": doc_id,
+            "doc_type_code": doc_type,
+        }
+
+        if mode == "shareholding":
+            ratio = _fetch_edinet_holding_ratio(doc_id, api_key)
+            articles.append({
+                # EDINET's docDescription is a generic report-type label
+                # (e.g. "大量保有報告書"), not distinguished by filer/issuer -
+                # same title-reuse collision risk confirmed live for
+                # IRBANK's own generic titles (see _fetch_one_irbank_
+                # financials's comment on this bug class). articles'
+                # uq_articles_run_title index is (run_id, lower(title)),
+                # so two same-day filings sharing this label in one run
+                # would silently drop the second via ON CONFLICT DO
+                # NOTHING. doc_id is EDINET's own globally-unique document
+                # ID (already the dedup key in this row's own url), so
+                # appending it here guarantees a distinct title too.
+                "title": f"{doc.get('filerName', 'Unknown filer')} -> {ticker} [{doc_id}]: {doc.get('docDescription', '')}",
+                "url": f"edinet-filing://{join_code}/{doc_id}",
+                "published": doc.get("submitDateTime"),
+                "source": "EDINET",
+                "summary": None,
+                "body": None,
+                "_pub_date": pub_date,
+                "metadata": {
+                    **base_metadata,
+                    "issuer_edinet_code": join_code,
+                    "holding_ratio": ratio,
+                    "source_category": "jp_ownership",
+                },
+            })
+        elif mode == "buyback":
+            raw_text = _fetch_edinet_csv_text_element(doc_id, api_key, _EDINET_BUYBACK_TEXT_ELEMENT_ID)
+            articles.append({
+                # Same generic-docDescription title-collision risk as the
+                # shareholding branch above (e.g. two same-day buyback
+                # status filings from different tickers, or the same
+                # ticker's own program+status pair, sharing the identical
+                # label text) - doc_id folded in for the same reason.
+                "title": f"{ticker} [{doc_id}]: {doc.get('docDescription', '')}",
+                "url": f"edinet-buyback://{join_code}/{doc_id}",
+                "published": doc.get("submitDateTime"),
+                "source": "EDINET",
+                "summary": raw_text,
+                "body": None,
+                "_pub_date": pub_date,
+                "metadata": {
+                    **base_metadata,
+                    "raw_acquisition_text": raw_text,
+                    "source_category": "jp_buyback_status",
+                },
+            })
+        else:
+            raw_text = _fetch_edinet_csv_text_element(doc_id, api_key, _EDINET_EXTRAORDINARY_TEXT_ELEMENT_ID)
+            articles.append({
+                # Same generic-docDescription title-collision risk as the
+                # shareholding/buyback branches above - doc_id folded in
+                # for the same reason.
+                "title": f"{ticker} [{doc_id}]: {doc.get('docDescription', '')}",
+                "url": f"edinet-extraordinary://{join_code}/{doc_id}",
+                "published": doc.get("submitDateTime"),
+                "source": "EDINET",
+                "summary": raw_text,
+                "body": None,
+                "_pub_date": pub_date,
+                "metadata": {
+                    **base_metadata,
+                    "current_report_reason": doc.get("currentReportReason"),
+                    "raw_reason_text": raw_text,
+                    "source_category": "jp_extraordinary",
+                },
+            })
+    return articles
+
+
+def _fetch_edinet_by_mode(sources: list[dict], days_back: int, api_key: str, mode: str) -> list[dict]:
+    """Shared driver for both EDINET fetchers below: resolves tickers to
+    EDINET codes once, then walks days_back calendar days (EDINET's
+    documents.json takes exactly ONE date per request - no date-range query
+    param, confirmed live - so this issues one request per day in the
+    window, same shape as this project's SEC EDGAR/DART per-day or
+    per-company query patterns elsewhere in this file).
+    """
+    from edinet_code import resolve_edinet_codes
+
+    tickers: list[str] = []
+    for source in sources:
+        config = source.get("config") or {}
+        tickers.extend(config.get("codes", []))
+    if not tickers:
+        return []
+
+    ticker_to_edinet = resolve_edinet_codes(tickers)
+    edinet_code_to_ticker = {v: k for k, v in ticker_to_edinet.items()}
+    if not edinet_code_to_ticker:
+        return []
+
+    articles: list[dict] = []
+    today = datetime.now(timezone.utc).date()
+    for offset in range(days_back):
+        date_str = (today - timedelta(days=offset)).strftime("%Y-%m-%d")
+        articles.extend(_fetch_one_edinet_date(date_str, edinet_code_to_ticker, api_key, mode))
+    return articles
+
+
+def _fetch_edinet_filing(sources: list[dict], days_back: int, api_key: str) -> list[dict]:
+    """Fetch docTypeCode-350 (large shareholding) filings for all companies
+    across all edinet_filing sources, over the last days_back days.
+    """
+    return _fetch_edinet_by_mode(sources, days_back, api_key, mode="shareholding")
+
+
+def _fetch_edinet_buyback_status(sources: list[dict], days_back: int, api_key: str) -> list[dict]:
+    """Fetch docTypeCode-220/230 (buyback status report) filings for all
+    companies across all edinet_buyback_status sources, over the last
+    days_back days.
+    """
+    return _fetch_edinet_by_mode(sources, days_back, api_key, mode="buyback")
+
+
+def _fetch_edinet_extraordinary_report(sources: list[dict], days_back: int, api_key: str) -> list[dict]:
+    """Fetch docTypeCode-180/190 (extraordinary report) filings for all
+    companies across all edinet_extraordinary_report sources, over the
+    last days_back days.
+    """
+    return _fetch_edinet_by_mode(sources, days_back, api_key, mode="extraordinary")
+
+
+# ---------------------------------------------------------------------------
+# Japan market signal - SEAJ (Semiconductor Equipment Association of Japan)
+# ---------------------------------------------------------------------------
+#
+# Free, no API key, no per-company scoping at all - this is a single
+# industry-wide monthly figure, not scoped to JAPAN_TICKER_UNIVERSE (unlike
+# every other Japan source_type). Confirmed live 2026-09-28: the free
+# public release is a 3-MONTH MOVING AVERAGE, never a true single-month
+# figure - SEAJ's own PDF states this explicitly ("Note : All data is
+# based on three month average numbers") and this is confirmed to be the
+# ceiling of what SEAJ (and, per earlier research, every other
+# free/third-party source, including SEMI's own WWSEMS report) publishes
+# for free - there is no free path to the underlying true monthly number.
+# The design's own rule for this signal is deliberately built around this
+# limitation (compare the 3-month-average series against its own 12-month
+# average and use SEAJ's own published YoY%, not a derived single-month
+# spike detector) - see this codebase's Japan design notes; not
+# implemented here, since classification is signal-detection-agent's job.
+_SEAJ_STATISTICS_URL = "https://www.seaj.or.jp/english/statistics/index.html"
+_SEAJ_BASE_URL = "https://www.seaj.or.jp/english/statistics/"
+
+# Isolates the semiconductor-equipment press release row from the FPD
+# (flat panel display) and World Wide SEMS Report rows also present on the
+# same index page - confirmed live via the exact substring SEAJ's own page
+# uses, including its own typo ("Equipement", not "Equipment") - a
+# corrected-spelling regex would silently never match.
+_SEAJ_INDEX_LINK_RE = re.compile(
+    r'<tr><td class="lft">Sales Express Report\s?\(3Month Average\)\s*'
+    r'<br>Semiconductor Manufacturing Equipment\(Japanese Equipement\)</td>'
+    r'<td class="cntr"><a href="(?P<pdf_href>[^"]+)"[^>]*>.*?</a></td>'
+    r'<td class="cntr">(?P<release_date>[^<]+)</td></tr>',
+)
+
+# One row of the PDF's billings table, confirmed live against a real
+# release (August 2026): "August 2026(prelim) 597,915 7.5% 47.4%" or a
+# bare "March 2026 480,182 13.5% 11.1%" (no qualifier - only the two most
+# recent months in any given release carry one). qualifier matters for
+# dedup: the SAME calendar month appears in two consecutive releases,
+# first as "(prelim)" then finalized as "(final)" the following month -
+# these are genuinely different, non-duplicate records (a revision from
+# preliminary to final is itself meaningful), not the same fact twice.
+_SEAJ_MONTH_ROW_RE = re.compile(
+    r"^(?P<month>[A-Za-z]+ \d{4})(?:\((?P<qualifier>prelim|final)\))?\s+"
+    r"(?P<billings>[\d,]+)\s+(?P<mom>-?[\d.]+)%\s+(?P<yoy>-?[\d.]+)%$",
+)
+
+
+def _fetch_seaj_billings(sources: list[dict]) -> list[dict]:
+    """Fetch SEAJ's current monthly billings press release: find the
+    semiconductor-equipment PDF link on the statistics index page, download
+    it, and extract every month's row from its billings table (confirmed
+    live: each release includes ~6 trailing months, not just the newest).
+
+    sources is accepted for interface consistency with every other
+    _fetch_* function (all take a `sources: list[dict]` even when, as
+    here, there is nothing per-source to iterate - SEAJ has exactly one
+    seed row and no per-company config at all).
+    """
+    if not sources:
+        return []
+
+    try:
+        resp = httpx.get(_SEAJ_STATISTICS_URL, timeout=30.0, follow_redirects=True)
+        resp.raise_for_status()
+        # Confirmed live: this page is Shift-JIS (cp932), not UTF-8 -
+        # decoding as UTF-8 raises rather than silently mojibake-ing.
+        text = resp.content.decode("cp932", errors="replace")
+    except Exception as exc:
+        logger.warning("[SEAJ] statistics index fetch failed error=%s", exc)
+        return []
+
+    link_match = _SEAJ_INDEX_LINK_RE.search(text)
+    if not link_match:
+        logger.warning("[SEAJ] no semiconductor-equipment press release link found on index page")
+        return []
+
+    pdf_url = _SEAJ_BASE_URL + link_match.group("pdf_href")
+    release_date = link_match.group("release_date")
+
+    try:
+        pdf_resp = httpx.get(pdf_url, timeout=30.0, follow_redirects=True)
+        pdf_resp.raise_for_status()
+        import pdfplumber
+        from io import BytesIO
+
+        with pdfplumber.open(BytesIO(pdf_resp.content)) as pdf:
+            full_text = "\n".join(p.extract_text() or "" for p in pdf.pages)
+    except Exception as exc:
+        logger.warning("[SEAJ] PDF fetch/parse failed url=%s error=%s", pdf_url, exc)
+        return []
+
+    articles: list[dict] = []
+    for line in full_text.split("\n"):
+        row_match = _SEAJ_MONTH_ROW_RE.match(line.strip())
+        if not row_match:
+            continue
+        month = row_match.group("month")
+        qualifier = row_match.group("qualifier") or "final"
+        period_key = f"{month.replace(' ', '-')}-{qualifier}"
+
+        pub_date = None
+        month_match = re.match(r"([A-Za-z]+) (\d{4})", month)
+        if month_match:
+            try:
+                pub_date = datetime.strptime(f"{month_match.group(1)} {month_match.group(2)}", "%B %Y").replace(tzinfo=timezone.utc)
+            except ValueError:
+                pass
+
+        articles.append({
+            "title": f"SEAJ Japan semiconductor equipment billings, {month} ({qualifier}): "
+                     f"¥{row_match.group('billings')}M ({row_match.group('yoy')}% YoY)",
+            "url": f"seaj-billings://{period_key}",
+            "published": release_date,
+            "source": "SEAJ",
+            "summary": None,
+            "body": None,
+            "_pub_date": pub_date,
+            "metadata": {
+                "period": month,
+                "qualifier": qualifier,
+                "billings_3mo_avg_millions_jpy": int(row_match.group("billings").replace(",", "")),
+                "mom_pct": float(row_match.group("mom")),
+                "yoy_pct": float(row_match.group("yoy")),
+                "release_date": release_date,
+                "pdf_url": pdf_url,
+                "source_category": "jp_industry",
+            },
+        })
+    return articles
+
+
+# Isolates the same Excel-download row from the index page's other links
+# (the PDF release, the FPD equipment rows, the World Wide SEMS Report) -
+# confirmed live 2026-09-29 this row's own label text is SHORTER than the
+# PDF row's ("Semiconductor Manufacturing Equipment", no "(Japanese
+# Equipement)" suffix, and no separate release-date cell) - a real,
+# distinct HTML shape, not reusable via _SEAJ_INDEX_LINK_RE.
+_SEAJ_XLS_INDEX_LINK_RE = re.compile(
+    r'<tr><td class="lft">Sales Express Report\s?\(3Month Average\)\s*'
+    r'<br>\s*Semiconductor Manufacturing Equipment</td>'
+    r'<td class="cntr"><a href="(?P<xls_href>[^"]+\.xls)"[^>]*>.*?</a></td></tr>',
+)
+
+# Japan Signals spec Section 9 Step 4's own "two years of history on the
+# first run" - doubled to 5, matching this codebase's own established
+# precedent for "full real history" (IRBANK's own 1825-day/5-year
+# backfill) rather than the spec's bare minimum: SEAJ's real equipment-
+# billings cycle is famously cyclical (semiconductor capex up-cycles and
+# down-cycles), and a 12-month rolling average/spread computed from a
+# window entirely inside one phase of that cycle would misjudge "normal"
+# the moment the cycle turns - 5 years of real history costs nothing
+# extra to fetch (confirmed live: it is all in the same one Excel file,
+# one HTTP request, no per-month pagination) versus the spec's own
+# 2-year minimum, so there is no reason to take the smaller number.
+_SEAJ_BACKFILL_YEARS = 5
+
+# The live PDF fetcher (_fetch_seaj_billings) already owns the most
+# recent months with a real prelim/final qualifier distinction - the
+# Excel file has NO qualifier column at all (it is a flat, continuously-
+# revised time series, not a versioned release). A fixed "skip the most
+# recent N months" margin was tried first and REJECTED after live testing
+# 2026-09-29 found a real gap: with N=8, the backfill correctly stopped at
+# 2026-01, but this test DB's own already-stored live-fetch data only
+# reached back to 2026-03 - January/February 2026 fell into a genuine gap
+# between the two, neither backfilled nor live-fetched. A fixed month
+# count cannot know in advance exactly which months the live fetcher has
+# actually already captured (that depends on real scheduling history, not
+# a guessable constant) - checking the real stored URLs directly (see
+# below) is the correct fix, not a wider guessed margin.
+def _seaj_backfill_candidate_urls(month_label: str) -> list[str]:
+    """Both possible urls _fetch_seaj_billings could have already stored
+    for ``month_label`` (the live fetcher tags a month "prelim" the first
+    time it's reported, then "final" once SEAJ settles it - see
+    _SEAJ_MONTH_ROW_RE's own comment) - checked together so this backfill
+    correctly skips a month regardless of which qualifier the live fetcher
+    happened to store it under.
+    """
+    key = month_label.replace(" ", "-")
+    return [f"seaj-billings://{key}-prelim", f"seaj-billings://{key}-final"]
+
+
+def fetch_seaj_billings_backfill(sources: list[dict]) -> list[dict]:
+    """One-time backfill: fetch SEAJ's own historical Excel archive (real
+    monthly billings + YoY%, back to 2005 - confirmed live 2026-09-29) and
+    return every real month within the last _SEAJ_BACKFILL_YEARS years
+    that isn't ALREADY stored under either the "prelim" or "final" url the
+    live fetcher (_fetch_seaj_billings) would use for it - see
+    _seaj_backfill_candidate_urls's own comment for why both are checked,
+    and this function's own module-level comment for why a fixed
+    skip-month-count was tried and rejected in favor of this direct check.
+
+    Deliberately a SEPARATE function from _fetch_seaj_billings (the
+    regular incremental fetch), not folded into it or auto-run every
+    time - a one-time historical load, same "separate CLI-triggerable
+    entry point" shape as news-retrieval's other explicit backfill
+    functions (e.g. fetch_customs_export_backfill) - called once (or
+    re-run only if the stored history needs rebuilding), not on every
+    scheduled poll.
+
+    Same url scheme as _fetch_seaj_billings
+    ("seaj-billings://{Month}-{Year}-final") so a month this function
+    backfills and a month the live fetcher later reports as "final" refer
+    to the same real fact under the same key - articles' own global
+    unique-url dedup naturally treats them as one record, not two, even if
+    this function is ever re-run after the live fetcher has since covered
+    some of the same months.
+    """
+    if not sources:
+        return []
+
+    try:
+        resp = httpx.get(_SEAJ_STATISTICS_URL, timeout=30.0, follow_redirects=True)
+        resp.raise_for_status()
+        text = resp.content.decode("cp932", errors="replace")
+    except Exception as exc:
+        logger.warning("[SEAJ_BACKFILL] statistics index fetch failed error=%s", exc)
+        return []
+
+    link_match = _SEAJ_XLS_INDEX_LINK_RE.search(text)
+    if not link_match:
+        logger.warning("[SEAJ_BACKFILL] no semiconductor-equipment Excel link found on index page")
+        return []
+
+    xls_url = _SEAJ_BASE_URL + link_match.group("xls_href")
+
+    try:
+        xls_resp = httpx.get(xls_url, timeout=30.0, follow_redirects=True)
+        xls_resp.raise_for_status()
+        import xlrd
+        from io import BytesIO
+
+        wb = xlrd.open_workbook(file_contents=xls_resp.content)
+        sheet = wb.sheet_by_index(0)
+    except Exception as exc:
+        logger.warning("[SEAJ_BACKFILL] Excel fetch/parse failed url=%s error=%s", xls_url, exc)
+        return []
+
+    now = datetime.now(timezone.utc)
+    cutoff_old = now - timedelta(days=365 * _SEAJ_BACKFILL_YEARS)
+
+    articles: list[dict] = []
+    current_year: int | None = None
+    previous_billings: float | None = None
+    # Confirmed live: only the year column (index 0) is populated on a
+    # row's own January entry - every other month in that year leaves it
+    # blank, so the current year must be carried forward across rows
+    # rather than read fresh from each one.
+    for row_idx in range(6, sheet.nrows):
+        row = sheet.row_values(row_idx)
+        if row[0] != "":
+            current_year = int(row[0])
+        if current_year is None or row[1] == "" or row[4] == "":
+            continue  # header/blank/not-yet-published-this-month row
+
+        # The month column is USUALLY a plain xlrd float (e.g. 8.0), but
+        # confirmed live 2026-09-29 not always: SEAJ marks a since-revised
+        # month with an "R" suffix in several real, inconsistent STRING
+        # forms across the file's own history ("8R", "1R", "7(R)",
+        # "10（R）" - full-width parens too) - the month itself is still
+        # real and correctly sequenced (each one sits exactly where its
+        # plain number would between its real neighbors, e.g. "8R" between
+        # 7 and 9), "R" only marks that this particular month's own figure
+        # was later revised, not a different or extra month. Handled as
+        # two genuinely different cases rather than one shared string-
+        # digit-stripping regex: an earlier version of this code stripped
+        # non-digit characters from str(row[1]) for EVERY row, which
+        # silently corrupted the common float case too (str(2.0) is
+        # "2.0" - stripping the "." concatenates the digits into "20", a
+        # real out-of-range month that crashed date() construction).
+        if isinstance(row[1], str):
+            month_digits = re.sub(r"\D", "", row[1])
+            if not month_digits:
+                continue
+            month_num = int(month_digits)
+        else:
+            month_num = int(row[1])
+        billings = row[4]
+        yoy_fraction = row[5]
+        if billings == "" or yoy_fraction == "":
+            continue
+
+        # Month-over-month % is not a column in this file, but IS directly
+        # derivable from two consecutive rows' own billings values -
+        # confirmed live 2026-09-29 this reproduces the live PDF
+        # fetcher's own independently-confirmed April 2026 MoM figure
+        # (6.2%) exactly. previous_billings is updated from EVERY row
+        # seen (even one later excluded by the date cutoffs below), not
+        # just included ones, so the first row actually included in the
+        # output still gets a real MoM value computed against its true
+        # immediately-preceding calendar month.
+        mom_pct = (
+            round((billings - previous_billings) / previous_billings * 100.0, 1)
+            if previous_billings else None
+        )
+        previous_billings = billings
+
+        month_date = date(current_year, month_num, 1)
+        if month_date < cutoff_old.date() or month_date > now.date():
+            continue
+
+        month_label = f"{month_date.strftime('%B')} {current_year}"
+        pub_date = datetime(current_year, month_num, 1, tzinfo=timezone.utc)
+        billings_int = round(billings)
+        yoy_pct = round(yoy_fraction * 100.0, 1)
+
+        articles.append({
+            "title": f"SEAJ Japan semiconductor equipment billings, {month_label} (final): "
+                     f"¥{billings_int:,}M ({yoy_pct}% YoY)",
+            "url": f"seaj-billings://{month_label.replace(' ', '-')}-final",
+            "published": month_date.isoformat(),
+            "source": "SEAJ",
+            "summary": None,
+            "body": None,
+            "_pub_date": pub_date,
+            "metadata": {
+                "period": month_label,
+                "qualifier": "final",
+                "billings_3mo_avg_millions_jpy": billings_int,
+                "mom_pct": mom_pct,
+                "yoy_pct": yoy_pct,
+                "release_date": None,
+                "pdf_url": xls_url,
+                "source_category": "jp_industry",
+            },
+        })
+
+    # Drop any month already stored under EITHER qualifier the live
+    # fetcher could have used for it - see _seaj_backfill_candidate_urls's
+    # own comment for why both "prelim" and "final" are checked, and this
+    # function's own module-level comment for the real gap a fixed
+    # skip-month-count left (confirmed live 2026-09-29) that this direct
+    # check is designed to close. One batched get_already_stored_urls call
+    # for every candidate this function built, not a query per month.
+    candidate_urls = [
+        url for a in articles for url in _seaj_backfill_candidate_urls(a["metadata"]["period"])
+    ]
+    already_stored = get_already_stored_urls(candidate_urls)
+    articles = [
+        a for a in articles
+        if not (set(_seaj_backfill_candidate_urls(a["metadata"]["period"])) & already_stored)
+    ]
+
+    logger.info(
+        "[SEAJ_BACKFILL] fetched %d historical month(s) from %s (already-stored months excluded)",
+        len(articles), xls_url,
+    )
+    return articles
+
+
+# ---------------------------------------------------------------------------
+# Japan market signal - MONOist Factory News (monoist.itmedia.co.jp)
+# ---------------------------------------------------------------------------
+#
+# Free, no API key, no per-company scoping server-side - this is a general
+# manufacturing-industry news feed (all Japanese manufacturers, not just
+# our 20-company universe), filtered CLIENT-SIDE by native-name substring
+# match against JAPAN_TICKER_UNIVERSE's own native_name field, same
+# approach as Taiwan's GDELT title-filter. Confirmed live 2026-09-28: a
+# single page load of the series listing (monoist.itmedia.co.jp/mn/
+# series/1464/) already returns ~950 real "工場ニュース" (Factory News)
+# articles spanning back several months - enough real history that no
+# separate backfill/pagination logic is needed for this source, unlike
+# Kabutan's global feed.
+#
+# Confirmed live this listing mixes two subtitle spellings for the same
+# "Factory News" tag - "工場ニュース：" (standard katakana long vowel mark,
+# U+30FC) and "工場ニュ―ス：" (a full-width horizontal bar, U+2015, in the
+# same visual position) - both are matched, an earlier version checking
+# only the first form would have silently missed roughly half of real
+# articles seen live.
+_MONOIST_SERIES_URL = "https://monoist.itmedia.co.jp/mn/series/1464/"
+
+_MONOIST_ARTICLE_BLOCK_RE = re.compile(
+    r'<div class="colBoxIndex[^"]*"[^>]*>(?P<block>.*?)</div>\s*<div class="colBoxClear',
+    re.S,
+)
+_MONOIST_SUBTITLE_RE = re.compile(r'<div class="colBoxSubTitle"><h5>工場ニュ[ー―]ス：</h5></div>')
+_MONOIST_TITLE_RE = re.compile(r'<div class="colBoxTitle"><h3><a href="([^"]+)">([^<]+)</a></h3></div>')
+_MONOIST_DESC_RE = re.compile(r'<div class="colBoxDescription"><p>([^<]*)</p></div>')
+_MONOIST_DATE_RE = re.compile(r'<time class="date" datatime="([\d/]+) ([\d:]+)"')
+
+
+def _fetch_monoist_article_body(url: str) -> str | None:
+    """Fetch one MONOist article's own page and extract its full body text.
+
+    NOT a plain trafilatura.fetch_url() call - confirmed live the article
+    pages are Shift-JIS (cp932), same as the series listing page
+    (_fetch_monoist_capex's own fetch above), and trafilatura.fetch_url()
+    has no way to know that; feeding it the raw undecoded bytes would
+    garble every non-ASCII character. Fetch via httpx (matching the
+    listing fetch's own pattern), decode as cp932, then hand the decoded
+    text straight to trafilatura.extract() rather than trafilatura's own
+    fetch path.
+
+    J5 (capacity commitment - see japan_signal_classifier.py in
+    signal-detection-agent) needs the real investment yen figure, which
+    confirmed live is NOT reliably present in the series listing's own
+    title/description snippet (only ~20% of real articles carried any
+    figure there) but IS reliably in the full article body when one
+    exists (confirmed live for both a real investment announcement and a
+    real factory-closure announcement with no figure at all - the body
+    text correctly reflects that difference rather than the fetcher
+    guessing one).
+
+    Returns None on any failure (network error, non-200, extraction
+    failure) - fail-open, same contract as every other trafilatura-backed
+    body fetch in this file (_fetch_body_with_fallback etc.) - a missing
+    body just means J5's own investment-figure regex has nothing to
+    search, not a pipeline failure.
+
+    Confirmed live 2026-09-29 (found via a real J5 false positive: Disco's
+    real 2021 wafer-facility article states "投資金額は約140億円" - ~JPY14bn -
+    but a naive max-figure regex over the raw extracted body picked up
+    "200億円" instead) that trafilatura.extract() does not always stop at
+    the real article - some MONOist pages carry a "≫「工場ニュース」の
+    バックナンバー" (this series' own back-numbers/related-articles list)
+    block AFTER the real article text, and trafilatura's own boundary
+    detection sometimes includes it (confirmed live: 5 of 74 real articles
+    in the current universe carry this trailing block). That block quotes
+    OTHER, unrelated articles' own headlines and blurbs verbatim,
+    including THEIR OWN yen figures - which is exactly the kind of text a
+    "find the largest 億円 figure in the body" rule (J5's own
+    _extract_capex_investment_jpy) will silently misread as this article's
+    real investment amount. Trimmed here, at the source, rather than left
+    for every downstream consumer of this body text to work around
+    separately.
+    """
+    try:
+        resp = httpx.get(url, timeout=30.0, follow_redirects=True)
+        resp.raise_for_status()
+        text = resp.content.decode("cp932", errors="replace")
+        body = trafilatura.extract(text, include_comments=False, include_tables=False)
+        if body:
+            body = body.split("バックナンバー")[0].rstrip()
+        return body or None
+    except Exception:
+        logger.warning("[MONOIST] article body fetch failed url=%r", url, exc_info=True)
+        return None
+
+
+def _match_japan_company(companies: list[dict[str, str]], text: str) -> dict[str, str] | None:
+    """Find the first company (from JAPAN_TICKER_UNIVERSE-shaped dicts)
+    whose native_name OR short_name appears in text - used by both
+    monoist_capex and press_jp, the two source_types that filter a general
+    news feed client-side rather than querying by ticker/company.
+
+    short_name (only present on companies where it's genuinely DIFFERENT
+    from native_name - see JAPAN_TICKER_UNIVERSE's own comment in seed.py)
+    was added after confirming live that real press articles frequently
+    use an abbreviated company name a full native_name substring match
+    would miss entirely - e.g. Resonac Holdings (レゾナック・
+    ホールディングス) matched 0 real MONOist articles by its full name vs.
+    5 by its short form (レゾナック), and Renesas Electronics
+    (ルネサスエレクトロニクス) matched 0 vs. 7.
+    """
+    for c in companies:
+        if c["native_name"] in text:
+            return c
+        short_name = c.get("short_name")
+        if short_name and short_name in text:
+            return c
+    return None
+
+
+def _fetch_monoist_capex(sources: list[dict]) -> list[dict]:
+    """Fetch MONOist's Factory News series listing, keep only articles
+    mentioning a company in JAPAN_TICKER_UNIVERSE (matched by native_name
+    substring, same as Taiwan's GDELT title-filter approach - this feed has
+    no per-company query capability at all, unlike GDELT's own query
+    param, so the filter is applied after a single full-listing fetch
+    rather than one query per company).
+
+    Also fetches each surviving article's own full body text (see
+    _fetch_monoist_article_body) - one extra request per matched article,
+    not per listing row, since the client-side company filter above
+    already runs first. Confirmed live this stays cheap in practice: a
+    31-day window matched ~15-20 articles, not the full ~950-row listing.
+    """
+    companies: list[dict[str, str]] = []
+    for source in sources:
+        config = source.get("config") or {}
+        companies.extend(config.get("companies", []))
+    if not companies:
+        return []
+
+    try:
+        resp = httpx.get(_MONOIST_SERIES_URL, timeout=30.0, follow_redirects=True)
+        resp.raise_for_status()
+        # Confirmed live: this page is Shift-JIS (cp932), not UTF-8.
+        text = resp.content.decode("cp932", errors="replace")
+    except Exception as exc:
+        logger.warning("[MONOIST] series listing fetch failed error=%s", exc)
+        return []
+
+    articles: list[dict] = []
+    for block_match in _MONOIST_ARTICLE_BLOCK_RE.finditer(text):
+        content = block_match.group("block")
+        if not _MONOIST_SUBTITLE_RE.search(content):
+            continue
+        title_match = _MONOIST_TITLE_RE.search(content)
+        date_match = _MONOIST_DATE_RE.search(content)
+        if not title_match or not date_match:
+            continue
+        desc_match = _MONOIST_DESC_RE.search(content)
+
+        title = title_match.group(2)
+        description = desc_match.group(1) if desc_match else ""
+        full_text = title + description
+
+        matched_company = _match_japan_company(companies, full_text)
+        if not matched_company:
+            continue
+
+        try:
+            pub_date = datetime.strptime(
+                f"{date_match.group(1)} {date_match.group(2)}", "%Y/%m/%d %H:%M",
+            ).replace(tzinfo=timezone.utc)
+        except ValueError:
+            pub_date = None
+
+        article_url = title_match.group(1)
+        body = _fetch_monoist_article_body(article_url)
+
+        articles.append({
+            "title": f"{matched_company['company']} ({matched_company['code']}): {title}",
+            "url": article_url,
+            "published": f"{date_match.group(1)} {date_match.group(2)}",
+            "source": "MONOist",
+            "summary": description or None,
+            "body": body,
+            "_pub_date": pub_date,
+            "metadata": {
+                "code": matched_company["code"],
+                "company": matched_company["company"],
+                "source_category": "jp_capex",
+            },
+        })
+    return articles
+
+
+# ---------------------------------------------------------------------------
+# Japan market signal - press (Nikkei-equivalent free wire coverage)
+# ---------------------------------------------------------------------------
+#
+# The design spec calls for Nikkei-style scoop coverage but Nikkei itself
+# is paywalled by design (headline+timestamp only would still require
+# scraping a paywalled site's teaser, not attempted here). Free wire-
+# service substitutes were checked live 2026-09-28. Two sub-sources are
+# usable, merged into one source_type (same "multiple feeds, one
+# source_type" pattern as edinet_filing's shareholding+buyback modes):
+#   - Reuters Japan (jp.reuters.com): blocked outright - every path tried
+#     (article pages, RSS guesses) returned 401 behind an active anti-bot
+#     challenge (DataDome, confirmed via the "dd" cookie/script signature
+#     in the block-page response) - no path around this without a
+#     headless browser, out of scope here.
+#   - Kyodo News English (english.kyodonews.net): reachable, but confirmed
+#     live it has NO business/economy/tech category at all - its full nav
+#     is limited to Japan/World/Sports/Arts/Feature/Travel-Tourism/Sumo/
+#     Asian Games/Podcast. Not usable for this signal.
+#   - Jiji Press (jiji.com/jc/list?g=eco): works - a real, free,
+#     unauthenticated economy-category listing, confirmed live to return
+#     ~50 real headline+timestamp entries per page load. This is a BROAD
+#     general-economy feed, not semiconductor-specific - confirmed live it
+#     can go an entire page with zero matches against
+#     JAPAN_TICKER_UNIVERSE (same as kabutan_buyback's legitimate
+#     zero-match days).
+#   - newswitch.jp (ニュースイッチ, Nikkan Kogyo Shimbun's free consumer
+#     site): confirmed live 2026-09-28 to have a dedicated 半導体
+#     (semiconductor) keyword-tag page (newswitch.jp/keyword/detail/573),
+#     free, static HTML, semiconductor-SPECIFIC by construction rather
+#     than by luck - genuinely more targeted than Jiji's broad economy
+#     feed. One real match confirmed live on this exact test (Resonac's
+#     12-inch SiC substrate development). The listing page itself has NO
+#     timestamp, though (confirmed live) - only individual article pages
+#     carry one (a "published" date plus, separately, the original Nikkan
+#     Kogyo print-edition date) - so this is a two-step fetch, same
+#     "cheap discovery, expensive fetch only for matches" shape as
+#     irbank_financials: walk the listing cheaply, only fetch an
+#     individual article page's date for entries that already match our
+#     company universe by title.
+#
+# Per the design's own rule (headline + timestamp only, never full article
+# text - this is a copyright/scope boundary, not a technical one): body is
+# deliberately always None for both sub-sources, matching Nikkei's own
+# treatment in every other Japan source_type's design.
+# No official rate limit published for either sub-source - same
+# conservative, undocumented-limit posture as every other free scrape
+# source in this file (IRBANK, Kabutan, MONOist, SEAJ).
+_newswitch_rate_lock = threading.Lock()
+_newswitch_last_call = [0.0]
+_NEWSWITCH_MIN_INTERVAL = 1.0
+
+
+def _newswitch_rate_sleep() -> None:
+    with _newswitch_rate_lock:
+        elapsed = time.monotonic() - _newswitch_last_call[0]
+        if elapsed < _NEWSWITCH_MIN_INTERVAL:
+            time.sleep(_NEWSWITCH_MIN_INTERVAL - elapsed)
+        _newswitch_last_call[0] = time.monotonic()
+
+
+_JIJI_ECO_URL = "https://www.jiji.com/jc/list?g=eco"
+_JIJI_ARTICLE_RE = re.compile(
+    r'<li><a href="(?P<href>/jc/article\?k=[^"]+)"><p>(?P<title>[^<]+)</p><span>\((?P<time>[\d/]+ [\d:]+)\)</span>',
+)
+
+_NEWSWITCH_SEMICONDUCTOR_URL = "https://newswitch.jp/keyword/detail/573"
+_NEWSWITCH_ARTICLE_RE = re.compile(
+    r'<div class="title">\s*<a href="(?P<url>https://newswitch\.jp/p/\d+)">\s*(?P<title>[^<]+?)\s*</a>',
+)
+# Confirmed live on a real article page: `<span class="published">2026年
+# 09月28日</span>` - the newswitch.jp posting date. A separate `<div
+# class="source">日刊工業新聞 2026年09月25日</div>` line also carries the
+# original Nikkan Kogyo print-edition date (often a few days earlier) -
+# not used here since the posting date is what determines when this
+# pipeline could plausibly have seen it.
+_NEWSWITCH_DATE_RE = re.compile(r'<span class="published">(\d{4})年(\d{1,2})月(\d{1,2})日</span>')
+
+
+def _fetch_press_jp_jiji(companies: list[dict[str, str]]) -> list[dict]:
+    try:
+        resp = httpx.get(_JIJI_ECO_URL, timeout=30.0, follow_redirects=True)
+        resp.raise_for_status()
+        text = resp.text
+    except Exception as exc:
+        logger.warning("[PRESS_JP] Jiji economy listing fetch failed error=%s", exc)
+        return []
+
+    articles: list[dict] = []
+    for match in _JIJI_ARTICLE_RE.finditer(text):
+        title = match.group("title")
+        matched_company = _match_japan_company(companies, title)
+        if not matched_company:
+            continue
+
+        # time e.g. "09/28 19:02" - no year in the source; the listing is
+        # always current-day/recent, so the current UTC year is assumed
+        # (same convention news-retrieval already uses elsewhere for
+        # sources that omit a year in their own date format).
+        try:
+            month_day, hm = match.group("time").split(" ")
+            month, day = month_day.split("/")
+            hour, minute = hm.split(":")
+            now = datetime.now(timezone.utc)
+            pub_date = datetime(now.year, int(month), int(day), int(hour), int(minute), tzinfo=timezone.utc)
+        except (ValueError, IndexError):
+            pub_date = None
+
+        articles.append({
+            "title": f"{matched_company['company']} ({matched_company['code']}): {title}",
+            "url": f"https://www.jiji.com{match.group('href')}",
+            "published": match.group("time"),
+            "source": "Jiji Press",
+            "summary": None,
+            "body": None,
+            "_pub_date": pub_date,
+            "metadata": {
+                "code": matched_company["code"],
+                "company": matched_company["company"],
+                "source_category": "jp_press",
+                "unconfirmed": True,
+            },
+        })
+    return articles
+
+
+def _fetch_press_jp_newswitch(companies: list[dict[str, str]]) -> list[dict]:
+    try:
+        resp = httpx.get(_NEWSWITCH_SEMICONDUCTOR_URL, timeout=30.0, follow_redirects=True)
+        resp.raise_for_status()
+        text = resp.text
+    except Exception as exc:
+        logger.warning("[PRESS_JP] newswitch.jp semiconductor listing fetch failed error=%s", exc)
+        return []
+
+    articles: list[dict] = []
+    for match in _NEWSWITCH_ARTICLE_RE.finditer(text):
+        title = match.group("title")
+        matched_company = _match_japan_company(companies, title)
+        if not matched_company:
+            continue
+
+        _newswitch_rate_sleep()
+        try:
+            article_resp = httpx.get(match.group("url"), timeout=30.0, follow_redirects=True)
+            article_resp.raise_for_status()
+            date_match = _NEWSWITCH_DATE_RE.search(article_resp.text)
+        except Exception as exc:
+            logger.warning("[PRESS_JP] newswitch.jp article date fetch failed url=%s error=%s", match.group("url"), exc)
+            date_match = None
+
+        pub_date = None
+        published_str = None
+        if date_match:
+            pub_date = datetime(
+                int(date_match.group(1)), int(date_match.group(2)), int(date_match.group(3)),
+                tzinfo=timezone.utc,
+            )
+            published_str = f"{date_match.group(1)}-{date_match.group(2)}-{date_match.group(3)}"
+
+        articles.append({
+            "title": f"{matched_company['company']} ({matched_company['code']}): {title}",
+            "url": match.group("url"),
+            "published": published_str,
+            "source": "Newswitch",
+            "summary": None,
+            "body": None,
+            "_pub_date": pub_date,
+            "metadata": {
+                "code": matched_company["code"],
+                "company": matched_company["company"],
+                "source_category": "jp_press",
+                "unconfirmed": True,
+            },
+        })
+    return articles
+
+
+def _fetch_press_jp(sources: list[dict]) -> list[dict]:
+    """Fetch Nikkei-equivalent free wire coverage from all usable
+    sub-sources (Jiji Press economy feed + newswitch.jp semiconductor
+    feed), keeping only articles mentioning a company in
+    JAPAN_TICKER_UNIVERSE (matched by native_name or short_name - see
+    _match_japan_company).
+
+    Headline + timestamp only, deliberately - no article body is fetched
+    or stored, matching the design's own treatment of Nikkei (and, by
+    extension, every free wire substitute for it): the free-to-view
+    surface is the headline/timestamp, not the article text itself.
+    """
+    companies: list[dict[str, str]] = []
+    for source in sources:
+        config = source.get("config") or {}
+        companies.extend(config.get("companies", []))
+    if not companies:
+        return []
+
+    return _fetch_press_jp_jiji(companies) + _fetch_press_jp_newswitch(companies)
+
+
+# ---------------------------------------------------------------------------
+# Japan market signal - English-coverage mirror check (DuckDuckGo)
+# ---------------------------------------------------------------------------
+#
+# The design spec's Step 5 explicitly asks to "mirror every search in
+# English recording whether anything was found and when" - "the English
+# mirror makes the timing claim testable rather than assumed." Not built
+# in the initial pass (out-of-scope decision at the time, since
+# signal-detection-agent's web_search.py already does a similar per-entity
+# English search for a DIFFERENT purpose - classification-time context for
+# already-scored signals). Added here as its own source_type once it was
+# confirmed that job is genuinely distinct: this runs at FETCH time, once
+# per company, independent of any specific already-found Japanese article
+# (same shape as Korea's KOREA_GDELT_ENGLISH_SOURCE - an independent
+# per-company search, not a per-article cross-reference) - not a
+# duplication of web_search.py's job.
+#
+# DuckDuckGo (via the free `ddgs` package, no API key) rather than GDELT -
+# explicit choice for this source. Confirmed live 2026-09-28 real,
+# relevant results: e.g. a real Reuters article ("Advantest raises
+# full-year operating profit forecast by 24% on strong AI demand", dated
+# 2025-07-29) for the same company/event type irbank_financials
+# separately confirms via real forecast-revision filings - exactly the
+# kind of timing comparison this source exists to make possible
+# downstream (signal-detection-agent's job, not computed here).
+_PRESS_JP_ENGLISH_CHECK_MAX_RESULTS = 5
+
+# DuckDuckGo rate-limits aggressively on burst traffic (confirmed by
+# signal-detection-agent's own web_search.py, which applies the same 1.5s
+# delay between consecutive queries for this exact reason).
+_ddg_rate_lock = threading.Lock()
+_ddg_last_call = [0.0]
+_DDG_MIN_INTERVAL = 1.5
+
+
+def _ddg_rate_sleep() -> None:
+    with _ddg_rate_lock:
+        elapsed = time.monotonic() - _ddg_last_call[0]
+        if elapsed < _DDG_MIN_INTERVAL:
+            time.sleep(_DDG_MIN_INTERVAL - elapsed)
+        _ddg_last_call[0] = time.monotonic()
+
+
+def _ddg_timelimit_for_days_back(days_back: int) -> str:
+    """Map a days_back window onto ddgs's own timelimit buckets (d/w/m/y).
+
+    ddgs.news() has no arbitrary-day-count parameter - confirmed live
+    (2026-09-28) by reading ddgs/ddgs.py's _search_sync signature, which
+    forwards `timelimit` straight through to each backend engine's own
+    search() call as one of exactly these four values (or a custom date
+    range string, unused here). Rounds UP to the nearest bucket that still
+    covers the requested window, so results are never scoped narrower than
+    days_back asks for - the client-side cutoff below then trims anything
+    the chosen bucket over-includes.
+    """
+    if days_back <= 1:
+        return "d"
+    if days_back <= 7:
+        return "w"
+    if days_back <= 31:
+        return "m"
+    return "y"
+
+
+def _fetch_press_jp_english_check(companies: list[dict[str, str]], days_back: int) -> list[dict]:
+    """For each company, search DuckDuckGo News once (English) and store
+    whatever is found - headline + timestamp only, matching every other
+    press source_type's own body=None convention.
+
+    Returns an empty list (not a partial one) for the whole fetch if the
+    `ddgs` package is unavailable - confirmed this fails open the same way
+    a missing API key does for other optional sources elsewhere in this
+    file, rather than raising and aborting sibling source_types in the
+    same pipeline run.
+
+    Recency is enforced twice, confirmed live (2026-09-28): ddgs's own
+    `timelimit` kwarg scopes the search server-side (confirmed against the
+    real DuckDuckGo News backend - timelimit="w" returned only results
+    dated within the prior 7 days, vs. an unscoped call spanning further
+    back), then the same client-side days_back cutoff every other fetcher
+    in this file applies is used here too, since timelimit only offers
+    coarse d/w/m/y buckets rather than an exact day count.
+    """
+    try:
+        from ddgs import DDGS
+    except ImportError:
+        logger.warning("[PRESS_JP_ENGLISH_CHECK] ddgs package not installed - skipping")
+        return []
+
+    timelimit = _ddg_timelimit_for_days_back(days_back)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
+
+    articles: list[dict] = []
+    for c in companies:
+        _ddg_rate_sleep()
+        query = c.get("search_query") or c["company"]
+        try:
+            with DDGS(timeout=10) as ddgs:
+                results = list(
+                    ddgs.news(
+                        query,
+                        max_results=_PRESS_JP_ENGLISH_CHECK_MAX_RESULTS,
+                        timelimit=timelimit,
+                    )
+                )
+        except Exception as exc:
+            logger.warning("[PRESS_JP_ENGLISH_CHECK] search failed company=%s error=%s", c["company"], exc)
+            continue
+
+        for r in results:
+            url = r.get("url")
+            if not url:
+                continue
+            date_str = r.get("date")
+            try:
+                pub_date = datetime.fromisoformat(date_str.replace("Z", "+00:00")) if date_str else None
+            except ValueError:
+                pub_date = None
+
+            if pub_date and pub_date < cutoff:
+                continue
+
+            articles.append({
+                "title": f"{c['company']} ({c['code']}) [English coverage check]: {r.get('title', '')}",
+                "url": url,
+                "published": date_str,
+                "source": r.get("url", "").split("/")[2] if url else "Unknown",
+                "summary": None,
+                "body": None,
+                "_pub_date": pub_date,
+                "metadata": {
+                    "code": c["code"],
+                    "company": c["company"],
+                    "source_category": "jp_english_coverage_check",
+                    "unconfirmed": True,
+                },
+            })
+    return articles
+
+
+def _fetch_press_jp_english_check_source(sources: list[dict], days_back: int) -> list[dict]:
+    companies: list[dict[str, str]] = []
+    for source in sources:
+        config = source.get("config") or {}
+        companies.extend(config.get("companies", []))
+    if not companies:
+        return []
+    return _fetch_press_jp_english_check(companies, days_back)
+
+
 def _fetch_articles(
     sources: list[dict],
     days_back: int,
@@ -3311,6 +6147,7 @@ def _fetch_articles(
     universe_url: str | None = None,
     universe_api_key: str | None = None,
     dart_api_key: str | None = None,
+    edinet_api_key: str | None = None,
     domain_slug: str = "",
 ) -> list[dict]:
     """Fetch articles from all sources, routing by source_type.
@@ -3349,6 +6186,18 @@ def _fetch_articles(
     tpex_material_sources = [s for s in sources if s.get("source_type") == "tpex_material"]
     dart_filing_sources = [s for s in sources if s.get("source_type") == "dart_filing"]
     kr_customs_export_sources = [s for s in sources if s.get("source_type") == "kr_customs_export"]
+    irbank_financials_sources = [s for s in sources if s.get("source_type") == "irbank_financials"]
+    irbank_buyback_sources = [s for s in sources if s.get("source_type") == "irbank_buyback"]
+    irbank_company_reference_sources = [s for s in sources if s.get("source_type") == "irbank_company_reference"]
+    kabutan_tdnet_mirror_sources = [s for s in sources if s.get("source_type") == "kabutan_tdnet_mirror"]
+    kabutan_buyback_sources = [s for s in sources if s.get("source_type") == "kabutan_buyback"]
+    edinet_filing_sources = [s for s in sources if s.get("source_type") == "edinet_filing"]
+    edinet_buyback_status_sources = [s for s in sources if s.get("source_type") == "edinet_buyback_status"]
+    edinet_extraordinary_report_sources = [s for s in sources if s.get("source_type") == "edinet_extraordinary_report"]
+    seaj_billings_sources = [s for s in sources if s.get("source_type") == "seaj_billings"]
+    monoist_capex_sources = [s for s in sources if s.get("source_type") == "monoist_capex"]
+    press_jp_sources = [s for s in sources if s.get("source_type") == "press_jp"]
+    press_jp_english_check_sources = [s for s in sources if s.get("source_type") == "press_jp_english_check"]
 
     articles: list[dict] = []
     t0 = time.perf_counter()
@@ -3413,6 +6262,60 @@ def _fetch_articles(
     if kr_customs_export_sources:
         articles.extend(_fetch_customs_export_data(kr_customs_export_sources, days_back))
 
+    if irbank_financials_sources:
+        articles.extend(_fetch_irbank_financials(irbank_financials_sources, days_back))
+
+    if irbank_buyback_sources:
+        articles.extend(_fetch_irbank_buyback(irbank_buyback_sources))
+
+    if irbank_company_reference_sources:
+        articles.extend(_fetch_irbank_company_reference(irbank_company_reference_sources))
+
+    if kabutan_tdnet_mirror_sources:
+        articles.extend(_fetch_kabutan_tdnet_mirror(kabutan_tdnet_mirror_sources))
+
+    if kabutan_buyback_sources:
+        articles.extend(_fetch_kabutan_buyback(kabutan_buyback_sources))
+
+    if edinet_filing_sources:
+        if edinet_api_key:
+            articles.extend(_fetch_edinet_filing(edinet_filing_sources, days_back, edinet_api_key))
+        else:
+            logger.warning(
+                "EDINET_API_KEY not set - skipping %d edinet_filing source(s)",
+                len(edinet_filing_sources),
+            )
+
+    if edinet_buyback_status_sources:
+        if edinet_api_key:
+            articles.extend(_fetch_edinet_buyback_status(edinet_buyback_status_sources, days_back, edinet_api_key))
+        else:
+            logger.warning(
+                "EDINET_API_KEY not set - skipping %d edinet_buyback_status source(s)",
+                len(edinet_buyback_status_sources),
+            )
+
+    if edinet_extraordinary_report_sources:
+        if edinet_api_key:
+            articles.extend(_fetch_edinet_extraordinary_report(edinet_extraordinary_report_sources, days_back, edinet_api_key))
+        else:
+            logger.warning(
+                "EDINET_API_KEY not set - skipping %d edinet_extraordinary_report source(s)",
+                len(edinet_extraordinary_report_sources),
+            )
+
+    if seaj_billings_sources:
+        articles.extend(_fetch_seaj_billings(seaj_billings_sources))
+
+    if monoist_capex_sources:
+        articles.extend(_fetch_monoist_capex(monoist_capex_sources))
+
+    if press_jp_sources:
+        articles.extend(_fetch_press_jp(press_jp_sources))
+
+    if press_jp_english_check_sources:
+        articles.extend(_fetch_press_jp_english_check_source(press_jp_english_check_sources, days_back))
+
     articles.sort(
         key=lambda a: (
             a["_pub_date"] or datetime.min.replace(tzinfo=timezone.utc)
@@ -3464,6 +6367,7 @@ def run(
     universe_url = os.environ.get("RESEARCH_UNIVERSE_URL")
     universe_api_key = os.environ.get("RESEARCH_UNIVERSE_API_KEY")
     dart_api_key = os.environ.get("DART_API_KEY")
+    edinet_api_key = os.environ.get("EDINET_API_KEY")
 
     sources = load_sources(domain_slug, days_back)
     if not sources:
@@ -3471,7 +6375,7 @@ def run(
 
     articles = _fetch_articles(
         sources, days_back, max_articles, serpapi_key, newsapi_key, alpha_vantage_key,
-        universe_url, universe_api_key, dart_api_key, domain_slug,
+        universe_url, universe_api_key, dart_api_key, edinet_api_key, domain_slug,
     )
     if not articles:
         return {"articles": []}

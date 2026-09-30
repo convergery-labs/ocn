@@ -129,7 +129,7 @@ def init_db() -> None:
         conn.execute("""
             ALTER TABLE agent_classifications
                 ADD CONSTRAINT agent_classifications_source_type_check
-                    CHECK (source_type IN ('news', 'sec_filing', 'company_specific', 'taiwan_market_signal', 'geopolitical_signal', 'korea_market_signal', 'macro_signal'))
+                    CHECK (source_type IN ('news', 'sec_filing', 'company_specific', 'taiwan_market_signal', 'geopolitical_signal', 'korea_market_signal', 'macro_signal', 'japan_market_signal'))
         """)
         # signal_detection's allowed set is widened (same drop/recreate
         # pattern as source_type above) to add 'waiting' - geopolitical_signal
@@ -237,6 +237,17 @@ def init_db() -> None:
                 ON agent_classifications (source_type, source_id)
                 WHERE source_type = 'macro_signal'
         """)
+        # japan_market_signal: same fix as taiwan_market_signal/
+        # korea_market_signal above - source_id is J1's own synthetic
+        # irbank-financials:// url (news-retrieval's own dedup key,
+        # already globally unique per filing), a real, consistently
+        # populated natural key for classify_forecast_revision.
+        conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS
+                idx_agent_classifications_japan_source_id
+                ON agent_classifications (source_type, source_id)
+                WHERE source_type = 'japan_market_signal'
+        """)
         # metadata->>'ticker' filtering (list_all_results/list_results) would
         # otherwise sequential-scan the whole table on every ticker-filtered
         # call - a partial index scoped to sec_filing (the only source_type
@@ -248,6 +259,22 @@ def init_db() -> None:
                 idx_agent_classifications_sec_filing_ticker
                 ON agent_classifications (UPPER(metadata->>'ticker'))
                 WHERE source_type = 'sec_filing'
+        """)
+        # metadata->>'code' - the Japan Signals equivalent of ticker above
+        # (japan_market_signal rows never populate metadata.ticker - every
+        # J1-J7/WATCHING classifier stores the TSE 4-digit code, or Kioxia's
+        # own "285A", under metadata.code instead - see japan_ticker_
+        # universe.py's own JAPAN_TICKER_UNIVERSE). Same partial-index
+        # pattern as the sec_filing ticker index above, scoped to
+        # japan_market_signal, for the same reason: matches the UPPER()-
+        # wrapped comparison list_all_results actually runs (a real filing
+        # code is always uppercase already, but matched case-insensitively
+        # in case a caller passes lowercase).
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS
+                idx_agent_classifications_japan_code
+                ON agent_classifications (UPPER(metadata->>'code'))
+                WHERE source_type = 'japan_market_signal'
         """)
         # geopolitical_signal Stage C: one row per US-listed company, built
         # by a separate periodic refresh job that calls research-universe's
@@ -298,5 +325,107 @@ def init_db() -> None:
                 meeting_date  DATE PRIMARY KEY,
                 source        TEXT NOT NULL DEFAULT 'federalreserve.gov/json/calendar.json',
                 refreshed_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        # Japan Signals spec Section 4.1's own stored pattern per company
+        # ("how many times it typically revises in a year, in which
+        # direction, by roughly how much, and at which point in the
+        # year") - same refresh-cache shape as geopolitical_signal_
+        # companies/fomc_meeting_dates above: computed once by a scheduled
+        # job (refresh-japan-habits CLI command, see pipeline/
+        # japan_signal_classifier.py's compute_forecast_habit) from the
+        # company's own 5-year stored revision history, NOT recomputed
+        # inline on every classify_forecast_revision call - explicit user
+        # instruction 2026-09-28 ("save those against each company... then
+        # when a new revision comes in, compare it to that company's own
+        # four numbers instead of a fixed threshold").
+        #
+        # typical_month_1/2/3 hold up to 3 calendar months (1-12) this
+        # company's real revisions most commonly land in - "what point in
+        # the year does it usually happen" (the 4th stored number) is
+        # naturally a SET of months, not one value, since real filers
+        # revise at multiple points across a fiscal year (confirmed live:
+        # Advantest's own real history clusters at Jan/Jul/Oct, three
+        # distinct months, not one) - stored as up to 3 nullable columns
+        # rather than an array so a plain SELECT reads directly without an
+        # unnest, matching this table's own read pattern (one row per
+        # company, read whole).
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS japan_company_habits (
+                code                  TEXT PRIMARY KEY,
+                company               TEXT NOT NULL,
+                revisions_per_year    NUMERIC,
+                typical_size_pct      NUMERIC,
+                typical_direction     TEXT,
+                typical_month_1       SMALLINT,
+                typical_month_2       SMALLINT,
+                typical_month_3       SMALLINT,
+                sample_size           INTEGER NOT NULL,
+                is_trusted            BOOLEAN NOT NULL,
+                computed_from_years   INTEGER NOT NULL,
+                refreshed_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        # typical_size_mad_pct: the median absolute deviation (MAD) of a
+        # company's own genuine revision sizes - see classify_forecast_
+        # revision's own rule-6 comment for why this, not a fixed
+        # multiple of the median, is the real bar for "unusually large
+        # even for this volatile company" (real, confirmed-live finding
+        # 2026-09-30: a tuned multiplier like 1.5x-typical was an
+        # arbitrary number picked to hit a target reduction, not a
+        # principled statistic; MAD is the same robust-outlier measure
+        # this module already uses elsewhere for this exact kind of
+        # small, fat-tailed per-company data - see the module's own
+        # median-vs-mean-vs-MAD comparison work). Added via ALTER TABLE
+        # rather than baked into the CREATE TABLE above, same "existing
+        # table, new column" convention every other ADD COLUMN IF NOT
+        # EXISTS in this file already follows.
+        conn.execute("""
+            ALTER TABLE japan_company_habits
+                ADD COLUMN IF NOT EXISTS typical_size_mad_pct NUMERIC
+        """)
+        # Japan Signals spec Section 6.2's own stored comparison point for
+        # J2 (results against forecast): "this company's typical progress
+        # at the same point in previous years" - same refresh-cache
+        # rationale as japan_company_habits above, kept as its own table
+        # (not folded into japan_company_habits) because the natural key
+        # is (code, period_type), not code alone - a company's typical
+        # progress at the half-year mark and at an arbitrary quarter mark
+        # are genuinely different numbers, confirmed live 2026-09-29 they
+        # differ meaningfully for the same company (e.g. Ibiden: ~56% by a
+        # typical quarter mark vs. ~62% by its typical half-year mark).
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS japan_progress_habits (
+                code                  TEXT NOT NULL,
+                period_type           TEXT NOT NULL,
+                company               TEXT NOT NULL,
+                typical_progress_pct  NUMERIC,
+                sample_size           INTEGER NOT NULL,
+                is_trusted            BOOLEAN NOT NULL,
+                refreshed_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (code, period_type)
+            )
+        """)
+        # J5 (capacity commitment) and J6 (ownership/capital policy) need
+        # each company's total assets and shares-outstanding as the
+        # denominators for Japan Signals spec Section 6.5's own "investment
+        # >= 10% of total assets" and "buyback >= 5% of shares outstanding"
+        # rules - see japan_signal_classifier.classify_capacity_and_
+        # ownership's own docstring. Unlike japan_company_habits/
+        # japan_progress_habits above, this is NOT a habit computed from
+        # stored history - it is a simple cache of the LATEST value
+        # news-retrieval's irbank_company_reference source reported, kept
+        # here for the same reason those two tables exist (a small,
+        # cheap-to-read table read on every classification run, refreshed
+        # on its own schedule, rather than every classify call re-fetching
+        # or recomputing it inline).
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS japan_company_reference (
+                code                     TEXT PRIMARY KEY,
+                company                  TEXT NOT NULL,
+                total_assets_jpy_millions NUMERIC,
+                shares_outstanding       BIGINT,
+                fiscal_period            TEXT,
+                refreshed_at             TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
         """)

@@ -29,6 +29,7 @@ from models.jobs import (
     create_job,
     get_completed_job_for_run,
     get_existing_geopolitical_signal_article_ids,
+    get_existing_japan_signal_source_ids,
     get_existing_korea_signal_source_ids,
     get_existing_macro_signal_source_ids,
     get_existing_taiwan_source_ids,
@@ -37,6 +38,7 @@ from models.jobs import (
     get_untagged_geopolitical_signal_high_articles,
     get_waiting_geopolitical_signal_articles,
     insert_geopolitical_signal_classification,
+    insert_japan_signal_classification,
     insert_korea_signal_classification,
     insert_macro_signal_event,
     insert_taiwan_signal_classification,
@@ -49,6 +51,9 @@ from models.jobs import (
     update_job_status,
     update_taiwan_revenue_rank,
 )
+from models.japan_company_habits import get_all_habits, replace_habits
+from models.japan_company_reference import get_all_company_reference, replace_company_reference
+from models.japan_progress_habits import get_all_progress_habits, replace_progress_habits
 from pipeline.classifier import has_usable_body
 from pipeline.dispatch import get_domain_config, known_domains
 from pipeline.geopolitical_signal_classifier import classify_geopolitical_signal_stage_a
@@ -60,6 +65,15 @@ from pipeline.geopolitical_signal_stage_b import (
     load_stage_b_prompt,
 )
 from pipeline.geopolitical_signal_stage_d import grade_geopolitical_signal_article
+from pipeline.japan_signal_classifier import (
+    _article_published_dt,
+    classify_japan_signal_batch,
+    classify_stale_revision_pattern,
+    compute_all_japan_habits,
+    compute_all_japan_progress_habits,
+)
+from pipeline.japan_signal_summary import generate_japan_signal_summary
+from pipeline.japan_ticker_universe import JAPAN_TICKER_UNIVERSE
 from pipeline.korea_signal_classifier import classify_korea_signal_batch
 from pipeline.korea_signal_summary import generate_korea_signal_summary
 from pipeline.korea_ticker_universe import KOREA_TICKER_UNIVERSE
@@ -970,6 +984,248 @@ async def run_korea_signal_classification(job_id: int, from_date: str, to_date: 
     update_job_status(job_id, "completed", article_count=inserted, set_completed_at=True)
 
 
+async def run_japan_signal_classification(job_id: int, from_date: str, to_date: str) -> None:
+    """Classify japan_market_signal items (J1/jp_forecast only, so far)
+    across ALL of news-retrieval's completed runs in [from_date, to_date] -
+    same reasoning as run_korea_signal_classification/
+    run_taiwan_signal_classification (news-retrieval polls this domain on
+    its own daily/monthly schedule, so a multi-day window can still span
+    more than one completed run).
+
+    Loads the pre-computed per-company habit cache (models.
+    japan_company_habits.get_all_habits(), refreshed separately by
+    refresh_japan_habits() below - NOT recomputed from this window's own
+    articles, per the explicit user instruction classify_forecast_
+    revision's own docstring documents) and passes it through to
+    classify_japan_signal_batch, so a routine daily classification run
+    always compares a new revision against the company's real FULL
+    history, not just whatever happens to be in this narrow window.
+    """
+    update_job_status(job_id, "running")
+    try:
+        run_ids = await list_completed_runs(
+            config.JAPAN_SIGNAL_DOMAIN, from_date, to_date,
+        )
+        all_articles: list[dict[str, Any]] = []
+        seen_urls: set[str] = set()
+        for run_id in run_ids:
+            for article in await get_run_articles(run_id):
+                url = article.get("url")
+                if url and url not in seen_urls:
+                    seen_urls.add(url)
+                    all_articles.append(article)
+    except NewsRetrievalError:
+        logger.exception(
+            "Failed to fetch japan_market_signal articles for job %d", job_id,
+        )
+        update_job_status(job_id, "failed", set_completed_at=True)
+        return
+
+    if not all_articles:
+        update_job_status(job_id, "completed", article_count=0, set_completed_at=True)
+        return
+
+    stored_habits = get_all_habits()
+    stored_progress_habits = get_all_progress_habits()
+    stored_company_reference = get_all_company_reference()
+    classified = classify_japan_signal_batch(
+        all_articles, stored_habits=stored_habits, stored_progress_habits=stored_progress_habits,
+        stored_company_reference=stored_company_reference,
+    )
+
+    candidate_source_ids = [c["result"]["source_id"] for c in classified if c["result"].get("source_id")]
+    already_done = get_existing_japan_signal_source_ids(candidate_source_ids)
+    to_insert = [
+        c for c in classified
+        if c["result"].get("source_id") not in already_done
+    ]
+
+    update_job_status(job_id, "running", article_count=len(to_insert))
+
+    inserted = 0
+    for c in to_insert:
+        try:
+            insert_japan_signal_classification(job_id, c["article"], c["result"])
+            inserted += 1
+        except Exception:
+            logger.exception(
+                "Failed to insert japan_market_signal classification for"
+                " source_id=%s (job %d)",
+                c["result"].get("source_id"), job_id,
+            )
+
+    logger.info(
+        "[JAPAN_SIGNAL] job=%d runs=%d pooled_articles=%d classified=%d"
+        " already_done=%d inserted=%d",
+        job_id, len(run_ids), len(all_articles), len(classified),
+        len(already_done), inserted,
+    )
+    update_job_status(job_id, "completed", article_count=inserted, set_completed_at=True)
+
+
+async def refresh_japan_habits(from_date: str, to_date: str, computed_from_years: int) -> int:
+    """Recompute every tracked company's forecast-revision habit from its
+    FULL stored history and overwrite the japan_company_habits cache -
+    explicit user instruction 2026-09-28: "save those [four numbers]
+    against each company... then when a new revision comes in, compare it
+    to that company's own four numbers instead of a fixed threshold."
+
+    Pools ALL of news-retrieval's completed japan_market_signal runs in
+    [from_date, to_date] - normally a wide window (e.g. 5 years back to
+    today) covering the full backfilled history, not a narrow recent
+    window the way run_japan_signal_classification's own window is -
+    a habit computed from only recent revisions would drift from the
+    company's own real long-run pattern (see compute_forecast_habit's own
+    docstring on why median-based/multi-year framing matters).
+
+    Returns the number of companies written (len(JAPAN_TICKER_UNIVERSE) -
+    every tracked company gets a row, even one with zero revisions in the
+    pooled window - see compute_all_japan_habits's own docstring).
+
+    Also runs classify_stale_revision_pattern (Section 10.3's WATCHING
+    section - see that function's own docstring) against this same
+    pooled window right after the habits cache is written, and inserts
+    any real result as an ordinary agent_classifications row (source_
+    category='jp_watching') - a genuinely different kind of write from
+    the three delete-then-replace caches above (japan_company_habits/
+    japan_progress_habits/japan_company_reference): this is a
+    classification result, not a reference cache, so it goes through
+    insert_japan_signal_classification/get_existing_japan_signal_
+    source_ids, deduped per calendar day (see that function's own
+    source_id, which embeds as_of's date) rather than replaced wholesale
+    on every refresh.
+
+    Entry point for a scheduled task (refresh-japan-habits CLI command,
+    __main__.py) - intended to run occasionally (e.g. monthly), not on
+    every classification pass, since a company's real multi-year habit
+    does not meaningfully change day to day. WATCHING piggybacks on this
+    same occasional cadence deliberately - see classify_stale_revision_
+    pattern's own docstring for why it needs the same full-history pool
+    this function already assembles, which the daily classify-japan-
+    signals job's own narrow window cannot provide.
+    """
+    run_ids = await list_completed_runs(config.JAPAN_SIGNAL_DOMAIN, from_date, to_date)
+    all_articles: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
+    for run_id in run_ids:
+        for article in await get_run_articles(run_id):
+            url = article.get("url")
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                all_articles.append(article)
+
+    habits = compute_all_japan_habits(all_articles, computed_from_years=computed_from_years)
+    replace_habits(habits)
+
+    # Spec Section 10.3's WATCHING section (classify_stale_revision_
+    # pattern - see that function's own docstring for the full design) -
+    # deliberately run HERE, not from run_japan_signal_classification,
+    # because it needs each company's real FULL revision history to find
+    # a genuine "last revision date", exactly the wide pooled window this
+    # function already assembles (the daily classify job only ever pools
+    # a single day - see __main__.py's classify-japan-signals docstring -
+    # so it would almost never see a company's actual last revision).
+    # Reads the habits JUST written above via get_all_habits() rather than
+    # the list `habits` variable, since that function needs the same
+    # {code: habit_dict} lookup shape classify_forecast_revision itself
+    # reads - one extra read of what was just written, same "read back
+    # what was just persisted" pattern already used lower down in this
+    # function for company reference (see reference_articles below).
+    #
+    # This is a genuinely new kind of write for this function: every
+    # other cache here is a full delete-then-replace table
+    # (japan_company_habits/japan_progress_habits/japan_company_
+    # reference), but a stale-revision reading is a CLASSIFICATION result
+    # (source_type=japan_market_signal, like every J1-J7 row), not a
+    # reference cache - so it goes through the same insert_japan_signal_
+    # classification/get_existing_japan_signal_source_ids path
+    # run_japan_signal_classification itself uses, deduped by the same
+    # source_id-per-day convention (see classify_stale_revision_pattern's
+    # own source_id, which embeds as_of's date) - a fresh monthly refresh
+    # naturally produces a fresh row each time this runs, without ever
+    # re-inserting the same day's reading twice.
+    watching_job_id = create_job(domain=config.JAPAN_SIGNAL_DOMAIN)
+    update_job_status(watching_job_id, "running")
+    watching_results = classify_stale_revision_pattern(all_articles, stored_habits=get_all_habits())
+    watching_source_ids = [r["result"]["source_id"] for r in watching_results]
+    already_done = get_existing_japan_signal_source_ids(watching_source_ids)
+    watching_inserted = 0
+    for r in watching_results:
+        if r["result"]["source_id"] in already_done:
+            continue
+        try:
+            insert_japan_signal_classification(watching_job_id, r["article"], r["result"])
+            watching_inserted += 1
+        except Exception:
+            logger.exception(
+                "Failed to insert japan_market_signal WATCHING row for"
+                " source_id=%s (job %d)",
+                r["result"].get("source_id"), watching_job_id,
+            )
+    update_job_status(watching_job_id, "completed", article_count=watching_inserted, set_completed_at=True)
+    logger.info(
+        "[JAPAN_WATCHING] job=%d candidates=%d inserted=%d",
+        watching_job_id, len(watching_results), watching_inserted,
+    )
+
+    # J2's progress habits are computed from the SAME pooled article set
+    # as J1's own habits (both read the same jp_forecast history, just
+    # different table _kinds within it - see compute_all_japan_progress_
+    # habits's own docstring) - refreshed together in one job rather than
+    # a separate CLI command/schedule, since there is no reason to pool
+    # news-retrieval's articles twice for the same underlying data.
+    company_name_by_code = {t["code"]: t["company"] for t in JAPAN_TICKER_UNIVERSE}
+    progress_habits = compute_all_japan_progress_habits(all_articles)
+    replace_progress_habits([
+        {"code": code, "period_type": period_type, "company": company_name_by_code.get(code, code), **habit}
+        for (code, period_type), habit in progress_habits.items()
+    ])
+
+    # J5/J6's own denominators (total assets, shares outstanding) - see
+    # models.japan_company_reference's own docstring. Unlike habits/
+    # progress_habits above, this is not computed from a full multi-year
+    # history - irbank_company_reference articles are ALREADY only ever
+    # the single newest known figure per company (see news-retrieval's
+    # own comment on why only the last bs-table row is kept), so the
+    # newest-published row per code in this SAME pooled article set is
+    # simply used as-is, no aggregation needed. Pooled from the same
+    # from_date/to_date window as the habits above rather than a separate
+    # fetch, since irbank_company_reference is seeded into the same
+    # japan_market_signal domain news-retrieval already polls.
+    reference_articles = [
+        a for a in all_articles
+        if (a.get("metadata") or {}).get("source_category") == "jp_company_reference"
+    ]
+    latest_reference_by_code: dict[str, dict[str, Any]] = {}
+    for a in reference_articles:
+        meta = a.get("metadata") or {}
+        code = meta.get("code")
+        if not code:
+            continue
+        pub_dt = _article_published_dt(a)
+        existing = latest_reference_by_code.get(code)
+        if existing is None or (pub_dt or datetime.min.replace(tzinfo=timezone.utc)) > (existing["_pub_dt"] or datetime.min.replace(tzinfo=timezone.utc)):
+            latest_reference_by_code[code] = {**meta, "_pub_dt": pub_dt}
+    replace_company_reference([
+        {
+            "code": code,
+            "company": ref.get("company", company_name_by_code.get(code, code)),
+            "total_assets_jpy_millions": ref.get("total_assets_jpy_millions"),
+            "shares_outstanding": ref.get("shares_outstanding"),
+            "fiscal_period": ref.get("fiscal_period"),
+        }
+        for code, ref in latest_reference_by_code.items()
+    ])
+
+    logger.info(
+        "[JAPAN_HABITS] refreshed %d companies from %d pooled article(s) across %d run(s);"
+        " %d (code, period_type) progress habit(s); %d company reference row(s)",
+        len(habits), len(all_articles), len(run_ids), len(progress_habits),
+        len(latest_reference_by_code),
+    )
+    return len(habits)
+
+
 def generate_korea_signal_summary_for_date(date: str) -> str:
     """Spec Section 8.4: read today's (or ``date``'s) already-classified
     korea_market_signal rows from this service's own DB and generate the
@@ -1014,6 +1270,44 @@ def generate_korea_signal_summary_for_date(date: str) -> str:
         date, len(signal_rows), len(weak_rows),
     )
     return generate_korea_signal_summary(ordered_rows)
+
+
+def generate_japan_signal_summary_for_date(date: str) -> str:
+    """Spec Section 10.3: read today's (or ``date``'s) already-classified
+    japan_market_signal rows from this service's own DB and generate the
+    twice-daily trader summary text - exact same shape as
+    generate_korea_signal_summary_for_date above (see that function's own
+    docstring for why this is synchronous, and why no numeric rank is
+    fabricated - both reasons apply identically here).
+
+    ``date``: YYYY-MM-DD (UTC) - passed straight to list_all_results's
+    published_from/published_to as a single-day window. J3
+    (jp_missing_revision) and WATCHING (jp_watching) both describe an
+    absence with no real backing article, but both pass a real published
+    timestamp (as_of, the moment the absence/staleness was detected - see
+    classify_missing_revision's and classify_stale_revision_pattern's own
+    result-shape comments) rather than a NULL, specifically so a row IS
+    found by this exact date-windowed query - fixed 2026-09-30 for J3 to
+    close the same real, previously-documented gap WATCHING was already
+    built to avoid.
+    """
+    result = list_all_results(
+        source_type=config.JAPAN_SIGNAL_DOMAIN,
+        published_from=date,
+        published_to=date,
+        limit=200,
+    )
+    rows = result["results"]
+
+    signal_rows = [r for r in rows if r.get("signal_detection") == "signal"]
+    weak_rows = [r for r in rows if r.get("signal_detection") == "weak_signal"]
+    ordered_rows = signal_rows + weak_rows
+
+    logger.info(
+        "[JAPAN_SIGNAL_SUMMARY] date=%s signal=%d weak_signal=%d",
+        date, len(signal_rows), len(weak_rows),
+    )
+    return generate_japan_signal_summary(ordered_rows)
 
 
 async def run_geopolitical_signal_stage_a(job_id: int, from_date: str, to_date: str) -> None:
