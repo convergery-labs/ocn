@@ -16,7 +16,11 @@ NEWS_RETRIEVAL_SERVICE_CALLER: str = os.environ.get(
     "NEWS_RETRIEVAL_SERVICE_CALLER",
     "eyJzdWIiOiAwLCAicm9sZSI6ICJhZG1pbiIsICJkb21haW5zIjogW119",
 )
-PIPELINE_POLL_TIMEOUT_SECS: int = int(os.environ.get("PIPELINE_POLL_TIMEOUT_SECS", "600"))
+# 30min: an ai_news run normally takes 4-7min, but the old 10min default left
+# almost no headroom - a slow upstream day pushed one to 13.7min on 2026-09-30
+# and timed out here, failing that day's signal-herald digest even though the
+# run completed fine minutes later. Staging overrides this explicitly too.
+PIPELINE_POLL_TIMEOUT_SECS: int = int(os.environ.get("PIPELINE_POLL_TIMEOUT_SECS", "1800"))
 
 WEB_SEARCH_PROVIDER: str = os.environ.get("WEB_SEARCH_PROVIDER", "duckduckgo")
 WEB_SEARCH_API_KEY: str | None = os.environ.get("WEB_SEARCH_API_KEY") or None

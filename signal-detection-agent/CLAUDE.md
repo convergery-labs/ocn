@@ -72,7 +72,7 @@ signal-detection-agent/
 | `SIGNAL_DETECTION_MODEL_V2` | Second pass model — falls back to `SIGNAL_DETECTION_MODEL` if unset |
 | `NEWS_RETRIEVAL_URL` | news-retrieval base URL (default: `http://news-retrieval:8000`) |
 | `POSTGRES_HOST/PORT/DB/USER/PASSWORD` | Signal-detection Postgres DB connection |
-| `PIPELINE_POLL_TIMEOUT_SECS` | Max seconds to wait for a news-retrieval run (default: 600) |
+| `PIPELINE_POLL_TIMEOUT_SECS` | Max seconds to wait for a news-retrieval run (default: 1800) |
 | `WEB_SEARCH_PROVIDER` | Web search backend: `duckduckgo` (default), `tavily`, `brave` |
 | `WEB_SEARCH_API_KEY` | API key for Tavily or Brave (not required for DuckDuckGo) |
 | `CLASSIFY_CONCURRENCY` | Max concurrent article classifiers (default: 8) — shared by the `news` domain and geopolitical_signal Stage B/C |
@@ -97,6 +97,10 @@ a deterministic `source_id` (ticker+period or ticker+timestamp), not article row
 by a partial unique index - a run never re-classifies or re-inserts something already done.
 
 ## Japan Signal Pipeline
+
+Full technical reference: [JAPAN_SIGNALS.md](JAPAN_SIGNALS.md) - sources, thresholds and their
+real-data derivation, habit tables, DB schema, API filters, schedules, known limitations, and
+the operational runbook. The summary below is the orientation version.
 
 `japan_market_signal` (IRBANK forecast revisions/buybacks/company reference, Kabutan/EDINET
 filings, SEAJ industry billings, MONOist capex news) is classified by its own separate path,

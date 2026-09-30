@@ -3,6 +3,8 @@ import types
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 import pipeline as pipeline_module
 from db import get_db
 
@@ -110,47 +112,29 @@ def test_body_from_content_encoded() -> None:
     mock_fetch.assert_not_called()
 
 
-def test_fetch_body_with_fallback_tries_archive_ph_for_allowlisted_domain() -> None:
-    """A direct-fetch miss on an allowlisted domain (e.g. bloomberg.com)
-    falls back to archive.ph and returns its extracted body.
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://www.bloomberg.com/news/articles/some-story",
+        "https://www.example-unlisted-outlet.com/some-story",
+    ],
+)
+def test_fetch_body_with_fallback_makes_no_second_attempt_on_miss(url: str) -> None:
+    """A direct-fetch miss returns None after exactly one attempt, with no
+    archive.ph (or any other) fallback round-trip - including for
+    bloomberg.com, which was on the removed archive.ph allowlist.
 
-    Confirmed live (2026-09-25/26): bloomberg.com had a real archive.ph
-    snapshot for every one of 3 tested URLs that had already failed a
-    direct fetch in this pipeline - see _ARCHIVE_PH_FALLBACK_DOMAINS'
-    comment for the full hit/miss data behind this allowlist.
+    The archive.ph fallback was removed 2026-09-30: when archive.ph was
+    unreachable, each fallback burned its full connect timeout serially,
+    stretching a normal 4-7min ai_news run to 13.7min and tripping
+    signal-detection-agent's poll timeout. This pins run duration to the
+    direct fetch alone - see _fetch_body_with_fallback's own docstring.
     """
-    url = "https://www.bloomberg.com/news/articles/some-story"
-    archive_body = "Recovered article body via archive.ph."
-
-    with (
-        patch(
-            "trafilatura.fetch_url",
-            side_effect=[None, "<html>archived page</html>"],
-        ) as mock_fetch_url,
-        patch("trafilatura.extract", return_value=archive_body),
-    ):
-        body = pipeline_module._fetch_body_with_fallback(url)
-
-    assert body == archive_body
-    assert mock_fetch_url.call_count == 2
-    second_call_url = mock_fetch_url.call_args_list[1].args[0]
-    assert second_call_url == f"https://archive.ph/newest/{url}"
-
-
-def test_fetch_body_with_fallback_skips_archive_ph_for_non_allowlisted_domain() -> None:
-    """A direct-fetch miss on a domain NOT in _ARCHIVE_PH_FALLBACK_DOMAINS
-    does not pay the extra archive.ph round-trip at all - confirmed live
-    that most tested domains (including reuters.com, a top-volume failure
-    domain) have no real archive.ph coverage, so trying is wasted cost
-    there.
-    """
-    url = "https://www.example-unlisted-outlet.com/some-story"
-
     with patch("trafilatura.fetch_url", return_value=None) as mock_fetch_url:
         body = pipeline_module._fetch_body_with_fallback(url)
 
     assert body is None
-    mock_fetch_url.assert_called_once()  # only the direct attempt, no archive.ph call
+    mock_fetch_url.assert_called_once()
 
 
 def test_body_trafilatura_fallback() -> None:

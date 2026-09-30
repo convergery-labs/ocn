@@ -95,84 +95,25 @@ def _clean_summary(raw: str) -> str:
 # Step 1 - fetch
 # ---------------------------------------------------------------------------
 
-_ARCHIVE_PH_TIMEOUT = 15  # confirmed live: a miss (no cached snapshot) returns
-# in well under 1s; this bounds the rare slow case, not the common one.
-
-# Confirmed live (2026-09-25/26) against 19 real URLs that had already
-# failed a direct fetch in this pipeline, spanning 12 publishers: archive.ph
-# coverage is real but genuinely partial, not a general fix for "sites that
-# block scraping" - it only has a snapshot if someone ELSE already
-# submitted that exact URL. These 6 domains were the confirmed hits
-# (bloomberg.com 3/3, wsj.com 2/2, politico.com 2/2, nytimes.com 1/1,
-# france24.com 1/1, economist.com 1/2 - weaker sample but a real 6515-char
-# extraction on the hit); every other tested domain - including reuters.com
-# (0/3) and apnews.com (0/1), despite being top-volume failure domains -
-# missed. Scoped to this allowlist rather than tried universally so a
-# failing fetch on an untested/no-coverage domain doesn't pay the extra
-# archive.ph round-trip for nothing; revisit by re-testing a domain's real
-# hit rate before adding it here, not by assumption.
-_ARCHIVE_PH_FALLBACK_DOMAINS: frozenset[str] = frozenset({
-    "bloomberg.com",
-    "nytimes.com",
-    "france24.com",
-    "wsj.com",
-    "politico.com",
-    "economist.com",
-})
-
-
-def _domain_for_archive_ph_check(url: str) -> str:
-    """Registrable domain for url, "www." stripped - same normalization as
-    _extract_domain_for_also_reported_by, so a value here is directly
-    comparable against _ARCHIVE_PH_FALLBACK_DOMAINS regardless of how the
-    source URL was formatted.
-    """
-    host = urlparse(url or "").hostname or ""
-    host = host.lower()
-    if host.startswith("www."):
-        host = host[len("www."):]
-    return host
-
-
-def _fetch_body_via_archive_ph(url: str) -> str | None:
-    """Fallback body fetch via archive.ph's cached snapshot of ``url``, for
-    when a direct Trafilatura fetch returns nothing (paywall/bot-detection
-    block, or a dead/unreachable source URL). Only called for domains in
-    _ARCHIVE_PH_FALLBACK_DOMAINS - see that constant's comment for why.
-
-    Returns None on any failure (no snapshot, network error, extraction
-    failure) - same fail-open contract as the direct fetch this backs up,
-    never raises.
-    """
-    try:
-        downloaded = trafilatura.fetch_url(
-            f"https://archive.ph/newest/{url}",
-            config=_get_trafilatura_config(),
-        )
-        return trafilatura.extract(downloaded) if downloaded else None
-    except Exception:
-        logger.warning(
-            "[archive.ph] fallback fetch failed for url=%r", url, exc_info=True,
-        )
-        return None
-
-
 def _fetch_body_with_fallback(url: str) -> str | None:
-    """Trafilatura direct fetch, falling back to archive.ph on a miss - but
-    only for domains in _ARCHIVE_PH_FALLBACK_DOMAINS, to avoid spending the
-    extra round-trip on domains with no confirmed archive.ph coverage.
+    """Trafilatura direct fetch, returning None when the fetch or extraction
+    yields nothing (paywall/bot-detection block, or a dead source URL).
+
+    Previously fell back to archive.ph's cached snapshot for a small
+    allowlist of paywalled domains. Removed 2026-09-30: when archive.ph
+    itself is unreachable, every fallback attempt burns its full connect
+    timeout, and those retries are serial - enough to stretch a normal
+    4-7min ai_news run past the downstream poll timeout in
+    signal-detection-agent and fail the daily digest outright. The recovered
+    bodies were not worth making run duration depend on a third-party
+    mirror's uptime.
 
     Shared by all three Trafilatura-backed body-fetch call sites (RSS
-    content:encoded fallback, SerpAPI, GDELT) so the fallback behavior
-    stays identical across all of them rather than drifting.
+    content:encoded fallback, SerpAPI, GDELT) so the behavior stays
+    identical across all of them rather than drifting.
     """
     downloaded = trafilatura.fetch_url(url, config=_get_trafilatura_config())
-    body = trafilatura.extract(downloaded) if downloaded else None
-    if body:
-        return body
-    if _domain_for_archive_ph_check(url) not in _ARCHIVE_PH_FALLBACK_DOMAINS:
-        return None
-    return _fetch_body_via_archive_ph(url)
+    return trafilatura.extract(downloaded) if downloaded else None
 
 
 def _extract_body(entry: Any, url: str, no_fetch: bool) -> str | None:
