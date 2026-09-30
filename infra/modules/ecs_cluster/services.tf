@@ -1163,6 +1163,11 @@ resource "aws_ecs_task_definition" "signal_detection_agent" {
         { name = "POSTGRES_USER",          value = "signal_user" },
         { name = "PGSSLMODE",              value = "require" },
         { name = "NEWS_RETRIEVAL_URL",     value = "http://news-retrieval.${var.env}.ocn.internal:8000" },
+        # 30min, not the code default of 10min: an ai_news run normally takes
+        # 4-7min, but a slow upstream day pushed one to 13.7min on 2026-09-30
+        # and tripped the 10min ceiling, failing that day's signal-herald
+        # digest even though the run itself completed fine minutes later.
+        { name = "PIPELINE_POLL_TIMEOUT_SECS", value = "1800" },
         { name = "RESEARCH_UNIVERSE_URL",  value = "http://research-universe.${var.env}.ocn.internal:8007" },
         { name = "OPENAI_BASE_URL",        value = "https://openrouter.ai/api/v1" },
         { name = "SIGNAL_DETECTION_MODEL",    value = "anthropic/claude-sonnet-4-6" },
