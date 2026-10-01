@@ -709,23 +709,24 @@ def classify_forecast_revision(
             )
 
             company_name = meta.get("company", "This company")
-            # 2 decimals in the sentence (not the 1-decimal precision
-            # metadata.operating_profit_pct_change stores) - explicit user
-            # request for better clarity on how close/far a real figure
-            # sits from a threshold (e.g. 19.97% vs a flat 20% cutoff reads
-            # very differently from a bare "20.0%").
-            pct_rounded = round(abs(pct), 2) if pct is not None else None
-            pct_abs_str = f"{pct_rounded:.2f}%" if pct_rounded is not None else "an unquantifiable amount"
-            # "A 8.53% raise" reads wrong when spoken ("eight point five
-            # three" - vowel sound) - "an" is correct whenever the number's
-            # first digit is 8, or it's an 11-18 range (spoken "eleven"...
-            # "eighteen", also vowel-first). Checked against pct_rounded
-            # (the same value the sentence actually displays), not the raw
-            # pct - confirmed live a raw value can round differently at
-            # display precision than a naive raw-value comparison would
-            # suggest (e.g. 10.996 rounds to "11.00%" for display).
+            # One decimal, matching metadata.operating_profit_pct_change's
+            # own stored precision and the summary's rendering of it, with
+            # a trailing zero dropped (53.3% stays 53.3%, 40.0% reads
+            # 40%). Two decimals cost reading speed for digits the filing
+            # itself does not emphasise; rounding to whole points loses a
+            # real figure the reader may check against the filing.
+            pct_rounded = round(abs(pct), 1) if pct is not None else None
+            pct_abs_str = (
+                f"{pct_rounded:.1f}".rstrip("0").rstrip(".") + "%"
+                if pct_rounded is not None else "an unquantifiable amount"
+            )
+            # "A 8% raise" reads wrong when spoken ("eight" - vowel sound)
+            # - "an" is correct whenever the number's first digit is 8, or
+            # it's an 11-18 range (spoken "eleven"..."eighteen", also
+            # vowel-first). Checked against pct_rounded, the same value
+            # the sentence actually displays.
             pct_article = "An" if pct_rounded is not None and (
-                pct_abs_str[0] == "8" or 11 <= pct_rounded < 19
+                str(pct_rounded)[0] == "8" or 11 <= pct_rounded <= 18
             ) else "A"
 
             if _is_currency_or_accounting_only(meta.get("reason")):
@@ -765,6 +766,24 @@ def classify_forecast_revision(
                 and habit["typical_size_pct"] is not None
                 and pct is not None
                 and abs(pct) > habit["typical_size_pct"] * _TYPICAL_SIZE_MULTIPLE_THRESHOLD
+                # A multiple of the median and the median plus a multiple
+                # of the MAD answer the same question - "is this move
+                # unusual for this company" - and a move should clear
+                # both before it is reported as unusual. Which of the two
+                # is the higher bar depends on the company's own spread:
+                # for a tight distribution 2x the median is the stricter
+                # test, while for a wide one (Fujikura's median 19.2% with
+                # a 17.5 MAD) median+2MAD is stricter, and a move can pass
+                # 2x the median while still sitting inside the company's
+                # ordinary range. Requiring both makes this rule and the
+                # absolute-floor rule below agree on what "unusual" means
+                # rather than each company's spread deciding which
+                # definition applies.
+                and (
+                    habit["typical_size_mad_pct"] is None
+                    or abs(pct) > habit["typical_size_pct"]
+                    + _ABSOLUTE_SIGNAL_MAD_MULTIPLE * habit["typical_size_mad_pct"]
+                )
             ):
                 signal = "SIGNAL"
                 reason_code = f"exceeds_2x_typical_size_{habit['typical_size_pct']}pct"
@@ -813,7 +832,8 @@ def classify_forecast_revision(
                 signal = "SIGNAL"
                 reason_code = f"absolute_change_{round(pct, 1)}pct_gte_{_ABSOLUTE_SIGNAL_THRESHOLD_PCT}"
                 reason_text = (
-                    f"{company_name}'s operating profit forecast changed by {pct_abs_str} - "
+                    f"{company_name} {'raised' if direction == 'raise' else 'cut'} its "
+                    f"operating profit forecast by {pct_abs_str} - "
                     f"at least {_ABSOLUTE_SIGNAL_THRESHOLD_PCT:.0f}%, which counts as a "
                     f"signal regardless of this company's own habit."
                 )
@@ -1961,6 +1981,30 @@ def classify_missing_revision(
 # real and worth surfacing, but it is not itself a confirmed event the
 # way an actual filed revision is.
 _STALE_SIGNAL_RATIO = 2.0  # elapsed / typical_gap_days at or above this: weak_signal
+# WATCHING reports a company diverging from its own pattern, which
+# presumes the pattern still describes the company. Past some age the
+# habit's own evidence is too old to carry that claim, and the honest
+# reading becomes "this baseline is out of date" rather than "this
+# company is overdue".
+#
+# The test is the age of the habit's most recent observation, not how
+# many multiples of the cadence have elapsed. A ratio cannot separate the
+# two real situations that produce a large value, because both a densely
+# observed company that is genuinely late and a company whose cadence was
+# measured from a brief cluster years ago present as the same number -
+# confirmed against the stored universe, where Tokyo Electron (14
+# revisions, most recent 2024-08) and Screen Holdings (3 revisions, most
+# recent 2021-10) sit at a comparable 4.3x and 4.9x while meaning
+# entirely different things.
+#
+# 3 years is the boundary because _MIN_FISCAL_YEAR_SPAN_FOR_TRUSTED_HABIT
+# already requires a habit to span at least 3 fiscal years before it is
+# trusted at all. A company silent for longer than the minimum span used
+# to establish a pattern has now been silent longer than the evidence the
+# pattern rests on, so the cadence no longer describes current behaviour.
+# Using the same span for both keeps one definition of how much history
+# makes a pattern real, rather than introducing a second, unrelated one.
+_HABIT_EVIDENCE_STALE_DAYS = 365 * _MIN_FISCAL_YEAR_SPAN_FOR_TRUSTED_HABIT
 # Below _STALE_SIGNAL_RATIO's own threshold, normal per-company jitter
 # (a company whose typical cadence is "twice a year" does not revise
 # every exactly-182-days) must not itself be misread as drift - confirmed
@@ -2072,6 +2116,21 @@ def classify_stale_revision_pattern(
         elapsed_days = (as_of - last_revision).total_seconds() / 86400.0
         ratio = elapsed_days / typical_gap_days
         if ratio < _STALE_SIGNAL_RATIO:
+            continue
+        if elapsed_days >= _HABIT_EVIDENCE_STALE_DAYS:
+            # The habit's own most recent observation is older than the
+            # span required to establish a habit in the first place (see
+            # _HABIT_EVIDENCE_STALE_DAYS), so the stored cadence no longer
+            # describes how this company behaves and there is nothing
+            # meaningful to report it as diverging from. The company
+            # returns to WATCHING once a fresh revision re-establishes a
+            # real cadence.
+            logger.info(
+                "[JAPAN_WATCHING] %s (%s) habit evidence stale - last revision %d days"
+                " ago, older than the %d-day habit-establishing span; dropped from"
+                " WATCHING",
+                ticker["company"], code, round(elapsed_days), _HABIT_EVIDENCE_STALE_DAYS,
+            )
             continue
 
         company_name = ticker["company"]
@@ -2259,20 +2318,61 @@ def classify_industry_equipment_sales(articles: list[dict[str, Any]]) -> list[di
 
         spreads_away = (yoy_pct - average) / spread
 
-        if yoy_pct < 0 or abs(spreads_away) > _INDUSTRY_SIGNAL_SPREADS:
+        # A contracting industry is a sustained condition, not a single
+        # reading below zero. Requiring an adjacent negative month is
+        # what separates a real downturn from a lone soft month or a
+        # figure that is negative only by rounding - the stored series
+        # carries both kinds, with a genuine multi-month contraction
+        # (-16.7%, -10.5% consecutively) alongside isolated readings of
+        # -0.1% and -4.5% that a bare "below zero" test ranks equally.
+        # Adjacency is the test rather than a magnitude floor because the
+        # real series offers no natural break to put a floor at, and
+        # persistence is what the word "contraction" actually claims.
+        prev_yoy = (
+            seaj_articles[idx - 1]["metadata"].get("yoy_pct") if idx >= 1 else None
+        )
+        next_yoy = (
+            seaj_articles[idx + 1]["metadata"].get("yoy_pct")
+            if idx + 1 < len(seaj_articles) else None
+        )
+        sustained_contraction = yoy_pct < 0 and (
+            (prev_yoy is not None and prev_yoy < 0)
+            or (next_yoy is not None and next_yoy < 0)
+        )
+
+        if sustained_contraction or abs(spreads_away) > _INDUSTRY_SIGNAL_SPREADS:
             signal = "SIGNAL"
-            reason_code = "negative_yoy" if yoy_pct < 0 else f"spreads_away_{round(spreads_away, 2)}"
-            if yoy_pct < 0:
+            reason_code = (
+                "sustained_negative_yoy" if sustained_contraction
+                else f"spreads_away_{round(spreads_away, 2)}"
+            )
+            if sustained_contraction:
                 reason_text = (
                     f"{period}'s Japan semiconductor equipment billings fell {abs(yoy_pct):.1f}% "
-                    f"year-on-year - a negative reading, which counts as a signal on its own "
-                    f"regardless of how far it sits from the recent average."
+                    f"year-on-year, alongside another month of contraction - a sustained "
+                    f"decline, which counts as a signal regardless of how far it sits from "
+                    f"the recent average."
                 )
             else:
+                # A reading far below a high trailing average is a sharp
+                # deceleration in growth, which is a real change in
+                # trajectory, but it is not a decline while the reading
+                # itself is still positive - said plainly so the line
+                # cannot be read as the industry shrinking.
+                if spreads_away > 0:
+                    movement = "an acceleration"
+                    qualifier = ""
+                elif yoy_pct > 0:
+                    movement = "a sharp deceleration"
+                    qualifier = ", with growth still positive"
+                else:
+                    movement = "a sharp drop"
+                    qualifier = ""
                 reason_text = (
                     f"{period}'s Japan semiconductor equipment billings ({yoy_pct:.1f}% YoY) sit "
                     f"{abs(round(spreads_away, 1))} spreads {'above' if spreads_away > 0 else 'below'} "
-                    f"the trailing 12-month average ({average:.1f}%) - more than the usual 2-spread range."
+                    f"the trailing 12-month average ({average:.1f}%) - {movement} beyond the "
+                    f"usual 2-spread range{qualifier}."
                 )
         elif abs(spreads_away) > _INDUSTRY_WEAK_SPREADS:
             signal = "WEAK"
@@ -2321,6 +2421,38 @@ def classify_industry_equipment_sales(articles: list[dict[str, Any]]) -> list[di
 # rule block covers both signal types).
 _CAPACITY_INVESTMENT_PCT_OF_ASSETS_THRESHOLD = 10.0  # "10 percent or more of total assets"
 _OWNERSHIP_HOLDING_THRESHOLD_PCT = 5.0  # "a holder crosses five percent"
+# What separates a real 5%-crossing event from routine filing traffic is
+# the report TYPE, not the size of the stake. Two labels in EDINET's own
+# docDescription carry that distinction, and both were confirmed against
+# the real filings stored for this universe:
+#
+#   大量保有報告書 - an INITIAL report: a holder newly crossing 5%, which
+#       is the event the spec's own rule describes.
+#   変更報告書     - a CHANGE report: an existing holder adjusting a
+#       position already disclosed. Filed on any 1%+ move, so it
+#       describes a position that crossed 5% at some earlier point,
+#       possibly years earlier.
+#
+#   特例対象株券等 - the relaxed periodic-filing regime available to
+#       passive institutional holders (asset managers, brokers, trust
+#       banks). These filings report custody and index positions on a
+#       schedule rather than a control decision taken on a date.
+#
+# Stake size does not substitute for either: the largest real holding in
+# the stored set is a legacy position reported on a change report, while
+# a genuine new crossing sits near the statutory floor. A threshold on
+# the percentage promotes the former and demotes the latter.
+#
+# Of the two, the FILING REGIME is the stronger signal, because it says
+# something about the holder's intent that neither the report type nor
+# the stake does. The passive regime is only available to a holder that
+# has declared it is not seeking control - so an active-basis filing is
+# an ordinary company or fund taking a deliberate position, while a
+# passive one is an index or custody position moving with its mandate.
+# Report type then separates a new position from a change to an existing
+# one within each of those.
+_OWNERSHIP_INITIAL_REPORT_MARKER = "大量保有報告書"
+_OWNERSHIP_PASSIVE_REGIME_MARKER = "特例対象株券等"
 _BUYBACK_PCT_OF_SHARES_THRESHOLD = 5.0  # "a buyback of five percent or more of shares outstanding"
 _CO_OCCURRENCE_WINDOW_DAYS = 14  # "another signal from the same company landed within fourteen days"
 
@@ -2587,20 +2719,60 @@ def classify_capacity_and_ownership(
         # source_label fix documents).
         company = meta.get("filer_name") or meta.get("code")
         issuer_code = meta.get("code")
-        holding_pct = (meta.get("holding_ratio") or 0.0) * 100.0
+        holding_ratio = meta.get("holding_ratio")
+        holding_pct = holding_ratio * 100.0 if holding_ratio is not None else None
 
-        # See docstring: docTypeCode 350 only exists once a holder has
-        # already crossed 5%, so every real row is a genuine crossing
-        # event by legal definition, not something to threshold again.
-        signal = "SIGNAL"
-        reason_code = "holder_crosses_five_pct"
-        reason_text = (
-            f"{company} now holds {holding_pct:.2f}% of the company (code {issuer_code}) - "
-            f"a large-shareholding filing, which by law is only made once a holder's stake "
-            f"crosses 5%."
-        )
+        # docTypeCode 350 only exists once a holder has already crossed
+        # 5%, so the filing's existence is a genuine crossing event. That
+        # establishes the event is real; it does not make every such
+        # event equally material. A holder sitting just over the
+        # threshold and one holding a fifth of the company file the same
+        # document, so the stake itself is what separates them.
+        # doc_description is EDINET's own report-type label. Fall back to
+        # the title, which the fetcher builds ending in that same label,
+        # for rows stored before it was kept as its own field.
+        doc_description = meta.get("doc_description") or a.get("title") or ""
+        is_initial = _OWNERSHIP_INITIAL_REPORT_MARKER in doc_description
+        is_passive = _OWNERSHIP_PASSIVE_REGIME_MARKER in doc_description
+        stake = f"{holding_pct:.1f}%" if holding_pct is not None else "an unstated stake"
 
-        meta["holding_pct"] = round(holding_pct, 2)
+        if is_passive:
+            # Declared non-controlling. An index or custody position
+            # moving with its mandate, whichever report type carries it.
+            signal = "WEAK"
+            reason_code = (
+                "holder_crosses_five_pct_passive" if is_initial
+                else "holder_changes_existing_stake_passive"
+            )
+            if is_initial:
+                opening = (
+                    f"{company} has newly crossed 5% in the company (code {issuer_code}), "
+                    f"now holding {stake}"
+                )
+            else:
+                opening = f"{company} holds {stake} of the company (code {issuer_code})"
+            reason_text = (
+                f"{opening} - filed under the passive-investor regime, which is only "
+                f"available to a holder not seeking control."
+            )
+        elif is_initial:
+            signal = "SIGNAL"
+            reason_code = "holder_crosses_five_pct"
+            reason_text = (
+                f"{company} has newly crossed 5% in the company (code {issuer_code}), "
+                f"now holding {stake} - an initial large-shareholding report filed on an "
+                f"active basis, not under the passive-investor regime."
+            )
+        else:
+            signal = "SIGNAL"
+            reason_code = "active_holder_changes_stake"
+            reason_text = (
+                f"{company} has changed its stake in the company (code {issuer_code}) to "
+                f"{stake} - a change report filed on an active basis, not under the "
+                f"passive-investor regime."
+            )
+
+        meta["holding_pct"] = round(holding_pct, 2) if holding_pct is not None else None
         meta["signal_reason_code"] = reason_code
         # "company" here is the TARGET company being reported on (issuer_code),
         # not the filer (see "company" local var above, which is

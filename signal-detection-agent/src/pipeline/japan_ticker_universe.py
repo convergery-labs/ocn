@@ -31,6 +31,25 @@ investor-relations disclosure, or an independent filing) as of this
 addition - entered from a user-supplied reference table with no
 citation trail. Treat as provisional pending a real source check before
 relying on it for anything beyond descriptive UI text.
+
+A read-through link carries a relationship, and the vocabulary is the
+consuming frontend's, not this module's:
+
+    Customer | Supplier | Competitor | Shared demand
+
+These are the only four values the Japan Signals tab renders, so a link
+described any other way (peer, gated, substitute) has no display and is
+silently dropped. "Shared demand" is the value for two companies that
+move together because they sell into the same end market without
+trading with each other - the common case for an equipment maker and
+its listed peers, which would otherwise be mislabelled "Competitor".
+
+Each link also needs a US-listed ticker to be actionable: the names
+below are the companies a signal reads through to, but several (Samsung
+Electronics, SK Hynix, SMIC, Denso, MediaTek) are not US-listed and
+cannot be traded on. Resolving these to tickers, with a relationship
+from the list above, is the mapping work this field is a placeholder
+for.
 """
 from typing import Any
 
