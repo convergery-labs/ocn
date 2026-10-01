@@ -100,13 +100,13 @@ MACRO_SIGNAL_MODEL: str = os.environ.get("MACRO_SIGNAL_MODEL") or SEC_FILING_MOD
 
 # Japan Signals' every real LLM call (translate_japan_articles' field
 # translation, classify_press's J7 relevance judgment, and
-# generate_japan_signal_summary's COMPANY LEVEL synthesis) - same
+# the Japan summary's COMPANY LEVEL synthesis, since removed) - same
 # reasoning as MACRO_SIGNAL_MODEL just above: CONFIRMED LIVE 2026-09-30
 # OPENAI_MODEL_V2 (gpt-4o-mini) reliably fabricated numbers when asked to
 # restate already-final classified data (WATCHING day-counts, INDUSTRY
 # LEVEL's month/reading/spread) - a different wrong number on repeat
 # calls at temperature 0, even after the prompt explicitly demanded
-# verbatim copying (see japan_signal_summary.py's own docstrings, where
+# verbatim copying (the Japan summary's own docstrings recorded this, where
 # INDUSTRY LEVEL/WATCHING were subsequently moved out of the LLM path
 # entirely). Falls back to SEC_FILING_MODEL - this codebase's other
 # proven-reliable structured-extraction tier - rather than the cheaper V2

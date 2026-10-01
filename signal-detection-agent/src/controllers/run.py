@@ -72,8 +72,7 @@ from pipeline.japan_signal_classifier import (
     compute_all_japan_habits,
     compute_all_japan_progress_habits,
 )
-from pipeline.japan_signal_summary import generate_japan_signal_summary
-from pipeline.japan_ticker_universe import JAPAN_TICKER_UNIVERSE
+from pipeline.japan_companies import JAPAN_TICKER_UNIVERSE
 from pipeline.korea_signal_classifier import classify_korea_signal_batch
 from pipeline.korea_signal_summary import generate_korea_signal_summary
 from pipeline.korea_ticker_universe import KOREA_TICKER_UNIVERSE
@@ -1137,22 +1136,24 @@ async def refresh_japan_habits(from_date: str, to_date: str, computed_from_years
     # (japan_company_habits/japan_progress_habits/japan_company_
     # reference), but a stale-revision reading is a CLASSIFICATION result
     # (source_type=japan_market_signal, like every J1-J7 row), not a
-    # reference cache - so it goes through the same insert_japan_signal_
-    # classification/get_existing_japan_signal_source_ids path
-    # run_japan_signal_classification itself uses, deduped by the same
-    # source_id-per-day convention (see classify_stale_revision_pattern's
-    # own source_id, which embeds as_of's date) - a fresh monthly refresh
-    # naturally produces a fresh row each time this runs, without ever
-    # re-inserting the same day's reading twice.
+    # reference cache - so it goes through the same
+    # insert_japan_signal_classification path
+    # run_japan_signal_classification itself uses. Unlike that path, it
+    # keys one row per COMPANY (not per company per day) and refreshes
+    # it in place, so the Watching tab keeps showing an overdue company
+    # between refreshes instead of emptying at midnight - see
+    # classify_stale_revision_pattern's own source_id comment.
     watching_job_id = create_job(domain=config.JAPAN_SIGNAL_DOMAIN)
     update_job_status(watching_job_id, "running")
     watching_results = classify_stale_revision_pattern(all_articles, stored_habits=get_all_habits())
-    watching_source_ids = [r["result"]["source_id"] for r in watching_results]
-    already_done = get_existing_japan_signal_source_ids(watching_source_ids)
+    # No already_done skip here, unlike every other Japan category. A
+    # WATCHING source_id is now the company alone, so the row for a
+    # company that is still overdue ALWAYS already exists - skipping it
+    # would leave days_since_last_revision frozen at its first reading
+    # forever. insert_japan_signal_classification upserts this one
+    # category precisely so re-running refreshes the figure in place.
     watching_inserted = 0
     for r in watching_results:
-        if r["result"]["source_id"] in already_done:
-            continue
         try:
             insert_japan_signal_classification(watching_job_id, r["article"], r["result"])
             watching_inserted += 1
@@ -1270,44 +1271,6 @@ def generate_korea_signal_summary_for_date(date: str) -> str:
         date, len(signal_rows), len(weak_rows),
     )
     return generate_korea_signal_summary(ordered_rows)
-
-
-def generate_japan_signal_summary_for_date(date: str) -> str:
-    """Spec Section 10.3: read today's (or ``date``'s) already-classified
-    japan_market_signal rows from this service's own DB and generate the
-    twice-daily trader summary text - exact same shape as
-    generate_korea_signal_summary_for_date above (see that function's own
-    docstring for why this is synchronous, and why no numeric rank is
-    fabricated - both reasons apply identically here).
-
-    ``date``: YYYY-MM-DD (UTC) - passed straight to list_all_results's
-    published_from/published_to as a single-day window. J3
-    (jp_missing_revision) and WATCHING (jp_watching) both describe an
-    absence with no real backing article, but both pass a real published
-    timestamp (as_of, the moment the absence/staleness was detected - see
-    classify_missing_revision's and classify_stale_revision_pattern's own
-    result-shape comments) rather than a NULL, specifically so a row IS
-    found by this exact date-windowed query - fixed 2026-09-30 for J3 to
-    close the same real, previously-documented gap WATCHING was already
-    built to avoid.
-    """
-    result = list_all_results(
-        source_type=config.JAPAN_SIGNAL_DOMAIN,
-        published_from=date,
-        published_to=date,
-        limit=200,
-    )
-    rows = result["results"]
-
-    signal_rows = [r for r in rows if r.get("signal_detection") == "signal"]
-    weak_rows = [r for r in rows if r.get("signal_detection") == "weak_signal"]
-    ordered_rows = signal_rows + weak_rows
-
-    logger.info(
-        "[JAPAN_SIGNAL_SUMMARY] date=%s signal=%d weak_signal=%d",
-        date, len(signal_rows), len(weak_rows),
-    )
-    return generate_japan_signal_summary(ordered_rows)
 
 
 async def run_geopolitical_signal_stage_a(job_id: int, from_date: str, to_date: str) -> None:

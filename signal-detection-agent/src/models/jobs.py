@@ -215,6 +215,11 @@ def insert_taiwan_signal_classification(
                 result.get("reason"),
                 article.get("published"),
                 json.dumps(result.get("metadata") or {}, ensure_ascii=False),
+                # Customers this event actually names - see
+                # _attach_mentioned_customers. Empty for most rows, and
+                # that is the honest answer rather than a gap.
+                json.dumps(result.get("entities") or [], ensure_ascii=False),
+                [e["name"].lower() for e in (result.get("entities") or [])],
             ),
         )
 
@@ -305,15 +310,56 @@ def insert_japan_signal_classification(
     already-correct behavior.
     """
     article = article or {}
+    # WATCHING alone is refreshed in place. Its source_id is now the
+    # company, not the company-and-date, so the row survives the date
+    # change instead of the Watching tab emptying until the next
+    # monthly refresh (see classify_stale_revision_pattern's own
+    # source_id comment). A stable id with DO NOTHING would freeze
+    # days_since_last_revision at whatever it was on first insert - a
+    # card reading "450 days overdue" forever, wrong and never
+    # self-correcting, which is worse than an empty tab because it is
+    # not visibly wrong. So this one category updates.
+    #
+    # Every other Japan row keeps DO NOTHING: those key on a filing's
+    # own immutable doc id, so a conflict means the same filing seen
+    # twice and there is nothing to update - and run_japan_signal_
+    # classification's own already_done check exists to skip exactly
+    # that work rather than redo it.
+    # Same shape the ai_news and sec_filing inserts above build: the
+    # lowercased entity names, so a caller can filter rows by customer
+    # without parsing entities_json back out.
+    entity_names_normalized = [
+        e["name"].lower() for e in (result.get("entities") or []) if e.get("name")
+    ]
+
+    is_watching = (result.get("metadata") or {}).get("source_category") == "jp_watching"
+    on_conflict = (
+        """
+        ON CONFLICT (source_type, source_id)
+            WHERE source_type = 'japan_market_signal'
+        DO UPDATE SET
+            job_id           = EXCLUDED.job_id,
+            title            = EXCLUDED.title,
+            signal_detection = EXCLUDED.signal_detection,
+            signal_score     = EXCLUDED.signal_score,
+            signal_reason    = EXCLUDED.signal_reason,
+            published        = EXCLUDED.published,
+            metadata         = EXCLUDED.metadata,
+            entities_json    = EXCLUDED.entities_json,
+            entity_names_normalized = EXCLUDED.entity_names_normalized
+        """
+        if is_watching
+        else "ON CONFLICT DO NOTHING"
+    )
     with get_db() as conn:
         conn.execute(
-            """
+            f"""
             INSERT INTO agent_classifications (
                 job_id, source_type, source_id, url, title,
                 signal_detection, signal_score, signal_reason,
-                published, metadata
-            ) VALUES (%s, 'japan_market_signal', %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT DO NOTHING
+                published, metadata, entities_json, entity_names_normalized
+            ) VALUES (%s, 'japan_market_signal', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            {on_conflict}
             """,
             (
                 job_id,
@@ -325,6 +371,8 @@ def insert_japan_signal_classification(
                 result.get("reason"),
                 article.get("published"),
                 json.dumps(result.get("metadata") or {}, ensure_ascii=False),
+                json.dumps(result.get("entities") or [], ensure_ascii=False),
+                entity_names_normalized,
             ),
         )
 
@@ -1282,7 +1330,7 @@ def list_all_results(
     equivalent of ticker above, NOT the same field: every J1-J7/WATCHING
     Japan classifier stores a company's TSE 4-digit code (or Kioxia's own
     "285A" - always TEXT, never cast to int) under metadata.code, never
-    metadata.ticker (see japan_ticker_universe.py's own JAPAN_TICKER_
+    metadata.ticker (see japan_companies.py's own JAPAN_TICKER_
     UNIVERSE). Without this, a caller wanting one company's own Japan
     Signals history (e.g. Advantest, 6857) had no way to filter
     server-side and had to page through every japan_market_signal row

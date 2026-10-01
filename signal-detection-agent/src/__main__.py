@@ -322,39 +322,6 @@ def summarize_korea_signals(date: str | None) -> None:
     logger.info("[KOREA_SIGNAL_SUMMARY] date=%s\n%s", date, summary)
 
 
-@cli.command("summarize-japan-signals")
-@click.option(
-    "--date",
-    default=None,
-    help="Date (YYYY-MM-DD, UTC) of classified japan_market_signal rows to "
-    "summarize. Defaults to today (UTC).",
-)
-def summarize_japan_signals(date: str | None) -> None:
-    """One-shot: read today's already-classified japan_market_signal rows
-    from this service's own DB and generate the spec Section 10.3 trader
-    summary text. No news-retrieval fetch, no classification - reads only
-    (see generate_japan_signal_summary_for_date's own docstring, same
-    shape as summarize-korea-signals above). Runs to completion and
-    exits (not a server).
-
-    Output goes to the log only (INFO level) - there is no email/delivery
-    mechanism wired up yet (see japan_signal_summary.py's own module
-    docstring on scope). GET /japan-signals/summary (routes/jobs.py) is
-    the on-demand equivalent of this same call.
-    """
-    from datetime import datetime, timezone
-
-    from controllers.run import generate_japan_signal_summary_for_date
-
-    logger.info("Initialising database...")
-    init_db()
-    seed()
-
-    date = date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    summary = generate_japan_signal_summary_for_date(date)
-    logger.info("[JAPAN_SIGNAL_SUMMARY] date=%s\n%s", date, summary)
-
-
 @cli.command("classify-japan-signals")
 @click.option(
     "--from-date",

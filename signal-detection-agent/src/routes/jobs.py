@@ -9,10 +9,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 import config
 from adapters.news_client import fetch_macro_series_total
 from auth import require_auth
-from controllers.run import generate_japan_signal_summary_for_date, generate_korea_signal_summary_for_date
+from controllers.run import generate_korea_signal_summary_for_date
 from models.jobs import get_job, get_results_summary, list_all_results, list_jobs, list_results, list_taiwan_periods
+from pipeline.japan_companies import company_for, valuation_for
 from pipeline.japan_signal_view import to_jp_signal
-from pipeline.japan_ticker_universe import JAPAN_TICKER_UNIVERSE
+from pipeline.japan_companies import JAPAN_TICKER_UNIVERSE
 
 router = APIRouter()
 
@@ -69,44 +70,57 @@ async def get_korea_signal_summary(
     return {"date": date, "summary": summary}
 
 
-@router.get("/japan-signals/summary")
-async def get_japan_signal_summary(
-    date: str | None = Query(default=None, description="YYYY-MM-DD (UTC). Defaults to today (UTC)."),
-    caller: dict[str, Any] = Depends(require_auth),
-) -> dict[str, Any]:
-    """Spec Section 10.3's twice-daily trader summary, generated on demand
-    for one day's already-classified japan_market_signal rows - exact
-    same shape as GET /korea-signals/summary above (reads
-    agent_classifications directly, no news-retrieval fetch, no
-    re-classification; see generate_japan_signal_summary_for_date's own
-    docstring on how J3/jp_missing_revision and WATCHING/jp_watching rows,
-    despite describing an absence with no real backing article, are still
-    found by this date-windowed read).
-    """
-    date = date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    summary = generate_japan_signal_summary_for_date(date)
-    return {"date": date, "summary": summary}
-
-
 @router.get("/japan-signals/universe")
 async def get_japan_signal_universe(
     caller: dict[str, Any] = Depends(require_auth),
 ) -> dict[str, Any]:
-    """Return the static 20-company japan_market_signal tracked universe
-    (code, company, native_name, fiscal_year_end, customers) - reference
-    data, not classification results, so this reads directly from
-    JAPAN_TICKER_UNIVERSE in memory (same list japan_signal_classifier.py
-    itself uses), not agent_classifications.
+    """Return the static 19-company japan_market_signal tracked universe
+    - reference data, not classification results, so this reads from
+    memory rather than agent_classifications.
 
     Exists so a frontend can fetch this once and join it client-side by
     metadata.code against GET /results rows, rather than every
-    japan_market_signal classification row repeating the same 20 real
-    company facts (in particular "customers", added 2026-09-30 - see
-    JAPAN_TICKER_UNIVERSE's own docstring: read-through major-customer
-    names per company, for descriptive display only, UNVERIFIED against
-    a primary source as of this addition).
+    japan_market_signal classification row repeating the same company
+    facts.
+
+    Each company carries its market weight (TSE Prime share, Japan
+    rank), its sales inside Japan, and its customers with the share of
+    sales the company itself discloses. Those replace the bare customer
+    name list this endpoint used to return: the old list had no
+    citation trail, while every percentage here is a filed fact from an
+    annual securities report, carrying the period it was filed for and
+    the confidence in its source. A customer with no percentage is one
+    the company does not disclose at 10% or above, which is itself
+    information rather than a gap.
+
+    Valuation figures are a dated snapshot, not a live feed - `asOf`
+    and `isStale` travel with them so a consumer cannot present a
+    months-old market cap as current.
     """
-    return {"companies": JAPAN_TICKER_UNIVERSE}
+    companies = []
+    for record in JAPAN_TICKER_UNIVERSE:
+        code = record["code"]
+        # Built field by field rather than spread from the record.
+        # Spreading leaked whatever the table happened to hold - the
+        # market figures went out twice, once snake_case at the top
+        # level and again camelCase inside marketWeight, and internal
+        # fields like fiscal_year_end rode along unasked. Naming each
+        # field keeps the response a decision rather than a side
+        # effect of the storage shape.
+        entry: dict[str, Any] = {
+            "code": code,
+            "company": record["company"],
+            "native_name": record["native_name"],
+            # The market figures carry asOf and isStale with them, so
+            # a consumer cannot show a months-old market cap as
+            # current without having seen the date.
+            "marketWeight": valuation_for(code),
+            "customers": record["customers"],
+        }
+        if record.get("japan_sales_note"):
+            entry["japanSalesNote"] = record["japan_sales_note"]
+        companies.append(entry)
+    return {"companies": companies}
 
 
 @router.get("/japan-signals/results")
