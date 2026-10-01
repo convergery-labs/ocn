@@ -389,6 +389,18 @@ def build_signal_block(row: dict[str, Any]) -> str:
     age = _format_age(_age_hours(row))
     if age:
         footer.append(f"Filed {age}")
+    # Whether an English-reading desk could have seen this yet. Absent
+    # when the check did not run for this company, which is different
+    # from having run and found nothing.
+    coverage = meta.get("english_coverage_found")
+    if coverage is False:
+        footer.append("no English coverage yet")
+    elif coverage:
+        gap = meta.get("english_coverage_hours_after_japanese")
+        footer.append(
+            f"English coverage {gap:.0f}h later" if gap is not None and gap >= 0
+            else "English coverage found"
+        )
     if meta.get("unconfirmed"):
         footer.append("unconfirmed")
     if footer:

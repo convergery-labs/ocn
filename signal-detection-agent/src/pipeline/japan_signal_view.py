@@ -37,6 +37,8 @@ _TYPE_BY_CATEGORY: dict[str, tuple[str, str, str]] = {
     "jp_ownership": ("ownership", "J6", "Large shareholding report (EDINET)"),
     "jp_press": ("press", "J7", "Japan press (Jiji / Newswitch)"),
     "jp_watching": ("missing", "J3", "IR Bank financials"),
+    "jp_disclosure": ("disclosure", "J8", "TDnet disclosure (Kabutan)"),
+    "jp_extraordinary": ("disclosure", "J8", "Extraordinary report (EDINET)"),
 }
 
 _CLASSIFICATION = {
@@ -97,6 +99,8 @@ def _headline(signal_type: str, meta: dict[str, Any]) -> str:
         return "Large shareholding reported"
     if signal_type == "press":
         return "Press reported a checkable fact"
+    if signal_type == "disclosure":
+        return "Filed a corporate disclosure"
     return "Classified event"
 
 
@@ -182,6 +186,8 @@ def _metric(signal_type: str, meta: dict[str, Any]) -> dict[str, Any]:
         return {"value": None, "unit": None, "text": "No update", "label": "expected window passed"}
     if signal_type == "press":
         return {"value": None, "unit": None, "text": "Press", "label": "report"}
+    if signal_type == "disclosure":
+        return {"value": None, "unit": None, "text": "Disclosure", "label": "corporate action"}
     return {"value": None, "unit": None, "text": None, "label": ""}
 
 
@@ -231,6 +237,15 @@ def _caveat(signal_type: str, meta: dict[str, Any]) -> str | None:
     if signal_type == "press":
         if meta.get("unconfirmed"):
             return "Reported by the press, not confirmed by the company."
+    if signal_type == "disclosure":
+        base = ("Judged from the filing's own title - the disclosure's full terms are "
+                "in the document itself.")
+        if meta.get("filed_in_english"):
+            # Reported because it says who the filing is aimed at, not
+            # because it affected the classification - see
+            # classify_corporate_disclosure.
+            return base + " The company also published it in English."
+        return base
     if signal_type == "forecast" and meta.get("habit_is_trusted") is False:
         return ("Too few past revisions to establish this company's usual size, "
                 "so the comparison is against the fixed floor only.")
@@ -248,7 +263,7 @@ def _rule_text(meta: dict[str, Any]) -> str | None:
     return None
 
 
-def _evidence(meta: dict[str, Any], source_id: str | None) -> dict[str, Any]:
+def _evidence(meta: dict[str, Any]) -> dict[str, Any]:
     """Recorded figures, the usual band, and the bar that was applied.
 
     usualRange and threshold are deliberately separate: a revision can
@@ -279,6 +294,22 @@ def _evidence(meta: dict[str, Any], source_id: str | None) -> dict[str, Any]:
     add("Days since last revision", meta.get("days_since_last_revision"))
     add("Usual interval", meta.get("typical_days_between_revisions"))
 
+    # The English-coverage gap: how long a Japanese-language event has
+    # gone before an English-reading desk could have seen it.
+    found = meta.get("english_coverage_found")
+    if found is False:
+        figures.append({"label": "English coverage", "value": "None found yet"})
+    elif found:
+        gap = meta.get("english_coverage_hours_after_japanese")
+        if gap is None:
+            figures.append({"label": "English coverage", "value": "Found"})
+        elif gap >= 0:
+            figures.append({"label": "English coverage",
+                            "value": f"Appeared {gap:.0f}h after the Japanese filing"})
+        else:
+            figures.append({"label": "English coverage",
+                            "value": f"Appeared {abs(gap):.0f}h before the Japanese filing"})
+
     usual_range = None
     threshold = None
     median = meta.get("habit_typical_size_pct")
@@ -293,11 +324,12 @@ def _evidence(meta: dict[str, Any], source_id: str | None) -> dict[str, Any]:
         }
         threshold = round(median + 2 * mad, 1)
 
+    # No sourceId here: it would be the row's own `id` on every row, the
+    # same value under a second name. The evidence panel shows `id`.
     return {
         "figures": figures,
         "usualRange": usual_range,
         "threshold": threshold,
-        "sourceId": source_id,
         "reasonCode": meta.get("signal_reason_code"),
         "notes": [],
         "discrepancy": None,
@@ -325,9 +357,13 @@ def _source_url(meta: dict[str, Any], source_id: str | None) -> str | None:
     if source_id and source_id.startswith(("http://", "https://")):
         return source_id
 
-    if source_id and source_id.startswith("edinet-filing://"):
-        # edinet-filing://{filer_edinet_code}/{doc_id} - the document
-        # itself is served by doc id alone.
+    if source_id and source_id.startswith(
+        ("edinet-filing://", "edinet-buyback://", "edinet-extraordinary://")
+    ):
+        # All three EDINET schemes are {some_edinet_code}/{doc_id}, and
+        # the document is served by doc id alone whichever filing type
+        # it is - verified against real shareholding, buyback and
+        # extraordinary doc ids, each returning a PDF.
         doc_id = meta.get("doc_id") or source_id.rsplit("/", 1)[-1]
         return f"https://disclosure2dl.edinet-fsa.go.jp/searchdocument/pdf/{doc_id}.pdf"
 
@@ -449,5 +485,5 @@ def to_jp_signal(row: dict[str, Any]) -> dict[str, Any]:
         "sourceUrl": _source_url(meta, row.get("source_id")),
         "connections": _connections(meta),
         "nextCheckpoint": _next_checkpoint(meta, signal_type),
-        "evidence": _evidence(meta, row.get("source_id")),
+        "evidence": _evidence(meta),
     }
