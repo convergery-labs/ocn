@@ -1,7 +1,7 @@
 """GET /jobs - job listing and results endpoints."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -160,7 +160,11 @@ async def get_japan_signal_results(
     rows = page.get("results") or []
     dates = sorted(r["published"] for r in rows if r.get("published"))
     return {
-        "asOf": datetime.now(timezone.utc).date().isoformat(),
+        # Tokyo's date, not UTC's. The market this covers runs on it,
+        # and a UTC date reads a day behind for the first nine hours of
+        # every Japanese trading day - exactly when a reader is most
+        # likely to be looking.
+        "asOf": datetime.now(timezone(timedelta(hours=9))).date().isoformat(),
         "window": {
             "start": dates[0] if dates else None,
             "end": dates[-1] if dates else None,

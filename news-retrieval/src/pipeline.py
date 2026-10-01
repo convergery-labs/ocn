@@ -5747,9 +5747,13 @@ def _fetch_monoist_capex(sources: list[dict]) -> list[dict]:
             continue
 
         try:
+            # MONOist timestamps its listing in Japan time with no
+            # offset, the same as EDINET - stamping them UTC without
+            # converting put every article 9 hours early, so a 16:00
+            # JST publication read as 01:00 the next morning in Tokyo.
             pub_date = datetime.strptime(
                 f"{date_match.group(1)} {date_match.group(2)}", "%Y/%m/%d %H:%M",
-            ).replace(tzinfo=timezone.utc)
+            ).replace(tzinfo=_JST).astimezone(timezone.utc)
         except ValueError:
             pub_date = None
 
@@ -5876,8 +5880,14 @@ def _fetch_press_jp_jiji(companies: list[dict[str, str]]) -> list[dict]:
             month_day, hm = match.group("time").split(" ")
             month, day = month_day.split("/")
             hour, minute = hm.split(":")
-            now = datetime.now(timezone.utc)
-            pub_date = datetime(now.year, int(month), int(day), int(hour), int(minute), tzinfo=timezone.utc)
+            # Jiji's listing shows Japan time with no offset, same as
+            # EDINET and MONOist. The year is absent too, so the
+            # current one is assumed - the listing only ever carries
+            # recent items.
+            now = datetime.now(_JST)
+            pub_date = datetime(
+                now.year, int(month), int(day), int(hour), int(minute), tzinfo=_JST,
+            ).astimezone(timezone.utc)
         except (ValueError, IndexError):
             pub_date = None
 

@@ -170,6 +170,11 @@ def _headline(signal_type: str, meta: dict[str, Any]) -> str:
             head = company.split()[0] if company else ""
             if len(head) >= 3 and subject.lower().startswith(head.lower()):
                 subject = subject[len(head):].lstrip(" ,-–—'’s")
+                # Stripping the company off the front can leave a verb
+                # leading the line - capitalise so the headline still
+                # reads as one.
+                if subject and subject[0].islower():
+                    subject = subject[0].upper() + subject[1:]
             return subject or "Press reported a checkable fact"
         return "Press reported a checkable fact"
     if signal_type == "disclosure":
@@ -206,8 +211,10 @@ def _change(signal_type: str, meta: dict[str, Any]) -> str | None:
             return f"up to {shares:,} shares"
         return None
     if signal_type == "ownership":
-        pct = meta.get("holding_pct")
-        return f"{_format_pct(pct)} held" if pct is not None else None
+        # The holding percentage is already the card's big number, so
+        # repeating it here says nothing. Show what the stake is worth
+        # in shares where the filing gives it, otherwise nothing.
+        return None
     if signal_type == "capacity":
         yen = meta.get("capex_investment_jpy")
         if yen is not None:
@@ -396,7 +403,30 @@ def _caveat(signal_type: str, meta: dict[str, Any]) -> str | None:
 
 
 def _rule_text(meta: dict[str, Any]) -> str | None:
-    """Which bar the row cleared, in the units the bar is set in."""
+    """Why this row was classified the way it was.
+
+    Reads the rule that actually fired rather than always describing
+    the size bar: a reversal and a profit-to-loss swing are signals
+    regardless of size, so explaining a size threshold beside them
+    contradicts the badge - a +6.2% move marked High next to "its own
+    bar is 30.9%" reads as a mistake.
+    """
+    code = meta.get("signal_reason_code") or ""
+
+    if code.startswith("reverses_direction"):
+        direction = meta.get("habit_typical_direction")
+        earlier = "cut" if direction == "raise" else "raise"
+        return (f"Reversed an earlier {earlier} within the same fiscal year - "
+                f"a reversal counts whatever its size.")
+    if code.startswith("profit_loss_swing"):
+        return ("Moved between forecasting a profit and a loss - a swing counts "
+                "whatever its size.")
+    if code.startswith("rare_reviser"):
+        return ("This company revises less than once a year, so any revision "
+                "at all is notable.")
+    if code.startswith("currency") or "currency" in code:
+        return "Attributed to currency or accounting only, so not a change in trade."
+
     median = meta.get("habit_typical_size_pct")
     mad = meta.get("habit_typical_size_mad_pct")
     if median is not None and mad is not None:
@@ -439,10 +469,10 @@ def _evidence(meta: dict[str, Any]) -> dict[str, Any]:
 
     # The English-coverage gap: how long a Japanese-language event has
     # gone before an English-reading desk could have seen it.
+    # An absence of coverage is not a recorded figure - the field is
+    # omitted rather than listed on every row that has none.
     found = meta.get("english_coverage_found")
-    if found is False:
-        figures.append({"label": "English coverage", "value": "None found yet"})
-    elif found:
+    if found:
         # Coverage always follows the filing - see
         # _ENGLISH_COVERAGE_MAX_LEAD_HOURS - so there is no "before"
         # case to render.
@@ -578,7 +608,49 @@ def _next_quarter_end(fiscal_year_end: str | None) -> tuple[str, str] | None:
     return end.isoformat(), f"Q{quarter}"
 
 
-def _next_checkpoint(meta: dict[str, Any], signal_type: str) -> dict[str, Any] | None:
+# How old an event can be and still have a checkpoint worth showing.
+# "When you'll know" answers a question about something still open: a
+# forecast cut from 2019 was settled by results published years ago,
+# and pointing at the next quarter instead tells a reader nothing.
+# 180 days spans two reporting cycles, so a recent event is still
+# covered by the results that will test it.
+_CHECKPOINT_MAX_EVENT_AGE_DAYS = 180
+
+
+def _event_is_recent(published: str | None) -> bool:
+    """True when an event is new enough that its outcome is still open."""
+    from datetime import datetime, timezone
+    if not published:
+        return False
+    try:
+        dt = datetime.fromisoformat(str(published).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    age_days = (datetime.now(timezone.utc) - dt).total_seconds() / 86400.0
+    return age_days <= _CHECKPOINT_MAX_EVENT_AGE_DAYS
+
+
+def _next_seaj_release() -> str:
+    """The next SEAJ monthly billings release date.
+
+    SEAJ publishes around the 20th of each month, covering the month
+    before. The day is a pattern rather than a published schedule, so
+    this is the expected date - close enough to tell a reader when to
+    look, and the only cadence information the source gives.
+    """
+    from datetime import date
+    today = date.today()
+    if today.day < 20:
+        return date(today.year, today.month, 20).isoformat()
+    year = today.year + (today.month == 12)
+    month = 1 if today.month == 12 else today.month + 1
+    return date(year, month, 20).isoformat()
+
+
+def _next_checkpoint(meta: dict[str, Any], signal_type: str,
+                     published: str | None = None) -> dict[str, Any] | None:
     """What will next show whether this signal held, and when.
 
     The company's own next results come first: they are the direct test
@@ -590,6 +662,11 @@ def _next_checkpoint(meta: dict[str, Any], signal_type: str) -> dict[str, Any] |
     An industry reading belongs to no company, so its checkpoint is the
     next monthly SEAJ release.
     """
+    # An event whose results are already public has nothing left to
+    # confirm it.
+    if not _event_is_recent(published):
+        return None
+
     if signal_type == "industry":
         # SEAJ publishes monthly, so the next release is the next read
         # of the same series - the only thing that confirms or revises
@@ -597,7 +674,7 @@ def _next_checkpoint(meta: dict[str, Any], signal_type: str) -> dict[str, Any] |
         # publicly, so only the period is named.
         return {
             "event": "Next SEAJ monthly billings release",
-            "date": None,
+            "date": _next_seaj_release(),
             "periodEnd": None,
             "supports": "The next month continuing the same direction",
             "weakens": "The next month reverting to the recent average",
@@ -667,7 +744,10 @@ def to_jp_signal(row: dict[str, Any]) -> dict[str, Any]:
     if reporting_period is None and meta.get("period_type"):
         reporting_period = f"{meta['period_type'].replace('_', ' ').capitalize()}, against full-year target"
 
-    company_reason = meta.get("translated_reason") or meta.get("reason")
+    # An empty string is not a reason - the filing had a 理由 heading
+    # with nothing under it. Send null so the card omits the quote
+    # rather than rendering an empty one.
+    company_reason = (meta.get("translated_reason") or meta.get("reason") or "").strip() or None
 
     return {
         "id": row.get("source_id") or row.get("url"),
@@ -693,6 +773,6 @@ def to_jp_signal(row: dict[str, Any]) -> dict[str, Any]:
         "ruleText": _rule_text(meta),
         "sourceUrl": _source_url(meta, row.get("source_id")),
         "connections": _connections(meta),
-        "nextCheckpoint": _next_checkpoint(meta, signal_type),
+        "nextCheckpoint": _next_checkpoint(meta, signal_type, row.get("published")),
         "evidence": _evidence(meta),
     }
