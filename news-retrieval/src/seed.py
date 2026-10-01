@@ -1929,12 +1929,12 @@ KOREA_GDELT_ENGLISH_SOURCE: dict[str, Any] = {
 # codelist/Edinetcode.zip - see edinet_filing's config below) and checking
 # it directly: Shinko Electric's own entry (EDINET code E01957) now shows
 # "非上場" (unlisted) with a BLANK 証券コード (securities code) field, where
-# every other company in this universe has a populated 5-digit code. Kept
-# in the universe (code "6967" still resolvable to E01957 for any residual
-# EDINET filings, same as the spec's own Section 0 rationale - a company
-# going quiet is itself a signal, not a reason to delete it outright), but
-# any fetcher keyed on a live TICKER (not an EDINET code) should expect
-# this one to never produce a securities-code match going forward.
+# every other company in this universe has a populated 5-digit code.
+# Removed from the universe on that basis: a delisted company files
+# nothing new, so every fetcher keyed on its ticker returns empty and
+# every habit built from its history describes a company that no longer
+# trades. Its past filings were real, but they describe a market the
+# tracked universe no longer covers.
 # short_name: a common abbreviated form real Japanese press articles use
 # INSTEAD OF the full native_name - confirmed as a real, measured gap
 # 2026-09-28 by comparing full-native_name matches against short-form
@@ -1969,7 +1969,6 @@ JAPAN_TICKER_UNIVERSE: list[dict[str, str]] = [
     {"code": "4063", "company": "Shin-Etsu Chemical", "native_name": "信越化学工業", "short_name": "信越化学", "exchange": "TSE", "fiscal_year_end": "03-31", "customers": ["TSMC", "Samsung Electronics", "Micron Technology", "Intel"]},
     {"code": "3436", "company": "SUMCO", "native_name": "SUMCO", "exchange": "TSE", "fiscal_year_end": "12-31", "customers": ["TSMC", "Samsung Electronics", "Kioxia", "Intel", "SK Hynix"]},
     {"code": "4062", "company": "Ibiden", "native_name": "イビデン", "exchange": "TSE", "fiscal_year_end": "03-31", "customers": ["Intel", "Samsung Electronics", "Nvidia", "Apple"]},
-    {"code": "6967", "company": "Shinko Electric", "native_name": "新光電気工業", "short_name": "新光電気", "exchange": "TSE", "fiscal_year_end": "03-31", "customers": ["Intel", "AMD", "Nvidia"]},
     {"code": "7735", "company": "Screen Holdings", "native_name": "SCREENホールディングス", "short_name": "SCREEN", "exchange": "TSE", "fiscal_year_end": "03-31", "customers": ["TSMC", "Intel", "Samsung Electronics"]},
     {"code": "6525", "company": "Kokusai Electric", "native_name": "KOKUSAI ELECTRIC", "exchange": "TSE", "fiscal_year_end": "03-31", "customers": ["Intel", "Samsung Electronics", "SK Hynix", "Micron Technology"]},
     {"code": "4186", "company": "Tokyo Ohka Kogyo", "native_name": "東京応化工業", "short_name": "東京応化", "exchange": "TSE", "fiscal_year_end": "03-31", "customers": ["Intel", "TSMC", "Samsung Electronics"]},

@@ -4806,6 +4806,11 @@ def _fetch_kabutan_buyback(sources: list[dict]) -> list[dict]:
 # (EDINET_API_KEY) - confirmed live 2026-09-27/28 with a real key: the
 # v2 API returns a hard 401 without one, no anonymous access exists at all
 # (unlike IRBANK/Kabutan, which need no key).
+# Japan Standard Time. Japan observes no daylight saving, so a fixed
+# offset is correct year-round - EDINET and TDnet both report
+# submission times in local time with no offset on the string.
+_JST = timezone(timedelta(hours=9))
+
 _EDINET_DOCUMENTS_URL = "https://api.edinet-fsa.go.jp/api/v2/documents.json"
 _EDINET_DOCUMENT_URL_TMPL = "https://api.edinet-fsa.go.jp/api/v2/documents/{doc_id}"
 
@@ -5050,7 +5055,16 @@ def _fetch_one_edinet_date(
 
         doc_id = doc["docID"]
         try:
-            pub_date = datetime.strptime(doc["submitDateTime"], "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
+            # EDINET reports submission times in Japan time with no
+            # offset on the string. Stamping them UTC without
+            # converting moved every filing 9 hours: a 16:50 JST
+            # disclosure read as 16:50Z, which is 01:50 the next
+            # morning in Tokyo - not a time any company files.
+            pub_date = (
+                datetime.strptime(doc["submitDateTime"], "%Y-%m-%d %H:%M")
+                .replace(tzinfo=_JST)
+                .astimezone(timezone.utc)
+            )
         except (KeyError, ValueError):
             pub_date = None
 
@@ -5078,7 +5092,9 @@ def _fetch_one_edinet_date(
                 # appending it here guarantees a distinct title too.
                 "title": f"{doc.get('filerName', 'Unknown filer')} -> {ticker} [{doc_id}]: {doc.get('docDescription', '')}",
                 "url": f"edinet-filing://{join_code}/{doc_id}",
-                "published": doc.get("submitDateTime"),
+                # Real UTC, not EDINET's own Japan-time string - see
+                # pub_date above for why the raw value is 9 hours off.
+                "published": pub_date.isoformat() if pub_date else None,
                 "source": "EDINET",
                 "summary": None,
                 "body": None,
@@ -5111,7 +5127,9 @@ def _fetch_one_edinet_date(
                 # label text) - doc_id folded in for the same reason.
                 "title": f"{ticker} [{doc_id}]: {doc.get('docDescription', '')}",
                 "url": f"edinet-buyback://{join_code}/{doc_id}",
-                "published": doc.get("submitDateTime"),
+                # Real UTC, not EDINET's own Japan-time string - see
+                # pub_date above for why the raw value is 9 hours off.
+                "published": pub_date.isoformat() if pub_date else None,
                 "source": "EDINET",
                 "summary": raw_text,
                 "body": None,
@@ -5130,7 +5148,9 @@ def _fetch_one_edinet_date(
                 # for the same reason.
                 "title": f"{ticker} [{doc_id}]: {doc.get('docDescription', '')}",
                 "url": f"edinet-extraordinary://{join_code}/{doc_id}",
-                "published": doc.get("submitDateTime"),
+                # Real UTC, not EDINET's own Japan-time string - see
+                # pub_date above for why the raw value is 9 hours off.
+                "published": pub_date.isoformat() if pub_date else None,
                 "source": "EDINET",
                 "summary": raw_text,
                 "body": None,

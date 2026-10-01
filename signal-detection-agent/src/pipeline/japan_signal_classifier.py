@@ -871,6 +871,12 @@ def classify_forecast_revision(
             meta["operating_profit_pct_change"] = round(pct, 1) if pct is not None else None
             meta["habit_revisions_per_year"] = habit["revisions_per_year"]
             meta["habit_typical_size_pct"] = habit["typical_size_pct"]
+            # The spread the rule-6 bar is built from. Stored alongside
+            # the median because a consumer showing "unusual for this
+            # company" needs both numbers to draw the range and the bar
+            # - the median alone says where the middle is, not how wide
+            # normal reaches.
+            meta["habit_typical_size_mad_pct"] = habit.get("typical_size_mad_pct")
             meta["habit_typical_direction"] = habit["typical_direction"]
             meta["habit_sample_size"] = habit["sample_size"]
             meta["habit_is_trusted"] = habit["is_trusted"]
@@ -2153,11 +2159,15 @@ def classify_stale_revision_pattern(
             continue
 
         company_name = ticker["company"]
+        # "its own habit is raises about twice a year" reads as the
+        # module's own vocabulary rather than a sentence about the
+        # company. The cadence is the point; the habit phrase just
+        # names how often.
         reason_text = (
             f"{company_name} last filed a forecast revision "
-            f"{round(elapsed_days)} days ago; its own habit is "
-            f"{_format_company_revision_habit(habit)} "
-            f"(typically about {round(typical_gap_days)} days apart)."
+            f"{round(elapsed_days)} days ago, against a usual gap of about "
+            f"{round(typical_gap_days)} days "
+            f"({_format_company_revision_habit(habit)})."
         )
         results.append({
             # Unlike J3 (a real absence with no meaningful date at all), a
@@ -2387,19 +2397,23 @@ def classify_industry_equipment_sales(articles: list[dict[str, Any]]) -> list[di
                 else:
                     movement = "a sharp drop"
                     qualifier = ""
+                # "spreads" is the statistic's own vocabulary, not a
+                # reader's - the sentence says how far from normal this
+                # reading sits, and the figure stays in evidence for
+                # anyone who wants it.
                 reason_text = (
-                    f"{period}'s Japan semiconductor equipment billings ({yoy_pct:.1f}% YoY) sit "
-                    f"{abs(round(spreads_away, 1))} spreads {'above' if spreads_away > 0 else 'below'} "
-                    f"the trailing 12-month average ({average:.1f}%) - {movement} beyond the "
-                    f"usual 2-spread range{qualifier}."
+                    f"{period}'s Japan semiconductor equipment billings ran {yoy_pct:.1f}% "
+                    f"year-on-year against a recent average of {average:.1f}% - "
+                    f"{movement}, well {'above' if spreads_away > 0 else 'below'} this "
+                    f"industry's usual range{qualifier}."
                 )
         elif abs(spreads_away) > _INDUSTRY_WEAK_SPREADS:
             signal = "WEAK"
             reason_code = f"spreads_away_{round(spreads_away, 2)}"
             reason_text = (
-                f"{period}'s Japan semiconductor equipment billings ({yoy_pct:.1f}% YoY) sit "
-                f"{abs(round(spreads_away, 1))} spreads {'above' if spreads_away > 0 else 'below'} "
-                f"the trailing 12-month average ({average:.1f}%) - somewhat outside the usual range."
+                f"{period}'s Japan semiconductor equipment billings ran {yoy_pct:.1f}% "
+                f"year-on-year against a recent average of {average:.1f}% - somewhat "
+                f"{'above' if spreads_away > 0 else 'below'} this industry's usual range."
             )
         else:
             signal = "NOISE"
@@ -3699,6 +3713,36 @@ _ENGLISH_COVERAGE_NON_ENGLISH_WORDS = frozenset({
 # the whole question this check exists to answer.
 _ENGLISH_COVERAGE_MIN_ASCII_RATIO = 0.6
 
+# How long after a Japanese filing an English article can appear and
+# still plausibly be about it.
+#
+# The coverage search runs today and returns today's articles, so
+# matching it against any filing by the same company measures nothing:
+# a 2014 buyback paired with a 2026 article produced "appeared 111299h
+# after", which is 12.7 years and describes two unrelated events that
+# share a ticker. Company identity alone cannot establish that an
+# article covers a filing.
+#
+# A time bound is the honest approximation available: an English desk
+# that picks up a Japanese disclosure does so within days, not years.
+# 7 days is the window because it spans a full reporting cycle - a
+# filing released after Friday's close can be written up the following
+# week - while excluding anything far enough away to be a separate
+# story. Outside it, no claim is made rather than a wrong one.
+_ENGLISH_COVERAGE_MAX_LAG_HOURS = 24 * 7
+
+# Coverage must follow the filing. An article published before a
+# filing cannot be reporting it, and this check has no way to tell
+# otherwise: the coverage search is a generic company query, so an
+# earlier article is about some other event involving the same company
+# - a price move, an analyst note - not an early account of this
+# filing. An earlier version allowed a 24h lead on the grounds that a
+# wire can run ahead of a formal disclosure, which is a real pattern
+# but not one a company-wide search can identify; it only produced
+# "appeared Nh before the filing", which reads as nonsense because it
+# is.
+_ENGLISH_COVERAGE_MAX_LEAD_HOURS = 0
+
 
 def _is_english_coverage_headline(title: str) -> bool:
     """True when a coverage-check hit is genuinely English prose.
@@ -3841,18 +3885,39 @@ def _attach_english_coverage(
         if not code:
             continue
         english_dts = pool.get(code)
-        if not english_dts:
+        japanese_dt = _article_published_dt(r.get("article") or {})
+
+        # Without a date on the Japanese item there is nothing to
+        # measure a lag against, and company identity alone does not
+        # establish that an article covers a filing - so no claim is
+        # made either way.
+        if not english_dts or japanese_dt is None:
+            if english_dts and japanese_dt is None:
+                r["result"]["metadata"] = meta
+                continue
             meta["english_coverage_found"] = False
             r["result"]["metadata"] = meta
             continue
 
-        japanese_dt = _article_published_dt(r.get("article") or {})
-        earliest = min(english_dts)
+        # Only coverage close enough in time to plausibly be about this
+        # filing counts - see _ENGLISH_COVERAGE_MAX_LAG_HOURS.
+        related = [
+            d for d in english_dts
+            if -_ENGLISH_COVERAGE_MAX_LEAD_HOURS
+            <= (d - japanese_dt).total_seconds() / 3600.0
+            <= _ENGLISH_COVERAGE_MAX_LAG_HOURS
+        ]
+        if not related:
+            meta["english_coverage_found"] = False
+            r["result"]["metadata"] = meta
+            continue
+
+        earliest = min(related)
         meta["english_coverage_found"] = True
         meta["english_coverage_published"] = earliest.isoformat()
-        if japanese_dt is not None:
-            delta_hours = (earliest - japanese_dt).total_seconds() / 3600.0
-            meta["english_coverage_hours_after_japanese"] = round(delta_hours, 1)
+        meta["english_coverage_hours_after_japanese"] = round(
+            (earliest - japanese_dt).total_seconds() / 3600.0, 1
+        )
         r["result"]["metadata"] = meta
 
 
