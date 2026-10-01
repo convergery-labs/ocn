@@ -1198,6 +1198,16 @@ _TRANSLATION_FIELDS: dict[str, dict[str, str]] = {
     "jp_press": {
         "title": "translated_title",
     },
+    "jp_disclosure": {
+        # Only reached for a filing published in Japanese alone. Where
+        # the company also filed in English, _pair_bilingual_disclosures
+        # has already set translated_title to the issuer's own wording
+        # and the loop above skips it.
+        "title": "translated_title",
+    },
+    "jp_extraordinary": {
+        "title": "translated_title",
+    },
     "jp_ownership": {
         # title itself is structural/numeric (ticker, doc_id, docDescription
         # label - see classify_japan_signal_batch's own comment on why
@@ -1261,6 +1271,15 @@ def translate_japan_articles(
         if not field_map:
             continue
         for source_path, dest_field in field_map.items():
+            # An already-populated destination is authoritative and is
+            # left alone: a disclosure the company itself published in
+            # English carries that wording here (see
+            # _pair_bilingual_disclosures), and the issuer's own English
+            # is both more accurate than a translation of it and the
+            # version they are accountable for. Re-translating would
+            # spend a model call to replace it with something worse.
+            if (a.get("metadata") or {}).get(dest_field):
+                continue
             if _get_nested(a, source_path):
                 to_translate.append((a, source_path, dest_field))
 
@@ -3356,6 +3375,487 @@ def classify_press(
     return results
 
 
+_JAPAN_DISCLOSURE_SYSTEM_PROMPT = """You classify corporate disclosures filed by Japanese
+semiconductor, equipment, materials and electronics companies as
+HIGH, WEAK or ROUTINE.
+
+HIGH means the filing changes what the company owns, controls or
+is committing capital to:
+- an acquisition, merger, spin-off, divestiture or joint venture
+- an investment in, or sale of, a stake in another company
+- a plant, site or business being opened, closed or transferred
+- a capital raise, bond issue or change to the share structure
+- a change of control, or a tender offer
+
+WEAK means a real decision that does not change the above:
+- a change of representative director or senior management
+- a dividend policy change
+- an organisational or reporting-structure change
+- a disclosure whose substance you cannot determine
+
+ROUTINE means administrative filings that recur as a matter of
+course:
+- stock options, restricted stock, or treasury shares issued for
+  employee or director compensation
+- articles of incorporation, internal regulations, or similar
+  filings
+- a notice of a scheduled meeting, or its results
+- a correction or re-filing of an earlier document
+
+Judge the filing itself, not whether the company is important.
+A compensation filing from a large company is still ROUTINE.
+If unsure, answer WEAK.
+
+Answer with one word and nothing else:
+HIGH
+WEAK
+ROUTINE"""
+
+_JAPAN_DISCLOSURE_MAP = {"HIGH": "SIGNAL", "WEAK": "WEAK", "ROUTINE": "NOISE"}
+
+# Disclosure categories a J8 result can come from. jp_extraordinary is
+# EDINET's 臨時報告書 (extraordinary report), which a company files for
+# the same class of event Kabutan carries as a disclosure - the two are
+# often the same event seen through two sources.
+_JAPAN_DISCLOSURE_CATEGORIES = ("jp_disclosure", "jp_extraordinary")
+
+
+def _is_english_disclosure(title: str) -> bool:
+    """True when a disclosure's title is the company's own English
+    filing rather than its Japanese one.
+
+    Japanese issuers routinely file the same disclosure twice, once in
+    each language, within the same minute. Measured on the stored set:
+    the ASCII share of an English title runs well above half, while a
+    Japanese title's is near zero once the "{company} ({code})
+    [{timestamp}]: " prefix the fetcher adds is discounted. Half is the
+    boundary because no real title sits near it - they cluster at the
+    two ends.
+    """
+    body = title.split(": ", 1)[-1] if ": " in title else title
+    if not body:
+        return False
+    ascii_letters = sum(1 for ch in body if ch.isascii() and ch.isalpha())
+    return ascii_letters > len(body) / 2
+
+
+def _pair_bilingual_disclosures(
+    articles: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return one entry per filing event, carrying whether the company
+    also filed it in English.
+
+    A Japanese issuer files most disclosures in Japanese only. Choosing
+    to publish an English version is a decision about who the filing is
+    meant to reach, so the fact that one exists is itself worth
+    reporting - it is the same awareness gap jp_english_coverage_check
+    measures for press, available here as a hard fact from the filing
+    rather than inferred from a search.
+
+    The pair is identified by company and the filing's own
+    minute-precision timestamp, both folded into the stored title by
+    the fetcher: two copies of one event share them exactly, and two
+    genuinely different filings do not share a minute. The English copy
+    leads where it exists, so the card reads without translation, with
+    the Japanese title kept alongside it.
+    """
+    by_event: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    unpaired: list[dict[str, Any]] = []
+    for a in articles:
+        meta = a.get("metadata") or {}
+        code = meta.get("code")
+        title = a.get("title") or ""
+        stamp = title.split("[", 1)[-1].split("]", 1)[0] if "[" in title else ""
+        if not code or not stamp:
+            unpaired.append(a)
+            continue
+        by_event.setdefault((code, stamp), []).append(a)
+
+    out: list[dict[str, Any]] = []
+    for a in unpaired:
+        meta = a.get("metadata") or {}
+        meta["filed_in_english"] = _is_english_disclosure(a.get("title") or "")
+        a["metadata"] = meta
+        out.append(a)
+
+    for copies in by_event.values():
+        english = [c for c in copies if _is_english_disclosure(c.get("title") or "")]
+        japanese = [c for c in copies if c not in english]
+        lead = (english or japanese)[0]
+        meta = lead.get("metadata") or {}
+        meta["filed_in_english"] = bool(english)
+        if english and japanese:
+            # Both exist: keep the other language's title rather than
+            # discarding it, so a reader can check the original wording.
+            meta["original_language_title"] = japanese[0].get("title")
+            # The company's own English filing IS the translation, and a
+            # better one than this pipeline could produce - it is the
+            # wording the issuer chose for international holders and the
+            # version they are accountable for. Setting it here means
+            # translate_japan_articles finds the field already populated
+            # and leaves it alone, so no model call is spent restating
+            # text the company already published.
+            meta["translated_title"] = english[0].get("title")
+        lead["metadata"] = meta
+        out.append(lead)
+    return out
+
+
+def classify_corporate_disclosure(
+    articles: list[dict[str, Any]],
+    model: str | None = None,
+) -> list[dict[str, Any]]:
+    """J8: classify corporate-action disclosures.
+
+    The seven rules before this one each read a specific, numeric filing
+    - a forecast revision, a buyback programme, a shareholding ratio.
+    A corporate action has no such figure in its title: a spin-off, a
+    merger or an investment in another company is material because of
+    what it does, not because of a number it reports. So unlike J1-J6,
+    there is nothing here to threshold, and unlike them this reads the
+    filing's own words.
+
+    Kabutan's own category field cannot stand in for that judgment:
+    measured on the stored set it reads その他 ("other") on most rows,
+    including a follow-on investment in OpenAI and a petrochemical
+    spin-off. A keyword list over Japanese titles was the other option
+    and was rejected - these filings are formulaic enough that a list
+    would work on the examples in hand and silently miss the phrasings
+    nobody thought of, which is the failure mode a fixed list always
+    has.
+
+    So this follows J7: let the model judge the filing's substance, with
+    the deterministic work - pairing the bilingual copies, mapping the
+    answer - done here. Three tiers rather than J7's two, because a
+    disclosure feed carries a large routine floor (compensation filings,
+    articles of incorporation) that is genuinely noise rather than a
+    weak signal.
+    """
+    candidates = [
+        a for a in articles
+        if (a.get("metadata") or {}).get("source_category")
+        in _JAPAN_DISCLOSURE_CATEGORIES
+    ]
+    if not candidates:
+        return []
+
+    import config
+
+    model = model or config.JAPAN_SIGNAL_MODEL
+    api_key = config.OPENAI_API_KEY
+    base_url = config.OPENAI_BASE_URL
+    timeout = config.OPENAI_TIMEOUT
+
+    results: list[dict[str, Any]] = []
+    for a in _pair_bilingual_disclosures(candidates):
+        meta = a.get("metadata") or {}
+        code = meta.get("code")
+        ticker = _JAPAN_TICKER_BY_CODE.get(code or "")
+        company_name = (ticker or {}).get("company") or meta.get("company") or code
+        title = a.get("title") or ""
+        headline = title.split(": ", 1)[-1] if ": " in title else title
+        in_english = bool(meta.get("filed_in_english"))
+
+        answer = _classify_japan_disclosure_substance(
+            company_name, code, headline, model, api_key, base_url, timeout,
+        )
+        signal = _JAPAN_DISCLOSURE_MAP.get(answer, "WEAK")
+
+        # Whether the company also published in English says who the
+        # filing is meant to reach, not what it does - the two are
+        # independent, and a management change is the same event in
+        # either language. So this is reported alongside the tier and
+        # never alters it: letting a publishing decision override the
+        # substance test would manufacture materiality the filing does
+        # not have. Same role `unconfirmed` plays for J7, where it
+        # labels a signal rather than creating one.
+        english_note = (
+            " The company also published it in English, which it does not do for most"
+            " disclosures." if in_english else ""
+        )
+
+        if signal == "SIGNAL":
+            reason_code = "material_corporate_action"
+            reason_text = (
+                f"{company_name} filed a disclosure that changes what the company owns, "
+                f"controls or is committing capital to.{english_note}"
+            )
+        elif signal == "WEAK":
+            reason_code = "corporate_disclosure_unclear"
+            reason_text = (
+                f"{company_name} filed a corporate disclosure whose effect on the "
+                f"business is not established from the filing's own title."
+                f"{english_note}"
+            )
+        else:
+            reason_code = "routine_corporate_filing"
+            reason_text = (
+                f"{company_name} filed a routine administrative disclosure - "
+                f"compensation, governance paperwork or a scheduled notice."
+                f"{english_note}"
+            )
+
+        meta["signal_reason_code"] = reason_code
+        meta["company"] = company_name
+        meta["native_name"] = (ticker or {}).get("native_name")
+        a["metadata"] = meta
+
+        results.append({
+            "article": a,
+            "result": {
+                "signal": _JAPAN_SIGNAL_MAP[signal],
+                "signal_score": _JAPAN_PRESS_SCORE,
+                "source_id": a.get("url"),
+                "reason": reason_text,
+                "metadata": meta,
+            },
+        })
+
+    logger.info(
+        "[JAPAN_DISCLOSURE] %d disclosure(s) pooled, %d classified after pairing"
+        " bilingual filings",
+        len(candidates), len(results),
+    )
+    return results
+
+
+def _classify_japan_disclosure_substance(
+    company_name: str, code: str | None, headline: str,
+    model: str, api_key: str, base_url: str, timeout: int,
+) -> str:
+    """One model call per disclosure, returning HIGH, WEAK or ROUTINE.
+
+    Defaults to WEAK on any failure, the same fail-safe J7 uses: a
+    disclosure this module could not read is reported as unestablished
+    rather than silently dropped or asserted to be material.
+    """
+    user_prompt = (
+        f"company: {company_name}\n"
+        f"{f'code: {code}' if code else ''}\n"
+        f"filing: {headline}"
+    )
+    payload = {
+        "model": model,
+        "temperature": 0,
+        "max_tokens": 5,
+        "messages": [
+            {"role": "system", "content": _JAPAN_DISCLOSURE_SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ],
+    }
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    try:
+        req = Request(
+            f"{base_url}/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        with urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        answer = (content or "").strip().upper()
+        for tier in ("HIGH", "ROUTINE", "WEAK"):
+            if answer.startswith(tier):
+                return tier
+        return "WEAK"
+    except Exception as exc:
+        logger.warning("[JAPAN_DISCLOSURE] classification failed, defaulting to WEAK: %s", exc)
+        return "WEAK"
+
+
+# Hosts whose pages for a ticker exist whether or not anyone has written
+# about the company. A quote, profile or historical-data page is always
+# there, so finding one says nothing about coverage - confirmed against
+# the stored set, where searches returned "Advantest Corp. ADR"
+# (a Barron's market-data page), "Hitachi Ltd ADR (HTHIY)" and
+# "Tokyo Ohka Kogyo (4186)" as if they were articles.
+_ENGLISH_COVERAGE_QUOTE_PAGE_MARKERS = (
+    "/market-data/", "/quote", "/equities/", "/stock/", "/stocks/",
+    "/profile", "/historical-data",
+)
+
+# A path segment that marks real written content, which overrides the
+# markers above: finance.yahoo.com/markets/stocks/articles/... is an
+# article that happens to sit under a stocks path, and dropping it
+# would discard genuine coverage.
+_ENGLISH_COVERAGE_ARTICLE_MARKERS = ("/article", "/news/", "/press-release")
+
+# A Latin-script headline is not necessarily English - the search
+# returns German, French and Spanish coverage too, which an
+# English-reading desk can no more act on than Japanese. These are
+# function words common in those languages and rare in English
+# headlines, checked as whole words.
+_ENGLISH_COVERAGE_NON_ENGLISH_WORDS = frozenset({
+    "aktie", "nach", "und", "der", "die", "das", "von", "für", "mit",
+    "les", "des", "une", "pour", "aux", "sur",
+    "acciones", "empresa", "mercado", "para", "con",
+    "azioni", "società", "mercato",
+})
+
+# A headline is only evidence of English coverage if it is in English.
+# The search returns Japanese, Chinese and Korean results too - real
+# articles, but not ones an English-reading desk can act on, which is
+# the whole question this check exists to answer.
+_ENGLISH_COVERAGE_MIN_ASCII_RATIO = 0.6
+
+
+def _is_english_coverage_headline(title: str) -> bool:
+    """True when a coverage-check hit is genuinely English prose.
+
+    Measured on the stored set: an English headline is almost entirely
+    ASCII letters and spaces, while a Japanese, Chinese or Korean one is
+    almost entirely not - the two cluster at opposite ends with nothing
+    near the middle, so the exact ratio matters far less than having
+    one. 0.6 sits in that empty band rather than being tuned.
+    """
+    body = title.split(": ", 1)[-1] if ": " in title else title
+    body = body.strip()
+    if not body:
+        return False
+    letters = [ch for ch in body if ch.isalpha()]
+    if not letters:
+        return False
+    if sum(1 for ch in letters if ch.isascii()) / len(letters) < _ENGLISH_COVERAGE_MIN_ASCII_RATIO:
+        return False
+    # Latin script alone is not English: a German or Spanish headline
+    # passes the ratio above and is no more readable to the desk this
+    # check is asking about than a Japanese one.
+    words = {w.strip(".,:;!?()[]\"'").lower() for w in body.split()}
+    return not (words & _ENGLISH_COVERAGE_NON_ENGLISH_WORDS)
+
+
+def _english_coverage_mentions_company(title: str, company: str | None) -> bool:
+    """True when the headline actually names the company searched for.
+
+    A keyword search returns neighbours: a search for Towa returned a
+    Lattice Semiconductor page, and one for Tokyo Ohka Kogyo returned
+    Kaname Kogyo. Those are real pages about real companies, just not
+    this one, and counting them would report the awareness gap as
+    closed when nobody has written about this company at all.
+
+    Matches on the first word of the company name, which is the part a
+    headline reliably carries ("Advantest Corp. ADR" for Advantest,
+    "TDK Corp's Dividend Analysis" for TDK) - requiring the full
+    registered name would reject those real hits.
+    """
+    if not company:
+        return False
+    body = title.split(": ", 1)[-1] if ": " in title else title
+    head = company.split()[0].lower()
+    return len(head) >= 3 and head in body.lower()
+
+
+def _english_coverage_pool(articles: list[dict[str, Any]]) -> dict[str, list[datetime]]:
+    """Build {code: [published_dt, ...]} from this batch's English
+    coverage-check rows.
+
+    news-retrieval runs one English news search per tracked company
+    (press_jp_english_check) and stores the hits under
+    source_category='jp_english_coverage_check', keyed by the same
+    metadata.code every other Japanese row uses - unlike Korea, which
+    needs a "-en" ticker suffix to keep two GDELT pools apart, Japan's
+    English rows live in their own source_category and need no such
+    marker to join back.
+
+    A row without a code or a parseable date is skipped rather than
+    failing the batch: the search is a scrape, and a hit occasionally
+    comes back as a page fragment with neither.
+    """
+    pool: dict[str, list[datetime]] = {}
+    dropped = 0
+    for a in articles:
+        meta = a.get("metadata") or {}
+        if meta.get("source_category") != "jp_english_coverage_check":
+            continue
+        code = meta.get("code")
+        pub_dt = _article_published_dt(a)
+        if not code or pub_dt is None:
+            continue
+
+        title = a.get("title") or ""
+        url = (a.get("url") or "").lower()
+        ticker = _JAPAN_TICKER_BY_CODE.get(code)
+        company = (ticker or {}).get("company") or meta.get("company")
+
+        # Three ways a hit looks like coverage without being any: it is
+        # not in English, it is a quote page that exists regardless, or
+        # it is about a different company the search surfaced nearby.
+        # Each would close the awareness gap on paper while leaving it
+        # open in fact, which is the one error this check cannot afford.
+        if not _is_english_coverage_headline(title):
+            dropped += 1
+            continue
+        is_article = any(m in url for m in _ENGLISH_COVERAGE_ARTICLE_MARKERS)
+        if not is_article and any(
+            m in url for m in _ENGLISH_COVERAGE_QUOTE_PAGE_MARKERS
+        ):
+            dropped += 1
+            continue
+        if not _english_coverage_mentions_company(title, company):
+            dropped += 1
+            continue
+
+        pool.setdefault(code, []).append(pub_dt)
+
+    if dropped:
+        logger.info(
+            "[JAPAN_ENGLISH_COVERAGE] %d hit(s) dropped as non-English, a quote"
+            " page, or about another company; %d company/companies have real"
+            " coverage",
+            dropped, len(pool),
+        )
+    return pool
+
+
+def _attach_english_coverage(
+    results: list[dict[str, Any]], articles: list[dict[str, Any]],
+) -> None:
+    """Record, on every classified item, whether English coverage of the
+    same company exists and how its timing compares.
+
+    A Japanese filing or headline is public the moment it is released,
+    but an English-reading desk only learns of it once someone writes it
+    up. That lag is the window in which the information is unevenly
+    held, which is what makes it worth reporting: "no English coverage
+    yet" says the gap is still open, and "appeared 6h after" says it has
+    closed.
+
+    Applies to every classified item rather than only press rows. A
+    forecast revision nobody has covered in English carries the same
+    advantage as an uncovered headline - the gap is a property of the
+    company's news flow, not of which rule classified the row.
+
+    Mutates each result's metadata in place, the same pass-over-results
+    pattern translate_japan_articles uses. An item whose company has no
+    code is left untouched, so an absent field means "not computed"
+    rather than "no coverage".
+    """
+    pool = _english_coverage_pool(articles)
+    if not pool:
+        return
+
+    for r in results:
+        meta = r["result"].get("metadata") or {}
+        code = meta.get("code")
+        if not code:
+            continue
+        english_dts = pool.get(code)
+        if not english_dts:
+            meta["english_coverage_found"] = False
+            r["result"]["metadata"] = meta
+            continue
+
+        japanese_dt = _article_published_dt(r.get("article") or {})
+        earliest = min(english_dts)
+        meta["english_coverage_found"] = True
+        meta["english_coverage_published"] = earliest.isoformat()
+        if japanese_dt is not None:
+            delta_hours = (earliest - japanese_dt).total_seconds() / 3600.0
+            meta["english_coverage_hours_after_japanese"] = round(delta_hours, 1)
+        r["result"]["metadata"] = meta
+
+
 def classify_japan_signal_batch(
     articles: list[dict[str, Any]],
     stored_habits: dict[str, dict[str, Any]] | None = None,
@@ -3435,6 +3935,7 @@ def classify_japan_signal_batch(
     with_article_results.extend(j2_results)
     with_article_results.extend(classify_industry_equipment_sales(articles))
     with_article_results.extend(classify_capacity_and_ownership(articles, stored_company_reference=stored_company_reference))
+    with_article_results.extend(classify_corporate_disclosure(articles))
 
     # Most recent REAL progress_pct/typical_progress_pct per company, from
     # this same batch's own real J2 results - the "current reading" half
@@ -3472,6 +3973,12 @@ def classify_japan_signal_batch(
 
     j3_results = classify_missing_revision(articles, as_of=as_of)
     results = with_article_results + j3_results
+
+    # Runs over the finished result set rather than inside any one
+    # classifier: the English-coverage gap belongs to the company's news
+    # flow, so every classified item gets it, whichever rule produced
+    # the row.
+    _attach_english_coverage(results, articles)
 
     logger.info(
         "[JAPAN_SIGNAL_BATCH] %d article(s) pooled, %d classified (J1/J2/J4/J5/J6/J7: %d, J3: %d)",

@@ -188,6 +188,19 @@ resource "aws_ecs_task_definition" "news_retrieval" {
           valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:ocn/${var.env}/news-retrieval:DART_API_KEY::"
         },
         {
+          # Required for the edinet_filing / edinet_buyback_status /
+          # edinet_extraordinary_report source_types (japan_market_signal
+          # domain) - EDINET (Financial Services Agency) v2 API
+          # subscription key, free/self-service at
+          # disclosure2.edinet-fsa.go.jp. The v2 API returns a hard 401
+          # with no key at all, so without this the three source_types
+          # fetch nothing and J6's ownership rule has no rows to read.
+          # Must exist in Secrets Manager under this key before terraform
+          # apply, same requirement as every other secret above.
+          name      = "EDINET_API_KEY"
+          valueFrom = "arn:aws:secretsmanager:${var.aws_region}:${var.aws_account_id}:secret:ocn/${var.env}/news-retrieval:EDINET_API_KEY::"
+        },
+        {
           # Required for fetch-macro-signals (macro_signal domain) - St.
           # Louis Fed's FRED API key, free/self-service at
           # fred.stlouisfed.org/docs/api/api_key.html. Used for both
