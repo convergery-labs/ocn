@@ -62,7 +62,6 @@ JAPAN_TICKER_UNIVERSE: list[dict[str, Any]] = [
     {"code": "4063", "company": "Shin-Etsu Chemical", "native_name": "信越化学工業", "fiscal_year_end": "03-31", "customers": ["TSMC", "Samsung Electronics", "Micron Technology", "Intel"]},
     {"code": "3436", "company": "SUMCO", "native_name": "SUMCO", "fiscal_year_end": "12-31", "customers": ["TSMC", "Samsung Electronics", "Kioxia", "Intel", "SK Hynix"]},
     {"code": "4062", "company": "Ibiden", "native_name": "イビデン", "fiscal_year_end": "03-31", "customers": ["Intel", "Samsung Electronics", "Nvidia", "Apple"]},
-    {"code": "6967", "company": "Shinko Electric", "native_name": "新光電気工業", "fiscal_year_end": "03-31", "customers": ["Intel", "AMD", "Nvidia"]},
     {"code": "7735", "company": "Screen Holdings", "native_name": "SCREENホールディングス", "fiscal_year_end": "03-31", "customers": ["TSMC", "Intel", "Samsung Electronics"]},
     {"code": "6525", "company": "Kokusai Electric", "native_name": "KOKUSAI ELECTRIC", "fiscal_year_end": "03-31", "customers": ["Intel", "Samsung Electronics", "SK Hynix", "Micron Technology"]},
     {"code": "4186", "company": "Tokyo Ohka Kogyo", "native_name": "東京応化工業", "fiscal_year_end": "03-31", "customers": ["Intel", "TSMC", "Samsung Electronics"]},
