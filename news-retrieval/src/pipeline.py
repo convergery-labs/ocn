@@ -11,7 +11,6 @@ from datetime import date, datetime, timedelta, timezone
 from functools import partial
 from typing import Any
 from urllib.parse import urlparse
-
 import feedparser
 import httpx
 import trafilatura
@@ -5088,6 +5087,17 @@ def _fetch_one_edinet_date(
                     **base_metadata,
                     "issuer_edinet_code": join_code,
                     "holding_ratio": ratio,
+                    # EDINET's own report-type label, kept as a real field
+                    # rather than only folded into the title above. It
+                    # carries two facts nothing else on the row does:
+                    # 大量保有報告書 (an initial report, a holder newly
+                    # crossing 5%) vs 変更報告書 (a change report against a
+                    # position already disclosed), and the 特例対象株券等
+                    # suffix marking the relaxed periodic-filing regime for
+                    # passive institutional holders. Downstream
+                    # classification distinguishes those cases; parsing
+                    # them back out of a formatted title would be fragile.
+                    "doc_description": doc.get("docDescription"),
                     "source_category": "jp_ownership",
                 },
             })
@@ -5311,7 +5321,11 @@ def _fetch_seaj_billings(sources: list[dict]) -> list[dict]:
                 "billings_3mo_avg_millions_jpy": int(row_match.group("billings").replace(",", "")),
                 "mom_pct": float(row_match.group("mom")),
                 "yoy_pct": float(row_match.group("yoy")),
+                # A real publication date, read from the index page's own
+                # release column - unlike the historical archive, which
+                # records none (see fetch_seaj_billings_backfill).
                 "release_date": release_date,
+                "date_confirmed": bool(release_date),
                 "pdf_url": pdf_url,
                 "source_category": "jp_industry",
             },
@@ -5508,7 +5522,18 @@ def fetch_seaj_billings_backfill(sources: list[dict]) -> list[dict]:
                 "billings_3mo_avg_millions_jpy": billings_int,
                 "mom_pct": mom_pct,
                 "yoy_pct": yoy_pct,
+                # The historical archive is a spreadsheet of year, month
+                # and billings - it records no publication date for any
+                # month, so there is none to read here. The live PDF
+                # fetcher does read a real release date from the index
+                # page (see _fetch_seaj_billings), which is why a month
+                # fetched live carries one and a backfilled month cannot.
+                # `published` on this row is the first of the reporting
+                # month, a stand-in for ordering, not the date SEAJ
+                # actually published the figure - date_confirmed says so
+                # explicitly rather than leaving a consumer to infer it.
                 "release_date": None,
+                "date_confirmed": False,
                 "pdf_url": xls_url,
                 "source_category": "jp_industry",
             },

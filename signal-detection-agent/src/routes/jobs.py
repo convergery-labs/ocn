@@ -11,6 +11,7 @@ from adapters.news_client import fetch_macro_series_total
 from auth import require_auth
 from controllers.run import generate_japan_signal_summary_for_date, generate_korea_signal_summary_for_date
 from models.jobs import get_job, get_results_summary, list_all_results, list_jobs, list_results, list_taiwan_periods
+from pipeline.japan_signal_view import to_jp_signal
 from pipeline.japan_ticker_universe import JAPAN_TICKER_UNIVERSE
 
 router = APIRouter()
@@ -132,12 +133,21 @@ async def get_japan_signal_results(
     straight to list_all_results (same cross-job, cursor-paginated
     listing GET /results itself uses) - no separate query path, no risk
     of drifting from that function's own ordering/pagination guarantees.
-    A caller who explicitly wants the raw generic endpoint with its full
-    filter set (grade/channel/impacted_ticker/etc., none of which any
-    japan_market_signal row ever populates) can still call GET /results
+
+    Rows come back shaped for display (see pipeline.japan_signal_view):
+    a figure appears once, in the field that presents it, rather than
+    both raw and formatted. `published` becomes `date`, the stored
+    `metadata` blob becomes the typed fields that read from it, and the
+    habit statistics become the usual range and the threshold a reader
+    sees. A caller wanting the stored rows exactly as classified -
+    every metadata key, no formatting - can still call GET /results
     directly with source_type=japan_market_signal.
+
+    `asOf` is the clock the consumer counts relative windows back from,
+    sent so a "last 30 days" view does not depend on the reader's own
+    clock agreeing with the server's.
     """
-    return list_all_results(
+    page = list_all_results(
         limit=limit,
         cursor=cursor,
         signal_detection=signal_detection,
@@ -147,6 +157,17 @@ async def get_japan_signal_results(
         published_from=published_from,
         published_to=published_to,
     )
+    rows = page.get("results") or []
+    dates = sorted(r["published"] for r in rows if r.get("published"))
+    return {
+        "asOf": datetime.now(timezone.utc).date().isoformat(),
+        "window": {
+            "start": dates[0] if dates else None,
+            "end": dates[-1] if dates else None,
+        },
+        "signals": [to_jp_signal(r) for r in rows],
+        "next_cursor": page.get("next_cursor"),
+    }
 
 
 @router.get("/results/periods")
