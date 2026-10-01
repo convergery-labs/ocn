@@ -3344,22 +3344,32 @@ def classify_press(
         is_nikkei_substitute = domain in _JAPAN_PRESS_NIKKEI_SUBSTITUTE_PUBLICATIONS
         unconfirmed = model_unconfirmed and is_nikkei_substitute
 
+        # Lead with what was reported, not with the verdict on it. The
+        # headline is the story; whether it states a checkable fact is
+        # why it is here, which belongs after.
+        story = title.split(": ", 1)[-1].strip() if ": " in title else title.strip()
+
         if model_answer == "HIGH":
             signal = "SIGNAL"
             if unconfirmed:
                 reason_code = "press_high_unconfirmed_nikkei_substitute"
                 reason_text = (
-                    f"{company}: {source_label} reports a specific, checkable fact "
-                    f"that the company has not yet confirmed - not downgraded, since this "
-                    f"publication reports reliably ahead of formal disclosure."
+                    f"{source_label} reports: {story} - a specific, checkable claim "
+                    f"the company has not yet confirmed, carried by a publication that "
+                    f"reports reliably ahead of formal disclosure."
                 )
             else:
                 reason_code = "press_high_first_tier"
-                reason_text = f"{company}: {source_label} reports a specific, checkable fact."
+                reason_text = (
+                    f"{source_label} reports: {story} - a specific, checkable claim."
+                )
         else:
             signal = "WEAK"
             reason_code = "press_weak"
-            reason_text = f"{company}: {source_label} coverage judged as opinion or sentiment, not a specific checkable fact."
+            reason_text = (
+                f"{source_label} reports: {story} - opinion or sentiment rather "
+                f"than a checkable claim."
+            )
 
         meta["publication_domain"] = domain
         meta["publication_tier"] = "first" if domain in _JAPAN_PRESS_FIRST_TIER_PUBLICATIONS else "second"
@@ -4034,7 +4044,17 @@ def classify_japan_signal_batch(
     classified_articles = [r["article"] for r in with_article_results]
     translate_japan_articles(classified_articles)
     for r in with_article_results:
-        r["result"]["metadata"] = r["article"].get("metadata") or {}
+        meta = r["article"].get("metadata") or {}
+        r["result"]["metadata"] = meta
+        # Reason sentences are built before translation runs, so an
+        # ownership row names its filer in Japanese - the only place
+        # that name appears on the row at all. Now that the English
+        # form exists, swap it in: a reader of the English card should
+        # not have to parse 株式会社 to learn who filed.
+        english = meta.get("translated_filer_name")
+        japanese = meta.get("filer_name")
+        if english and japanese and r["result"].get("reason"):
+            r["result"]["reason"] = r["result"]["reason"].replace(japanese, english)
 
     j3_results = classify_missing_revision(articles, as_of=as_of)
     results = with_article_results + j3_results
