@@ -52,7 +52,10 @@ signal-detection-agent/
 │   ├── pipeline/
 │   │   ├── classifier.py
 │   │   ├── category_candidates.py   (parked - not wired in v1)
-│   │   └── taiwan_signal_classifier.py   (taiwan_market_signal: rank/clause-lookup/translate/classify)
+│   │   ├── taiwan_signal_classifier.py   (taiwan_market_signal: rank/clause-lookup/translate/classify)
+│   │   ├── japan_companies.py        (japan_market_signal: the one static company/customer table)
+│   │   ├── japan_signal_classifier.py   (japan_market_signal: J1-J7 + WATCHING)
+│   │   └── japan_signal_view.py      (japan_market_signal: row -> card shaping)
 │   └── adapters/
 │       ├── news_client.py
 │       └── web_search.py
@@ -117,23 +120,41 @@ wired into `classify_japan_signal_batch` (that entry point's own daily window is
 ever find a company's true last revision) but into `refresh_japan_habits` instead, which
 already pools the full wide-history window this check needs.
 
-A twice-daily trader summary (spec Section 10.3's own text, `pipeline/japan_signal_summary.py`)
-sits on top of already-classified rows - `generate_japan_signal_summary`/`GET /japan-signals/
-summary`/`summarize-japan-signals` CLI command. INDUSTRY LEVEL and WATCHING are rendered
-directly from stored data in code, never sent to the LLM; only COMPANY LEVEL (which needs real
-narrative synthesis) goes through a model call - confirmed live 2026-09-30 the model otherwise
-fabricates numbers when asked to restate already-final data verbatim.
+All static company reference data lives in ONE module, `pipeline/japan_companies.py` -
+`JAPAN_COMPANIES`, keyed by TSE code, with each company's native name, fiscal year end,
+market weight (TSE Prime share, Japan rank, Japan sales share, market cap) and its
+disclosed customers (name, ticker, `pct_of_sales`, filed `period`, aliases,
+`relationship`). It replaced three overlapping modules (`japan_ticker_universe.py`,
+`japan_company_profile.py`, `japan_read_through.py`) that each held part of the same facts
+and disagreed in places. `JAPAN_TICKER_UNIVERSE` remains as a list view over the same
+objects, so the two never drift. This table is the intended migration unit into
+research-universe's DB, so anything added here must map to a column there.
 
-Three read-only routes exist for this domain (all under `routes/jobs.py`, all `require_auth`):
-`GET /japan-signals/summary` (above), `GET /japan-signals/universe` (the static 20-company
-reference list, `JAPAN_TICKER_UNIVERSE` in memory - not `agent_classifications`), and
-`GET /japan-signals/results` (paginated, filterable raw rows - `code`, `source_category`,
+The twice-daily trader summary was REMOVED (2026-10-02, explicit user instruction): the
+cards carry the same facts, and the prose restated them at the cost of an LLM call per run.
+`pipeline/japan_signal_summary.py`, `GET /japan-signals/summary`, the
+`summarize-japan-signals` command and both of its CloudWatch schedules are gone. The four
+formatting helpers it owned (`_age_hours`, `_format_pct`, `_format_jpy_millions`,
+`signal_implication`) moved into `japan_signal_view.py`, which is their only caller now.
+
+Two read-only routes exist for this domain (both under `routes/jobs.py`, both
+`require_auth`): `GET /japan-signals/universe` (the static 19-company reference list, built
+field-by-field from `JAPAN_COMPANIES` in memory - not `agent_classifications`), and
+`GET /japan-signals/results` (paginated, filterable - `code`, `source_category`,
 `signal_detection`, `published_from`/`published_to`; delegates to the same `list_all_results`
-the generic `GET /results` uses, with `source_type` pinned to `japan_market_signal`). None of
-these three, or any other Japan Signals command, is triggerable over HTTP - `classify-japan-
-signals`/`summarize-japan-signals`/`refresh-japan-habits` are CLI-only, same as every other
-non-`ai_news` domain in this service (`pipeline/dispatch.py`'s own module docstring states this
-architecture explicitly: only per-article domains route through `POST /run`).
+the generic `GET /results` uses, with `source_type` pinned to `japan_market_signal`, then
+shapes each row through `japan_signal_view.to_jp_signal`). Neither route, nor any other
+Japan Signals command, is triggerable over HTTP - `classify-japan-signals`/
+`refresh-japan-habits` are CLI-only, same as every other non-`ai_news` domain in this
+service (`pipeline/dispatch.py`'s own module docstring states this architecture explicitly:
+only per-article domains route through `POST /run`).
+
+Each shaped card carries `entities`: which of that company's own disclosed customers the
+event's text actually names, matched against the English name, native Japanese name and
+ticker aliases held in `JAPAN_COMPANIES`. Computed at classification time and stored in
+`agent_classifications.entities_json` (plus `entity_names_normalized` for filtering), not
+recomputed per request. An empty list is the common and correct answer - only 4 of 394 real
+rows name a customer, because a forecast revision states figures and mentions nobody.
 
 Entry points (Click commands in `__main__.py`, CloudWatch schedules in
 `infra/modules/ecs_cluster/services.tf`), anchored to real TSE market hours
@@ -141,8 +162,7 @@ Entry points (Click commands in `__main__.py`, CloudWatch schedules in
 twice daily (23:00 UTC pre-open, 06:30 UTC post-close), `classify-japan-signals` runs once
 after each fetch (00:00 UTC, 08:30 UTC - reads pre-computed habit/reference caches, never
 recomputes them inline; always scoped to today's pooled runs only, even on its first-ever
-invocation - never a full-history backfill, that is `refresh-japan-habits`'s own job), and
-`summarize-japan-signals` runs once after each classify pass (01:00 UTC, 09:30 UTC).
+invocation - never a full-history backfill, that is `refresh-japan-habits`'s own job).
 `refresh-japan-habits` (05:00 UTC on the 25th of each month) is the only occasional job -
 recomputes all three stored caches - `japan_company_habits`, `japan_progress_habits`,
 `japan_company_reference` - from the FULL pooled history in one pass, and also runs the

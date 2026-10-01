@@ -94,8 +94,8 @@ DuckDuckGo ┘                         │      ├─ J2  classify_results_agai
 
 `pipeline/japan_signal_classifier.py` performs no database access. Every cache it requires is
 loaded by `controllers/run.py` and passed as an argument, matching the boundary every
-`pipeline/*.py` module in this service follows. `pipeline/japan_signal_summary.py` follows the
-same rule, building summary text from rows the controller reads.
+`pipeline/*.py` module in this service follows. `pipeline/japan_signal_view.py` follows the
+same rule, shaping cards from rows the controller reads.
 
 ### Classification run sequence
 
@@ -120,7 +120,8 @@ a one-day window.
 ## 3. The Tracked Universe
 
 **Defined in:** news-retrieval's `seed.py` as `JAPAN_TICKER_UNIVERSE`; mirrored in this service
-at `pipeline/japan_ticker_universe.py`.
+at `pipeline/japan_companies.py` as `JAPAN_COMPANIES` (keyed by code), with
+`JAPAN_TICKER_UNIVERSE` kept as a list view over the same objects.
 
 Every fetcher and classifier is scoped against this static, hand-maintained list of 20
 companies.
@@ -772,8 +773,7 @@ synthetic dict:
 
 The real `as_of` timestamp makes J3 rows findable by date-windowed reads —
 `list_all_results`' `published_from`/`published_to`, and therefore
-`generate_japan_signal_summary_for_date` and `GET /japan-signals/results`. WATCHING uses the
-same pattern.
+`GET /japan-signals/results`. WATCHING uses the same pattern.
 
 J3 results bypass the translate and metadata-refresh step in the batch entry point, which
 applies only to results backed by a real article; J3's metadata and reason are already final and
@@ -1214,7 +1214,6 @@ All are pure functions without database access.
 |---|---|
 | `run_japan_signal_classification(job_id, from_date, to_date)` | Pool runs, load caches, classify, dedup, insert |
 | `refresh_japan_habits(from_date, to_date, computed_from_years)` | Recompute all three caches; run WATCHING |
-| `generate_japan_signal_summary_for_date(date)` | Read classified rows for one date, build summary text |
 
 ### 9.5 Model layer
 
@@ -1229,24 +1228,29 @@ All are pure functions without database access.
 
 ## 10. API Endpoints
 
-Three read-only routes in `routes/jobs.py`, all `require_auth`. Behind the API gateway they sit
+Two read-only routes in `routes/jobs.py`, both `require_auth`. Behind the API gateway they sit
 under the `/agent/*` prefix.
 
 ### `GET /japan-signals/universe`
 
-Returns the 20-company tracked list from `JAPAN_TICKER_UNIVERSE` in memory, rather than from
-`agent_classifications`, where the same 20 companies would repeat across every row.
+Returns the 19-company tracked list from `JAPAN_COMPANIES` in memory, rather than from
+`agent_classifications`, where the same 19 companies would repeat across every row.
 
-### `GET /japan-signals/summary`
+Each entry is built field by field rather than spread from the record: spreading leaked the
+market figures twice (once snake_case at the top level, again camelCase inside
+`marketWeight`) and carried internal fields like `fiscal_year_end` along unasked.
 
-Returns one day's trader summary built from already-classified rows. Reads only; triggers no
-classification.
+| Field | Notes |
+|---|---|
+| `code`, `company`, `native_name` | Identity |
+| `marketWeight` | `marketCapJpyTn`, `marketCapUsdBn`, `tsePrimePct`, `japanRank`, `japanSalesPct`, plus `asOf` and `isStale` so a consumer cannot show a months-old market cap as current |
+| `customers[]` | `name`, `ticker`, `pct_of_sales`, `period`, `aliases`, `relationship`, `is_distributor` |
+| `japanSalesNote` | Only where a company's Japan sales share needs a caveat (SoftBank) |
 
-INDUSTRY LEVEL and WATCHING are rendered directly from stored data in code. COMPANY LEVEL, which
-requires narrative synthesis, is the only section produced by a model call.
-
-Rows are pre-sorted by `signal_detection` (signal before weak_signal) then recency; no ranking
-formula is applied, since the spec defines none. Sections with no qualifying rows are omitted.
+`pct_of_sales: null` means the company does not disclose that customer at Japan's 10%
+threshold — which is itself information, not a missing value. `relationship` defaults to
+`customer` and is one of `customer`, `distributor`, `licensee`, `investee`, `user_base`,
+`partner`.
 
 ### `GET /japan-signals/results`
 
@@ -1273,7 +1277,7 @@ Callers needing a filter this route does not expose can call `GET /results` dire
 
 ### HTTP trigger scope
 
-`classify-japan-signals`, `summarize-japan-signals` and `refresh-japan-habits` are CLI-only,
+`classify-japan-signals` and `refresh-japan-habits` are CLI-only,
 matching every non-`ai_news` domain in this service: only per-article domains route through
 `POST /run`.
 
@@ -1293,19 +1297,18 @@ cron expressions are UTC-only and carry no DST awareness.
 | Fetch — post-close | news-retrieval | `cron(30 6 * * ? *)` | 06:30 |
 | `classify-japan-signals` | agent | `cron(0 0 * * ? *)` | 00:00 |
 | `classify-japan-signals` | agent | `cron(30 8 * * ? *)` | 08:30 |
-| `summarize-japan-signals` | agent | `cron(0 1 * * ? *)` | 01:00 |
-| `summarize-japan-signals` | agent | `cron(30 9 * * ? *)` | 09:30 |
 | `refresh-japan-habits` | agent | `cron(0 5 25 * ? *)` | 25th, 05:00 |
 | SEAJ monthly fetch | news-retrieval | `cron(0 4 25 * ? *)` | 25th, 04:00 |
 
-Each classify pass runs one hour after its corresponding fetch; each summary runs one hour after
-its classify pass.
+Each classify pass runs one hour after its corresponding fetch.
+
+**All eight Japan rules are currently DISABLED** (verified live 2026-10-02) and are run by
+hand as one-off ECS tasks. Re-enable only on an explicit instruction.
 
 ### Commands
 
 ```bash
 python -m src classify-japan-signals [--from-date YYYY-MM-DD] [--to-date YYYY-MM-DD]
-python -m src summarize-japan-signals [--date YYYY-MM-DD]
 python -m src refresh-japan-habits [--from-date YYYY-MM-DD] [--to-date YYYY-MM-DD]
 ```
 
@@ -1330,6 +1333,36 @@ python -m src backfill-japan-seaj
 The Excel archive carries no prelim/final qualifier, so its
 `_SEAJ_BACKFILL_SKIP_RECENT_MONTHS` margin keeps it clear of the live fetcher's active window;
 within that boundary it is safe to re-run, since article storage dedupes by URL.
+
+### Rebuilding classified rows from scratch
+
+`run_japan_signal_classification` skips any `source_id` already in
+`agent_classifications` (`get_existing_japan_signal_source_ids`), and only `jp_watching`
+rows upsert on conflict — every other category is `ON CONFLICT DO NOTHING`. So re-running
+`classify-japan-signals` can never update an existing row. Backfilling a newly added
+STORED column (as opposed to one `to_jp_signal` computes per request) means deleting the
+rows first:
+
+```sql
+DELETE FROM agent_classifications WHERE source_type = 'japan_market_signal';
+```
+
+**Then run BOTH commands, not just the classifier** — they produce disjoint sets of rows:
+
+```bash
+python -m src classify-japan-signals --from-date <first run date> --to-date <today>
+python -m src refresh-japan-habits    # jp_watching rows come from HERE
+```
+
+WATCHING is not part of `classify_japan_signal_batch` — its daily window is far too narrow
+to find a company's true last revision — so a delete followed by only the classify command
+silently drops every `jp_watching` row and leaves the watchlist empty. Verify the rebuild
+by category, not by total count:
+
+```sql
+SELECT metadata->>'source_category', count(*) FROM agent_classifications
+WHERE source_type = 'japan_market_signal' GROUP BY 1 ORDER BY 2 DESC;
+```
 
 ---
 
@@ -1445,7 +1478,6 @@ CALLER=$(printf '{"sub": 1, "role": "admin", "domains": []}' | base64)
 
 curl -H "x-ocn-caller: $CALLER" "$ALB/agent/japan-signals/universe"
 curl -H "x-ocn-caller: $CALLER" "$ALB/agent/japan-signals/results?limit=5"
-curl -H "x-ocn-caller: $CALLER" "$ALB/agent/japan-signals/summary"
 ```
 
 `x-ocn-caller` is base64-encoded JSON: `{"sub": int, "role": str, "domains": [int]}`.
@@ -1478,8 +1510,8 @@ rules as every other row.
 | Path | Contents |
 |---|---|
 | `src/pipeline/japan_signal_classifier.py` | All eight classifiers and habit computation |
-| `src/pipeline/japan_signal_summary.py` | Trader summary builder |
-| `src/pipeline/japan_ticker_universe.py` | The 20-company tracked list |
+| `src/pipeline/japan_companies.py` | The one static table: 19 companies, their market weight and disclosed customers |
+| `src/pipeline/japan_signal_view.py` | Row -> card shaping for `GET /japan-signals/results` |
 | `src/models/japan_company_habits.py` | J1 habit storage |
 | `src/models/japan_progress_habits.py` | J2 habit storage |
 | `src/models/japan_company_reference.py` | J5/J6 reference storage |

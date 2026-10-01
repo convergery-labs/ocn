@@ -3439,7 +3439,18 @@ _IRBANK_REASON_BOILERPLATE_RE = re.compile(
     # anchor phrase ("将来の事象に係る記述に関する注意") is structurally
     # different (a heading, not a lead-in immediately followed by the
     # information-availability phrase).
-    r"|将来の事象(?:についての|に係る記述に関する注意)",
+    r"|将来の事象(?:についての|に係る記述に関する注意)"
+    # A third real family - Hitachi's house style, confirmed live
+    # 2026-10-01 on 3 of its revisions (140120190115459780,
+    # 140120191210435490, 140120200727467442). The disclaimer opens
+    # with its own bracketed heading, "＜将来の見通しに関するリスク情報＞"
+    # (risk information on forward-looking statements), and is followed
+    # by ~32 "・" risk bullets. Neither existing alternative matches it:
+    # it carries none of the "入手可能な情報" vocabulary, and its heading
+    # is 将来の見通し, not 将来の事象. Left unmatched, the whole bullet
+    # list was stored as the revision's reason, burying the real one
+    # sentence that precedes it.
+    r"|[＜<]?将来の見通しに関するリスク情報",
     re.S,
 )
 

@@ -85,7 +85,7 @@ from typing import Any
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-from pipeline.japan_ticker_universe import JAPAN_TICKER_UNIVERSE
+from pipeline.japan_companies import JAPAN_TICKER_UNIVERSE, mentioned_customers
 from pipeline.taiwan_signal_classifier import _get_nested, _translate_one
 
 logger = logging.getLogger(__name__)
@@ -720,14 +720,19 @@ def classify_forecast_revision(
                 f"{pct_rounded:.1f}".rstrip("0").rstrip(".") + "%"
                 if pct_rounded is not None else "an unquantifiable amount"
             )
-            # "A 8% raise" reads wrong when spoken ("eight" - vowel sound)
-            # - "an" is correct whenever the number's first digit is 8, or
-            # it's an 11-18 range (spoken "eleven"..."eighteen", also
-            # vowel-first). Checked against pct_rounded, the same value
-            # the sentence actually displays.
-            pct_article = "An" if pct_rounded is not None and (
-                str(pct_rounded)[0] == "8" or 11 <= pct_rounded <= 18
-            ) else "A"
+            # The article follows how the number is SPOKEN, not how it is
+            # spelled: "an 8% raise" (eight), "an 11% raise" (eleven),
+            # "an 18% raise" (eighteen) - but "a 13.8% raise", because
+            # thirteen starts with a consonant. Only a leading 8 and the
+            # whole-number 11 and 18 take "an"; 12-17 do not, and neither
+            # does 13.8 merely for sitting between them. "0.8%" is spoken
+            # "zero point eight" and takes "a", so the test is the
+            # whole-number part rather than the first digit printed.
+            pct_article = "A"
+            if pct_rounded is not None:
+                whole = int(abs(pct_rounded))
+                if str(whole).startswith("8") or whole in (11, 18):
+                    pct_article = "An"
 
             if _is_currency_or_accounting_only(meta.get("reason")):
                 signal = "NOISE"
@@ -740,6 +745,7 @@ def classify_forecast_revision(
                 signal = "SIGNAL"
                 reason_code = "reverses_direction_within_fiscal_year"
                 prior_direction = prior_fiscal_year_direction.get(fiscal_year)
+                meta["reversed_direction"] = prior_direction
                 reason_text = (
                     f"{company_name} reversed direction within the same fiscal year - "
                     f"it previously {'raised' if prior_direction == 'raise' else 'cut'} its "
@@ -1577,7 +1583,16 @@ def classify_results_against_forecast(
             # of this function always said "full-year target" regardless)
             # would misstate what progress_pct is actually measuring.
             target_period_type = _detect_period_type(target_table)
-            target_description = "full-year" if target_period_type == "full_year" else "half-year"
+            # _detect_period_type also returns "quarter" and None, and
+            # calling either of those "half-year" misstates the target
+            # the same way always saying "full-year" did. Unrecognised
+            # falls back to full-year: it is the common case and the
+            # label the rest of the card uses.
+            target_description = {
+                "half_year": "half-year",
+                "quarter": "quarterly",
+                "full_year": "full-year",
+            }.get(target_period_type or "", "full-year")
 
             pub_dt = _article_published_dt(a)
             elapsed_pct = (
@@ -1931,7 +1946,7 @@ def classify_missing_revision(
                 # not forever, so a synthetic dict with a real published
                 # timestamp (as_of itself) is passed instead of None. This
                 # is what makes a J3 row findable by GET /japan-signals/
-                # results and generate_japan_signal_summary_for_date's own
+                # results and the date-windowed results query's own
                 # published_from/published_to day-window query (see
                 # models.jobs.list_all_results, which filters on the
                 # literal `published` column - a NULL published can never
@@ -1973,7 +1988,7 @@ def classify_missing_revision(
 
 # Japan Signals spec Section 10.3's own WATCHING section ("companies
 # diverging from their own pattern that have not announced anything") -
-# this was a real, documented gap (see japan_signal_summary.py's own
+# this was a real, documented gap (see the date-window note in
 # former top-docstring note) until this function: no existing classify_*
 # function scanned a company's CURRENT standing against its own habit
 # with no new filing to trigger it. classify_missing_revision (J3) is the
@@ -2177,7 +2192,7 @@ def classify_stale_revision_pattern(
             # So, unlike J3's own "article": None, this passes a small
             # synthetic dict with a REAL published timestamp (as_of
             # itself, not a fabricated one) - this is what lets
-            # generate_japan_signal_summary_for_date's own published_from/
+            # the results query's own published_from/
             # published_to day-window query actually find these rows (see
             # models.jobs.list_all_results, which filters on the literal
             # `published` column - a NULL published, as J3 has, can never
@@ -2194,7 +2209,21 @@ def classify_stale_revision_pattern(
             "result": {
                 "signal": "weak_signal",
                 "signal_score": None,
-                "source_id": f"japan-stale-revision://{code}/{as_of.date().isoformat()}",
+                # One row per company, not per company per day. A
+                # WATCHING reading is a STANDING STATE ("Disco is
+                # overdue"), not a dated event the way every other
+                # Japan row is - those key on a filing's own immutable
+                # doc id, while this used to key on "today". Dating it
+                # meant the row stopped matching the current date the
+                # moment midnight passed, emptying the Watching tab
+                # until the next monthly refresh, and accumulating a
+                # fresh row per company per run for the same fact.
+                # Keyed on the company alone, the row persists and is
+                # updated in place - see insert_japan_signal_
+                # classification's jp_watching upsert, which this
+                # stable id depends on to keep days_since_last_revision
+                # current rather than frozen at first insert.
+                "source_id": f"japan-stale-revision://{code}",
                 "reason": reason_text,
                 "metadata": {
                     "code": code,
@@ -3158,6 +3187,20 @@ def _classify_japan_press_relevance(
         return "WEAK", False
 
 
+def _press_story_fragment(title: str | None) -> str:
+    """The story out of a stored press title.
+
+    Titles are stored as "{company} ({code}): {headline}", so the part
+    after the first ": " is what was actually reported. Shared by the
+    reason sentence and the post-translation swap that replaces it, so
+    both split the Japanese and the English title the same way - a
+    mismatch there would leave the Japanese text in place.
+    """
+    if not title:
+        return ""
+    return (title.split(": ", 1)[-1] if ": " in title else title).strip()
+
+
 def classify_press(
     articles: list[dict[str, Any]],
     model: str | None = None,
@@ -3347,7 +3390,7 @@ def classify_press(
         # Lead with what was reported, not with the verdict on it. The
         # headline is the story; whether it states a checkable fact is
         # why it is here, which belongs after.
-        story = title.split(": ", 1)[-1].strip() if ": " in title else title.strip()
+        story = _press_story_fragment(title)
 
         if model_answer == "HIGH":
             signal = "SIGNAL"
@@ -3360,15 +3403,25 @@ def classify_press(
                 )
             else:
                 reason_code = "press_high_first_tier"
-                reason_text = (
-                    f"{source_label} reports: {story} - a specific, checkable claim."
-                )
+                # No "- a specific, checkable claim" suffix. That is the
+                # rule that fired, not news: the reader already sees the
+                # High badge, and restating the test adds nothing to
+                # what was reported. Why it qualified belongs in the
+                # caveat, which is where the card explains itself.
+                reason_text = f"{source_label} reports: {story}"
         else:
             signal = "WEAK"
             reason_code = "press_weak"
+            # WEAK is the catch-all arm of the prompt: analyst opinion,
+            # an outlook with no figure, a passing mention, a story
+            # mainly about someone else, or simple uncertainty. The
+            # model returns the verdict only, not which of those fired,
+            # so name the bar that was missed rather than asserting a
+            # cause - calling a real technical achievement "opinion or
+            # sentiment" is wrong whenever the miss was just a figure.
             reason_text = (
-                f"{source_label} reports: {story} - opinion or sentiment rather "
-                f"than a checkable claim."
+                f"{source_label} reports: {story} - no figure, named counterparty "
+                f"or company confirmation in the headline to check it against."
             )
 
         meta["publication_domain"] = domain
@@ -3477,19 +3530,25 @@ def _pair_bilingual_disclosures(
     rather than inferred from a search.
 
     The pair is identified by company and the filing's own
-    minute-precision timestamp, both folded into the stored title by
-    the fetcher: two copies of one event share them exactly, and two
-    genuinely different filings do not share a minute. The English copy
-    leads where it exists, so the card reads without translation, with
-    the Japanese title kept alongside it.
+    minute-precision publication time: two copies of one event share
+    them exactly, and two genuinely different filings do not share a
+    minute. The English copy leads where it exists, so the card reads
+    without translation, with the Japanese title kept alongside it.
+
+    Keyed on the stored `published` column rather than the timestamp
+    the fetcher folds into the title, because the same event also
+    arrives from two different SOURCES - TDnet via Kabutan and the
+    issuer's own extraordinary report via EDINET - and only one of
+    them writes a timestamp into its title; EDINET's bracket holds a
+    document id. Both carry the same `published`, so that is the field
+    the two have in common.
     """
     by_event: dict[tuple[str, str], list[dict[str, Any]]] = {}
     unpaired: list[dict[str, Any]] = []
     for a in articles:
         meta = a.get("metadata") or {}
         code = meta.get("code")
-        title = a.get("title") or ""
-        stamp = title.split("[", 1)[-1].split("]", 1)[0] if "[" in title else ""
+        stamp = str(a.get("published") or "")
         if not code or not stamp:
             unpaired.append(a)
             continue
@@ -3508,6 +3567,26 @@ def _pair_bilingual_disclosures(
         lead = (english or japanese)[0]
         meta = lead.get("metadata") or {}
         meta["filed_in_english"] = bool(english)
+
+        # One event reported through two sources. TDnet names what the
+        # filing is ("Completion of Execution of Partial Spin-off");
+        # EDINET's own title for the same event is just its form name
+        # ("臨時報告書"), but EDINET is where the document itself lives.
+        # Keep the informative title and borrow the other's document
+        # id, so the merged row reads well AND links to the filing.
+        others = [c for c in copies if c is not lead]
+        if others:
+            meta["also_filed_via"] = sorted({
+                (c.get("metadata") or {}).get("source_category")
+                for c in others
+                if (c.get("metadata") or {}).get("source_category")
+            })
+            if not meta.get("doc_id"):
+                for c in others:
+                    doc_id = (c.get("metadata") or {}).get("doc_id")
+                    if doc_id:
+                        meta["doc_id"] = doc_id
+                        break
         if english and japanese:
             # Both exist: keep the other language's title rather than
             # discarding it, so a reader can check the original wording.
@@ -3593,10 +3672,11 @@ def classify_corporate_disclosure(
         # substance test would manufacture materiality the filing does
         # not have. Same role `unconfirmed` plays for J7, where it
         # labels a signal rather than creating one.
-        english_note = (
-            " The company also published it in English, which it does not do for most"
-            " disclosures." if in_english else ""
-        )
+        # Stored on the row as `filed_in_english` rather than written
+        # into the reason sentence: the view layer surfaces it in
+        # `unusual`, and appending it here too put one fact in three
+        # fields of the same card.
+        english_note = ""
 
         if signal == "SIGNAL":
             reason_code = "material_corporate_action"
@@ -3931,6 +4011,47 @@ def _attach_english_coverage(
         r["result"]["metadata"] = meta
 
 
+def _attach_mentioned_customers(results: list[dict[str, Any]]) -> None:
+    """Record which of the company's own customers each event NAMES.
+
+    Runs over the finished result set rather than inside any one
+    classifier, for the same reason _attach_english_coverage does:
+    the question belongs to the event, not to the rule that produced
+    it, so every row gets the same treatment.
+
+    Stored in entities_json, the column every other domain already
+    uses for extracted entities - a Japan row left it at its '[]'
+    default until now. Deliberately runs AFTER translate_japan_
+    articles, so an originally-Japanese reason has an English form to
+    match too.
+
+    Most rows get an empty list and that is the honest answer: a
+    forecast revision states figures, a buyback states share counts,
+    an ownership filing names a shareholder. Only press and
+    disclosures have reason to name a customer.
+    """
+    for r in results:
+        meta = r["result"].get("metadata") or {}
+        article = r.get("article") or {}
+        # The article BODY matters as much as the metadata here. Only
+        # MONOist capex articles carry one (72 of 1,111), but they are
+        # prose rather than figures, so they are where a counterparty
+        # actually gets named - measured: including the body takes
+        # matches from 2 rows to 5. The body is never persisted on the
+        # classification (news-retrieval owns article content), so this
+        # is the one point in the pipeline where it is in hand.
+        text = " ".join(filter(None, (
+            meta.get("translated_title"),
+            meta.get("translated_reason"),
+            meta.get("reason"),
+            article.get("title"),
+            article.get("body"),
+        )))
+        entities = mentioned_customers(meta.get("code"), text)
+        if entities:
+            r["result"]["entities"] = entities
+
+
 def classify_japan_signal_batch(
     articles: list[dict[str, Any]],
     stored_habits: dict[str, dict[str, Any]] | None = None,
@@ -4056,6 +4177,22 @@ def classify_japan_signal_batch(
         if english and japanese and r["result"].get("reason"):
             r["result"]["reason"] = r["result"]["reason"].replace(japanese, english)
 
+        # Same ordering problem for a press row: its reason quotes the
+        # story straight from the article's own title, which is still
+        # Japanese when classify_press builds the sentence. Swap in the
+        # translated headline now that it exists, so the card's reason
+        # is readable rather than the one field on an English card a
+        # non-Japanese reader cannot use.
+        translated = meta.get("translated_title")
+        original = r["article"].get("title")
+        if translated and original and r["result"].get("reason"):
+            story = _press_story_fragment(original)
+            english_story = _press_story_fragment(translated)
+            if story and english_story and story != english_story:
+                r["result"]["reason"] = r["result"]["reason"].replace(
+                    story, english_story,
+                )
+
     j3_results = classify_missing_revision(articles, as_of=as_of)
     results = with_article_results + j3_results
 
@@ -4064,6 +4201,7 @@ def classify_japan_signal_batch(
     # flow, so every classified item gets it, whichever rule produced
     # the row.
     _attach_english_coverage(results, articles)
+    _attach_mentioned_customers(results)
 
     logger.info(
         "[JAPAN_SIGNAL_BATCH] %d article(s) pooled, %d classified (J1/J2/J4/J5/J6/J7: %d, J3: %d)",

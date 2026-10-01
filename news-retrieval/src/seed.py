@@ -1951,35 +1951,34 @@ KOREA_GDELT_ENGLISH_SOURCE: dict[str, Any] = {
 # that queries by native_name as an exact API parameter (Taiwan/Korea's
 # GDELT sources), where using an abbreviation could return TOO MANY
 # unrelated results instead of too few.
-# "customers" (added 2026-09-30): read-through major-customer names per
-# company, for descriptive display alongside a classified signal only
-# (e.g. "this Advantest capex signal reads through to TSMC/Samsung/
-# Nvidia") - NOT used in any fetch/matching/classification logic. UNVERIFIED
-# against a primary source (an annual report, an investor-relations
-# disclosure, or an independent filing) as of this addition - entered
-# from a user-supplied reference table with no citation trail. Treat as
-# provisional pending a real source check before relying on it for
-# anything beyond descriptive UI text.
+# Customers are NOT held here. A "customers" field carrying bare
+# major-customer names was removed 2026-10-02: it was never used by any
+# fetch or matching logic in this service, and the classification side
+# now holds the same relationships with each company's own disclosed
+# share of sales (signal-detection-agent's
+# pipeline/japan_company_profile.py). Customer data belongs with the
+# classifier that reads it, not duplicated into the fetcher's universe
+# where it would drift out of sync unnoticed.
 JAPAN_TICKER_UNIVERSE: list[dict[str, str]] = [
-    {"code": "6857", "company": "Advantest", "native_name": "アドバンテスト", "exchange": "TSE", "fiscal_year_end": "03-31", "customers": ["TSMC", "Samsung Electronics", "AMD", "Nvidia", "Intel"]},
-    {"code": "8035", "company": "Tokyo Electron", "native_name": "東京エレクトロン", "exchange": "TSE", "fiscal_year_end": "03-31", "customers": ["TSMC", "Samsung Electronics", "Intel", "SK Hynix", "Micron Technology"]},
-    {"code": "6146", "company": "Disco", "native_name": "ディスコ", "exchange": "TSE", "fiscal_year_end": "03-31", "customers": ["TSMC", "Samsung Electronics", "Texas Instruments", "Lumileds", "SMIC"]},
-    {"code": "6920", "company": "Lasertec", "native_name": "レーザーテック", "exchange": "TSE", "fiscal_year_end": "06-30", "customers": ["TSMC", "Samsung Electronics", "Intel"]},
-    {"code": "5803", "company": "Fujikura", "native_name": "フジクラ", "exchange": "TSE", "fiscal_year_end": "03-31", "customers": ["Apple"]},
-    {"code": "4063", "company": "Shin-Etsu Chemical", "native_name": "信越化学工業", "short_name": "信越化学", "exchange": "TSE", "fiscal_year_end": "03-31", "customers": ["TSMC", "Samsung Electronics", "Micron Technology", "Intel"]},
-    {"code": "3436", "company": "SUMCO", "native_name": "SUMCO", "exchange": "TSE", "fiscal_year_end": "12-31", "customers": ["TSMC", "Samsung Electronics", "Kioxia", "Intel", "SK Hynix"]},
-    {"code": "4062", "company": "Ibiden", "native_name": "イビデン", "exchange": "TSE", "fiscal_year_end": "03-31", "customers": ["Intel", "Samsung Electronics", "Nvidia", "Apple"]},
-    {"code": "7735", "company": "Screen Holdings", "native_name": "SCREENホールディングス", "short_name": "SCREEN", "exchange": "TSE", "fiscal_year_end": "03-31", "customers": ["TSMC", "Intel", "Samsung Electronics"]},
-    {"code": "6525", "company": "Kokusai Electric", "native_name": "KOKUSAI ELECTRIC", "exchange": "TSE", "fiscal_year_end": "03-31", "customers": ["Intel", "Samsung Electronics", "SK Hynix", "Micron Technology"]},
-    {"code": "4186", "company": "Tokyo Ohka Kogyo", "native_name": "東京応化工業", "short_name": "東京応化", "exchange": "TSE", "fiscal_year_end": "03-31", "customers": ["Intel", "TSMC", "Samsung Electronics"]},
-    {"code": "4004", "company": "Resonac Holdings", "native_name": "レゾナック・ホールディングス", "short_name": "レゾナック", "exchange": "TSE", "fiscal_year_end": "12-31", "customers": ["TSMC", "Samsung Electronics", "Intel"]},
-    {"code": "6315", "company": "Towa", "native_name": "TOWA", "exchange": "TSE", "fiscal_year_end": "03-31", "customers": ["SK Hynix", "TSMC", "Samsung Electronics"]},
-    {"code": "6981", "company": "Murata Manufacturing", "native_name": "村田製作所", "exchange": "TSE", "fiscal_year_end": "03-31", "customers": ["Apple", "Samsung Electronics"]},
-    {"code": "6762", "company": "TDK", "native_name": "TDK", "exchange": "TSE", "fiscal_year_end": "03-31", "customers": ["Apple", "Samsung Electronics"]},
-    {"code": "285A", "company": "Kioxia", "native_name": "キオクシア", "exchange": "TSE", "fiscal_year_end": "03-31", "customers": ["Apple", "Dell", "HP"]},
-    {"code": "6723", "company": "Renesas Electronics", "native_name": "ルネサスエレクトロニクス", "short_name": "ルネサス", "exchange": "TSE", "fiscal_year_end": "12-31", "customers": ["Toyota", "Honda", "Denso"]},
-    {"code": "6501", "company": "Hitachi", "native_name": "日立製作所", "exchange": "TSE", "fiscal_year_end": "03-31", "customers": ["Microsoft", "AWS"]},
-    {"code": "9984", "company": "SoftBank Group", "native_name": "ソフトバンクグループ", "exchange": "TSE", "fiscal_year_end": "03-31", "customers": ["AMD", "AWS", "Alphabet", "Intel", "MediaTek", "Nvidia", "Qualcomm", "Samsung Electronics"]},
+    {"code": "6857", "company": "Advantest", "native_name": "アドバンテスト", "exchange": "TSE", "fiscal_year_end": "03-31"},
+    {"code": "8035", "company": "Tokyo Electron", "native_name": "東京エレクトロン", "exchange": "TSE", "fiscal_year_end": "03-31"},
+    {"code": "6146", "company": "Disco", "native_name": "ディスコ", "exchange": "TSE", "fiscal_year_end": "03-31"},
+    {"code": "6920", "company": "Lasertec", "native_name": "レーザーテック", "exchange": "TSE", "fiscal_year_end": "06-30"},
+    {"code": "5803", "company": "Fujikura", "native_name": "フジクラ", "exchange": "TSE", "fiscal_year_end": "03-31"},
+    {"code": "4063", "company": "Shin-Etsu Chemical", "native_name": "信越化学工業", "short_name": "信越化学", "exchange": "TSE", "fiscal_year_end": "03-31"},
+    {"code": "3436", "company": "SUMCO", "native_name": "SUMCO", "exchange": "TSE", "fiscal_year_end": "12-31"},
+    {"code": "4062", "company": "Ibiden", "native_name": "イビデン", "exchange": "TSE", "fiscal_year_end": "03-31"},
+    {"code": "7735", "company": "Screen Holdings", "native_name": "SCREENホールディングス", "short_name": "SCREEN", "exchange": "TSE", "fiscal_year_end": "03-31"},
+    {"code": "6525", "company": "Kokusai Electric", "native_name": "KOKUSAI ELECTRIC", "exchange": "TSE", "fiscal_year_end": "03-31"},
+    {"code": "4186", "company": "Tokyo Ohka Kogyo", "native_name": "東京応化工業", "short_name": "東京応化", "exchange": "TSE", "fiscal_year_end": "03-31"},
+    {"code": "4004", "company": "Resonac Holdings", "native_name": "レゾナック・ホールディングス", "short_name": "レゾナック", "exchange": "TSE", "fiscal_year_end": "12-31"},
+    {"code": "6315", "company": "Towa", "native_name": "TOWA", "exchange": "TSE", "fiscal_year_end": "03-31"},
+    {"code": "6981", "company": "Murata Manufacturing", "native_name": "村田製作所", "exchange": "TSE", "fiscal_year_end": "03-31"},
+    {"code": "6762", "company": "TDK", "native_name": "TDK", "exchange": "TSE", "fiscal_year_end": "03-31"},
+    {"code": "285A", "company": "Kioxia", "native_name": "キオクシア", "exchange": "TSE", "fiscal_year_end": "03-31"},
+    {"code": "6723", "company": "Renesas Electronics", "native_name": "ルネサスエレクトロニクス", "short_name": "ルネサス", "exchange": "TSE", "fiscal_year_end": "12-31"},
+    {"code": "6501", "company": "Hitachi", "native_name": "日立製作所", "exchange": "TSE", "fiscal_year_end": "03-31"},
+    {"code": "9984", "company": "SoftBank Group", "native_name": "ソフトバンクグループ", "exchange": "TSE", "fiscal_year_end": "03-31"},
 ]
 
 # irbank_financials: earnings-forecast revision history via IRBANK
