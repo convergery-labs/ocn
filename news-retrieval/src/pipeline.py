@@ -4895,6 +4895,20 @@ _EDINET_DOC_TYPE_EXTRAORDINARY = ("180", "190")
 # rather than the first (a per-holder breakdown, which undercounts a joint
 # filing).
 _EDINET_HOLDING_RATIO_ELEMENT_ID = "jplvh_cor:HoldingRatioOfShareCertificatesEtc"
+# The ratio stated in the holder's PREVIOUS report, which a Japanese
+# change report (変更報告書) must carry alongside the current one -
+# confirmed live across six real filings. Without it a card can only
+# say "12.8% stake changed" and not whether that is a buy or a sell;
+# Toshiba's real Kioxia filing is 14.06% -> 12.84%, a sell-down.
+# Already inside the CSV this function downloads, so reading it costs
+# no extra request.
+_EDINET_HOLDING_RATIO_PREVIOUS_ELEMENT_ID = (
+    "jplvh_cor:HoldingRatioOfShareCertificatesEtcPerLastReport"
+)
+# The filing's own stated reason, e.g. 株券等保有割合の1%以上の減少.
+_EDINET_CHANGE_REPORT_REASON_ELEMENT_ID = (
+    "jplvh_cor:ReasonForFilingChangeReportCoverPage"
+)
 
 _edinet_rate_lock = threading.Lock()
 _edinet_last_call = [0.0]
@@ -4909,10 +4923,18 @@ def _edinet_rate_sleep() -> None:
         _edinet_last_call[0] = time.monotonic()
 
 
-def _fetch_edinet_holding_ratio(doc_id: str, api_key: str) -> float | None:
-    """Fetch a docTypeCode-350 filing's CSV export (type=5) and extract the
-    holding-ratio percentage. Returns None on any failure or if the field
-    is not found (fail-open, same convention as every other Japan fetcher).
+def _fetch_edinet_holding_ratio(
+    doc_id: str, api_key: str,
+) -> tuple[float | None, float | None]:
+    """Fetch a docTypeCode-350 filing's CSV export (type=5) and return
+    (holding_ratio, previous_holding_ratio) as fractions.
+
+    The previous ratio is what makes a change report readable as a buy
+    or a sell. It is None for an initial 大量保有報告書, which has no
+    prior position, and for any filing that omits the element.
+
+    Returns (None, None) on any failure (fail-open, same convention as
+    every other Japan fetcher).
     """
     _edinet_rate_sleep()
     try:
@@ -4928,26 +4950,50 @@ def _fetch_edinet_holding_ratio(doc_id: str, api_key: str) -> float | None:
         with zipfile.ZipFile(BytesIO(resp.content)) as zf:
             names = [n for n in zf.namelist() if n.endswith(".csv")]
             if not names:
-                return None
+                return (None, None)
             raw = zf.read(names[0])
         text = raw.decode("utf-16")
     except Exception as exc:
         logger.warning("[EDINET] CSV export fetch failed doc_id=%s error=%s", doc_id, exc)
-        return None
+        return (None, None)
 
-    ratio: float | None = None
+    # Walk the rows in order, keeping each holding ratio next to the
+    # prior-report ratio that follows it. A filing with co-filers
+    # (joint holders) states one pair per filer and THEN repeats every
+    # current value again - confirmed across six real filings. So the
+    # last current value is the last co-filer's, not the aggregate:
+    # taking it is how this function used to report 5.9% for a filing
+    # whose real total was 8.24%. The last COMPLETE pair is the
+    # aggregate, which is the figure the card means by "the stake".
+    pairs: list[tuple[float, float | None]] = []
+    pending: float | None = None
     for line in text.split("\n"):
-        if not line.startswith(f'"{_EDINET_HOLDING_RATIO_ELEMENT_ID}"'):
-            continue
         fields = line.strip().split("\t")
         if len(fields) < 9:
             continue
-        value = fields[8].strip('"')
-        try:
-            ratio = float(value)
-        except ValueError:
-            continue
-    return ratio
+        element = fields[0].strip('"')
+        raw = fields[8].strip('"')
+        if element == _EDINET_HOLDING_RATIO_ELEMENT_ID:
+            try:
+                pending = float(raw)
+            except ValueError:
+                pending = None
+        elif element == _EDINET_HOLDING_RATIO_PREVIOUS_ELEMENT_ID and pending is not None:
+            # An initial report writes "－" here - a real "no prior
+            # holding", not a parse failure, so the pair is kept with
+            # a None previous rather than dropped.
+            try:
+                previous: float | None = float(raw)
+            except ValueError:
+                previous = None
+            pairs.append((pending, previous))
+            pending = None
+
+    if pairs:
+        return pairs[-1]
+    # No pair at all: fall back to the last bare current value, which
+    # is what a filing with no prior-report line looks like.
+    return (pending, None) if pending is not None else (None, None)
 
 
 # jpcrp-esr_cor:ReasonForFilingTextBlock ("提出理由") - confirmed live in a
@@ -5088,7 +5134,7 @@ def _fetch_one_edinet_date(
         }
 
         if mode == "shareholding":
-            ratio = _fetch_edinet_holding_ratio(doc_id, api_key)
+            ratio, ratio_previous = _fetch_edinet_holding_ratio(doc_id, api_key)
             articles.append({
                 # EDINET's docDescription is a generic report-type label
                 # (e.g. "大量保有報告書"), not distinguished by filer/issuer -
@@ -5114,6 +5160,11 @@ def _fetch_one_edinet_date(
                     **base_metadata,
                     "issuer_edinet_code": join_code,
                     "holding_ratio": ratio,
+                    # The ratio the holder's PREVIOUS report stated, so
+                    # a change report reads as a buy or a sell rather
+                    # than a bare new number. None for an initial
+                    # report, which has no prior position.
+                    "holding_ratio_previous": ratio_previous,
                     # EDINET's own report-type label, kept as a real field
                     # rather than only folded into the title above. It
                     # carries two facts nothing else on the row does:

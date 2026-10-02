@@ -51,7 +51,10 @@ qdrant_storage/
 *.tfstate
 *.tfstate.backup
 *.tfplan
+**/tfplan
 infra/staging/terraform.tfvars
-infra/production/terraform.tfvars.claude/worktrees/
+infra/production/terraform.tfvars
+
+.claude/worktrees/
 .claude/
 ROADMAP.md

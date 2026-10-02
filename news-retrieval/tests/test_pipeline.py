@@ -743,3 +743,90 @@ def test_title_dedup_only_applied_for_configured_domains() -> None:
         pipeline_module.run(domain_slug="company_news", days_back=7)
 
     mock_dedup.assert_not_called()
+
+
+class TestEdinetHoldingRatioPairs:
+    """A large-shareholding filing states the holder's PREVIOUS ratio
+    beside the current one, so a change report can be read as a buy or
+    a sell. The parser used to keep only the last current value and
+    ignore the prior entirely.
+
+    Shapes here are transcribed from six real filings fetched live
+    (S100Z25L, S100Z2O2, S100YNFG, S100Z0FE, S100Z0BQ, S100YZWG).
+    """
+
+    CUR = "jplvh_cor:HoldingRatioOfShareCertificatesEtc"
+    PRV = "jplvh_cor:HoldingRatioOfShareCertificatesEtcPerLastReport"
+
+    def _csv(self, rows):
+        """Build the tab-separated, 9-column shape the real export has."""
+        return "\n".join(
+            '"%s"\t"ctx"\t""\t""\t""\t""\t""\t""\t"%s"' % (el, val)
+            for el, val in rows)
+
+    def _parse(self, text, monkeypatch):
+        """Drive the real parser over `text` with the network stubbed."""
+        import io, zipfile
+        import src.pipeline as p
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("x.csv", text.encode("utf-16"))
+        payload = buf.getvalue()
+
+        class _R:
+            status_code = 200
+            content = payload
+            def raise_for_status(self): pass
+
+        monkeypatch.setattr(p.httpx, "get", lambda *a, **k: _R())
+        monkeypatch.setattr(p, "_edinet_rate_sleep", lambda: None)
+        return p._fetch_edinet_holding_ratio("S1", "key")
+
+    def test_single_pair_change_report(self, monkeypatch):
+        """Toshiba/Kioxia S100Z25L: 14.06% -> 12.84%, a real sell-down."""
+        text = self._csv([(self.CUR, "0.1284"), (self.PRV, "0.1406")])
+        assert self._parse(text, monkeypatch) == (0.1284, 0.1406)
+
+    def test_co_filer_filing_takes_the_aggregate_not_the_last_filer(self, monkeypatch):
+        """S100YZWG lists each co-filer, then repeats every current
+        value. The old parser returned the last bare value (0.0824 here
+        only by luck of ordering); on S100Z2O2 that logic reported
+        5.94% for a filing whose aggregate pair is the last COMPLETE
+        one. The last pair is the aggregate."""
+        text = self._csv([
+            (self.CUR, "0.0217"), (self.PRV, "0.0286"),
+            (self.CUR, "0.0607"), (self.PRV, "0.0645"),
+            (self.CUR, "0.0824"), (self.PRV, "0.0931"),
+            (self.CUR, "0.0217"), (self.CUR, "0.0607"), (self.CUR, "0.0824"),
+        ])
+        assert self._parse(text, monkeypatch) == (0.0824, 0.0931)
+
+    def test_initial_report_has_no_previous(self, monkeypatch):
+        """S100Z0FE is a 大量保有報告書 - the prior field is "－"."""
+        text = self._csv([
+            (self.CUR, "0.0150"), (self.PRV, "－"),
+            (self.CUR, "0.0384"), (self.PRV, "－"),
+            (self.CUR, "0.0535"), (self.PRV, "－"),
+        ])
+        assert self._parse(text, monkeypatch) == (0.0535, None)
+
+    def test_negative_current_value_is_kept(self, monkeypatch):
+        """S100Z0BQ really carries -0.0001 for one co-filer."""
+        text = self._csv([
+            (self.CUR, "-0.0001"), (self.PRV, "0.0119"),
+            (self.CUR, "0.0614"), (self.PRV, "0.0722"),
+        ])
+        assert self._parse(text, monkeypatch) == (0.0614, 0.0722)
+
+    def test_no_pair_falls_back_to_the_bare_current(self, monkeypatch):
+        text = self._csv([(self.CUR, "0.0501")])
+        assert self._parse(text, monkeypatch) == (0.0501, None)
+
+    def test_unreadable_export_is_fail_open(self, monkeypatch):
+        import src.pipeline as p
+        def _boom(*a, **k):
+            raise OSError("network down")
+        monkeypatch.setattr(p.httpx, "get", _boom)
+        monkeypatch.setattr(p, "_edinet_rate_sleep", lambda: None)
+        assert p._fetch_edinet_holding_ratio("S1", "key") == (None, None)
