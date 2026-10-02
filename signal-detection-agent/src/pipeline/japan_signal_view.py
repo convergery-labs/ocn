@@ -116,7 +116,11 @@ def signal_implication(meta: dict[str, Any]) -> str:
             return "Positive"
         if pct < 0:
             return "Negative"
-        return "Mixed"
+        # "Mixed" asserts offsetting movement. An unchanged forecast
+        # has no movement at all to offset - the filing establishes no
+        # direction, which is what "Unclear" means here and what every
+        # other direction-less row returns.
+        return "Unclear"
 
     # Margin-percentage guidance (see _MARGIN_BASED_CODES in the
     # classifier): there is no previous forecast to measure against, but
@@ -334,7 +338,29 @@ def _press_subject(meta: dict[str, Any]) -> str | None:
     company = meta.get("company") or ""
     head = company.split()[0] if company else ""
     if len(head) >= 3 and subject.lower().startswith(head.lower()):
-        subject = subject[len(head):].lstrip(" ,-–—'’s")
+        rest = subject[len(head):]
+        # A legal suffix belongs to the name being removed. Stripping
+        # only "Hitachi" from "Hitachi, Ltd.'s next-generation factory"
+        # left ", Ltd.'s ...", which rendered as "Ltd. delivers ...".
+        for suffix in (", Ltd.", " Ltd.", ", Inc.", " Inc.", ", Co., Ltd.",
+                       " Corporation", " Holdings", " Chemical"):
+            if rest.lower().startswith(suffix.lower()):
+                rest = rest[len(suffix):]
+                break
+        # A possessive "'s" is removed as a unit, never with lstrip:
+        # a character class containing "s" also eats the verb's own
+        # first letter, turning "Renesas starts operation" into
+        # "tarts operation". Pre-existing bug on the press path too.
+        for poss in ("'s", "’s"):
+            if rest.startswith(poss):
+                rest = rest[len(poss):]
+                break
+        subject = rest.lstrip(" ,-–—")
+    # A leading "to " is KEPT. Stripping it reads better in isolation
+    # ("Close Takasaki factory") but loses the tense: "Renesas to
+    # close Takasaki factory" is an announced plan, and the bare
+    # imperative states it as done. The card prints the company above
+    # the headline, so "To close Takasaki factory" still parses.
     return subject or None
 
 
@@ -396,7 +422,17 @@ def _press_headline(subject: str, meta: dict[str, Any]) -> str:
             quoted, after = rest.split(close_q, 1)
             quoted = quoted.strip()
             if quoted:
-                article = "" if before.rstrip().endswith((" a", " an", " the")) else "a "
+                # The article belongs to a noun the sentence is acting
+                # ON ("develops a 12-inch SiC substrate"). A quoted
+                # term that OPENS the headline is its subject instead,
+                # and prefixing it produced "A Physical AI implemented
+                # in manufacturing sites" - an article attached to
+                # nothing. Nothing before the quote means no article.
+                leading = not before.strip()
+                article = (
+                    "" if leading or before.rstrip().endswith((" a", " an", " the"))
+                    else "a "
+                )
                 subject = f"{before}{article}{quoted}{after}"
             break
 
@@ -431,7 +467,19 @@ def _headline(signal_type: str, meta: dict[str, Any]) -> str:
         revised = meta.get("margin_revised_pct")
         reference = meta.get("margin_reference_prior_year_actual_pct")
         if revised is not None and reference is not None:
-            return f"{'Raised' if revised > reference else 'Cut'} operating margin guidance"
+            # "Raised"/"Cut" claims a move against a PRIOR FORECAST.
+            # This comparison is against last year's ACTUAL margin -
+            # the field says so - and no prior guidance figure exists
+            # on these rows at all, so nothing was raised or cut.
+            # State the guidance and its distance from last year, which
+            # is what the two numbers actually support. The sibling
+            # _metric branch already labels it honestly as "vs. last
+            # year's margin"; this makes the headline agree.
+            gap = round(revised - reference, 1)
+            if gap == 0:
+                return "Guided operating margin level with last year"
+            return (f"Guided operating margin {abs(gap)} pts "
+                    f"{'above' if gap > 0 else 'below'} last year")
         return "Revised full-year guidance"
     if signal_type == "progress":
         # Say which way it went, matching the metric's own label -
@@ -461,6 +509,24 @@ def _headline(signal_type: str, meta: dict[str, Any]) -> str:
             return f"Industry equipment billings {'rose' if yoy > 0 else 'fell'} year-on-year"
         return "Industry equipment billings reported"
     if signal_type == "capacity":
+        # Was this constant on all 72 capex rows, while the row's own
+        # translated_title said what was built and where ("Newly
+        # establishes a production building in the Philippines").
+        # _press_subject already strips the "{company} ({code}): "
+        # prefix and a repeated leading company name; nothing about it
+        # is press-specific, and both row types store the same field.
+        subject = _press_subject(meta)
+        if subject:
+            # Deliberately NOT past-tensed. The press path can do that
+            # because a report describes something that happened; a
+            # capex title often states an intention ("Shin-Etsu to
+            # build a new factory in China"), and forcing past tense
+            # turned that into "Built a new factory in China" - a
+            # plant that does not exist yet, asserted as fact on a
+            # trading card. Awkward phrasing is the lesser error.
+            if subject[:1].islower():
+                subject = subject[0].upper() + subject[1:]
+            return subject
         return "Announced a capacity investment"
     if signal_type == "buyback":
         return "Announced a share buyback programme"
@@ -475,10 +541,31 @@ def _headline(signal_type: str, meta: dict[str, Any]) -> str:
         code = meta.get("signal_reason_code") or ""
         pct = _format_pct(meta.get("holding_pct"))
         stake = f"{pct} stake" if pct else "stake"
-        if "passive" in code:
+        previous = meta.get("holding_pct_previous")
+        current = meta.get("holding_pct")
+        moved = (previous is not None and current is not None
+                 and current != previous)
+        if "passive" in code and not moved:
             what = f"Passive {stake} filed"
+        elif "passive" in code:
+            # A passive holder's stake still moves, and the filing
+            # states both ends of it. Reporting only "Passive 8.2%
+            # stake filed" hid a real 9.3% -> 8.2% sell-down, while
+            # the card's own checkpoint already said "keeps selling
+            # down" - the two halves disagreed.
+            what = (f"Passive stake {'raised' if current > previous else 'cut'} to "
+                    f"{_format_pct(current)} from {_format_pct(previous)}")
         elif "crosses_five_pct" in code:
             what = f"New {stake} crossing 5%"
+        elif moved:
+            # "Stake changed" hid the only thing a reader wants from an
+            # ownership row. The filing states the holder's previous
+            # ratio, so say which way it moved.
+            # `stake` already reads "12.8% stake", so reuse the bare
+            # percentage here - "Cut to 12.8% stake from 14.1%" puts
+            # the noun in the middle of the two figures.
+            what = (f"{'Raised' if current > previous else 'Cut'} stake to "
+                    f"{_format_pct(current)} from {_format_pct(previous)}")
         else:
             what = f"{stake.capitalize()} changed"
         # Verb-first and without the issuer's name: the card prints the
@@ -508,7 +595,22 @@ def _headline(signal_type: str, meta: dict[str, Any]) -> str:
             return "Press reported a checkable fact"
         return "Press reported a checkable fact"
     if signal_type == "disclosure":
-        return "Filed a corporate disclosure"
+        # Was the constant "Filed a corporate disclosure" on every
+        # row - SoftBank's OpenAI investment and Ibiden's articles of
+        # incorporation carried the same headline, while the filing's
+        # own title sat unread on the row. `disclosure_action` is the
+        # event named by that title (or, for an EDINET-only filing, by
+        # the ordinance clause it cites).
+        #
+        # Verb-first and without the company name, like every other
+        # type here: the card prints the company itself, and a summary
+        # strip composing "{company} {headline}" would repeat it.
+        # The prompt asks for a noun phrase, so "Filed {phrase}" is
+        # the verb-first form in every case - no verb detection, which
+        # would be speculative handling for a shape the prompt does
+        # not produce.
+        action = meta.get("disclosure_action")
+        return f"Filed {action}" if action else "Filed a corporate disclosure"
     return "Classified event"
 
 
@@ -564,7 +666,7 @@ def _metric(signal_type: str, meta: dict[str, Any]) -> dict[str, Any]:
         if revised is not None and reference is not None:
             return {"value": round(revised - reference, 1), "unit": "pts",
                     "text": None, "label": "vs. last year's margin"}
-        return {"value": None, "unit": None, "text": "Revised", "label": "guidance"}
+        return {"value": None, "unit": None, "text": None, "label": "guidance"}
     if signal_type == "progress":
         progress = meta.get("progress_pct")
         elapsed = meta.get("fiscal_year_elapsed_pct")
@@ -583,27 +685,27 @@ def _metric(signal_type: str, meta: dict[str, Any]) -> dict[str, Any]:
             gap = round(progress - elapsed, 1)
             return {"value": gap, "unit": "pts", "text": None,
                     "label": "ahead of schedule" if gap >= 0 else "behind schedule"}
-        return {"value": None, "unit": None, "text": "Results", "label": "vs. target"}
+        return {"value": None, "unit": None, "text": None, "label": "vs. target"}
     if signal_type == "industry":
         yoy = meta.get("yoy_pct")
         if yoy is not None:
             return {"value": yoy, "unit": "%", "text": None, "label": "industry sales, YoY"}
-        return {"value": None, "unit": None, "text": "Industry", "label": "billings"}
+        return {"value": None, "unit": None, "text": None, "label": "billings"}
     if signal_type == "buyback":
         pct = meta.get("buyback_pct_of_shares_outstanding")
         if pct is not None:
             return {"value": pct, "unit": "%", "text": None, "label": "of shares outstanding"}
-        return {"value": None, "unit": None, "text": "Buyback", "label": "announced"}
+        return {"value": None, "unit": None, "text": None, "label": "announced"}
     if signal_type == "ownership":
         pct = meta.get("holding_pct")
         if pct is not None:
             return {"value": pct, "unit": "%", "text": None, "label": "holding reported"}
-        return {"value": None, "unit": None, "text": "5% holding", "label": "reported"}
+        return {"value": None, "unit": None, "text": None, "label": "reported"}
     if signal_type == "capacity":
         pct = meta.get("capex_pct_of_total_assets")
         if pct is not None:
             return {"value": pct, "unit": "%", "text": None, "label": "of total assets"}
-        return {"value": None, "unit": None, "text": "Capacity", "label": "investment"}
+        return {"value": None, "unit": None, "text": None, "label": "investment"}
     if signal_type == "watching":
         # How long the company has been silent is the headline number
         # here, even though no filing is being reported.
@@ -611,14 +713,14 @@ def _metric(signal_type: str, meta: dict[str, Any]) -> dict[str, Any]:
         if days is not None:
             return {"value": days, "unit": "days", "text": None,
                     "label": "since last revision"}
-        return {"value": None, "unit": None, "text": "Quiet", "label": "no recent revision"}
+        return {"value": None, "unit": None, "text": None, "label": "no recent revision"}
     if signal_type == "missing":
         # A slot that did not produce a filing has no number of its own.
-        return {"value": None, "unit": None, "text": "No update", "label": "expected window passed"}
+        return {"value": None, "unit": None, "text": None, "label": "expected window passed"}
     if signal_type == "press":
-        return {"value": None, "unit": None, "text": "Press", "label": "report"}
+        return {"value": None, "unit": None, "text": None, "label": "report"}
     if signal_type == "disclosure":
-        return {"value": None, "unit": None, "text": "Disclosure", "label": "corporate action"}
+        return {"value": None, "unit": None, "text": None, "label": "corporate action"}
     return {"value": None, "unit": None, "text": None, "label": ""}
 
 
@@ -626,6 +728,14 @@ def _unusual(meta: dict[str, Any]) -> str | None:
     """How far this sits outside the company's own normal range."""
     pct = meta.get("operating_profit_pct_change")
     median = meta.get("habit_typical_size_pct")
+    # An unchanged forecast is not a revision, so it cannot be "in
+    # line with this company's usual cut" - which is what a bare
+    # `pct > 0` test produced at exactly 0.0, on a card whose own
+    # headline said "Left full-year profit forecast unchanged". Zero
+    # is also not 0.0x the usual size in any meaningful sense: there
+    # is nothing to compare, so no comparison is offered.
+    if pct == 0:
+        return None
     if pct is not None and median:
         multiple = abs(pct) / median
         word = "raise" if pct > 0 else "cut"
@@ -670,9 +780,15 @@ def _unusual(meta: dict[str, Any]) -> str | None:
         basis = ("filed under the passive-investor regime" if "passive" in code
                  else "filed on an active basis")
         return f"A {_format_pct(holding)} stake, {basis}."
-    if meta.get("filed_in_english"):
-        return ("The company published this filing in English as well as Japanese, "
-                "which it does not do for most disclosures.")
+    # Filing in English was once reported here as unusual. It is not:
+    # 56% of stored disclosures carry an English version, and for
+    # SoftBank, Murata and Advantest it is every one. The line also
+    # asserted the company "does not do this for most disclosures",
+    # which was never measured and is false for this universe. And
+    # language is a publishing decision about who a filing is meant to
+    # reach - it says nothing about the business, which is exactly why
+    # the classifier refuses to let it alter the tier. Promoting it to
+    # "Why it's unusual" contradicted that.
 
     # Everything else has no established comparison. "Why it's unusual"
     # must answer that question or stay empty - a line explaining why
@@ -690,7 +806,13 @@ def _caveat(signal_type: str, meta: dict[str, Any]) -> str | None:
         ratio = meta.get("hit_ratio")
         month = meta.get("expected_month")
         if ratio is not None and month:
-            return (f"Filed in month {month} in {round(ratio * 100)}% of past years. "
+            # expected_month is an int, so interpolating it raw read
+            # "Filed in month 7" - a field name leaking onto the card.
+            try:
+                month_name = date(2000, int(month), 1).strftime("%B")
+            except (TypeError, ValueError):
+                month_name = str(month)
+            return (f"Filed in {month_name} in {round(ratio * 100)}% of past years. "
                     f"An absence, not a result - not good or bad on its own.")
     if signal_type == "industry":
         return "A 3-month moving average, not a single month's billings."
@@ -726,10 +848,24 @@ def _caveat(signal_type: str, meta: dict[str, Any]) -> str | None:
     if signal_type == "capacity" and meta.get("capex_investment_jpy") is None:
         return ("The announcement states no investment figure, so its scale "
                 "against the company's balance sheet is unknown.")
+    # A margin-based row (Renesas) keeps its habit under margin_*
+    # keys, so the unprefixed lookups below all came back None and
+    # every one of its cards claimed "No past revisions on record"
+    # while its own signal said the gap was "within its own usual
+    # range" - a flat contradiction on the same card, driven by a
+    # namespace split rather than by the data. Read whichever pair the
+    # row actually carries.
+    is_margin_row = meta.get("margin_revised_pct") is not None
+    typical = meta.get(
+        "margin_habit_typical_gap_pts" if is_margin_row else "habit_typical_size_pct")
+    trusted = meta.get(
+        "margin_habit_is_trusted" if is_margin_row else "habit_is_trusted")
+    samples = meta.get(
+        "margin_habit_sample_size" if is_margin_row else "habit_sample_size")
+
     if (signal_type in ("forecast", "progress")
-            and meta.get("habit_typical_size_pct") is None
-            and meta.get("habit_is_trusted") is not False):
-        samples = meta.get("habit_sample_size")
+            and typical is None
+            and trusted is not False):
         if samples:
             return (f"Only {samples} past revision{'s' if samples != 1 else ''} on "
                     f"record - too few to say what is usual for this company.")
@@ -908,8 +1044,24 @@ def _source_url(meta: dict[str, Any], source_id: str | None,
 _QUARTER_ENDS = ((3, 31), (6, 30), (9, 30), (12, 31))
 
 
+# How long after a quarter closes its results are published. Japanese
+# issuers announce roughly four to six weeks out; 45 days sits inside
+# that and is only used to decide WHICH period is still pending, never
+# published as a date - see the `date: None` contract below.
+_RESULTS_ANNOUNCEMENT_LAG_DAYS = 45
+
+
 def _next_quarter_end(fiscal_year_end: str | None) -> tuple[str, str] | None:
-    """The company's next reporting period end, and which quarter it is.
+    """The period whose results will next be published, and which
+    quarter it is.
+
+    This is the most recent quarter that has ENDED but is not yet
+    reported - not the next quarter to start. The two differ for all
+    but one day of the year, and the old `end > today` test picked the
+    latter: on 2 October it named the quarter ending 31 December,
+    skipping the 30 September quarter whose results land in weeks.
+    A reader asking "when will I know" was pointed a full quarter too
+    far out.
 
     Japanese issuers announce roughly four to six weeks after a quarter
     closes, but that is a convention rather than a scheduled date, and
@@ -917,7 +1069,7 @@ def _next_quarter_end(fiscal_year_end: str | None) -> tuple[str, str] | None:
     returned and the announcement date is left unset - the contract
     renders that as "Date not confirmed", which is the true state.
     """
-    from datetime import date
+    from datetime import date, timedelta
     if not fiscal_year_end:
         return None
     try:
@@ -926,12 +1078,18 @@ def _next_quarter_end(fiscal_year_end: str | None) -> tuple[str, str] | None:
         return None
 
     today = date.today()
-    for month, day in _QUARTER_ENDS:
-        end = date(today.year, month, day)
-        if end > today:
-            break
-    else:
-        end = date(today.year + 1, *_QUARTER_ENDS[0])
+    # Walk back from the most recent quarter end. Once a period's
+    # results are old enough to have been published, the pending one
+    # is the quarter after it.
+    candidates = [date(y, m, d)
+                  for y in (today.year - 1, today.year, today.year + 1)
+                  for m, d in _QUARTER_ENDS]
+    ended = [c for c in candidates if c <= today]
+    end = ended[-1] if ended else candidates[0]
+    if today - end > timedelta(days=_RESULTS_ANNOUNCEMENT_LAG_DAYS):
+        # Those results are out; the next period is the one pending.
+        later = [c for c in candidates if c > end]
+        end = later[0] if later else end
     # Quarter number counted from the company's own fiscal year start,
     # not the calendar - most of this universe closes in March.
     quarter = ((end.month - fy_month - 1) % 12) // 3 + 1
@@ -1114,13 +1272,28 @@ def _checkpoint_tests(
             meta.get("translated_filer_name") or meta.get("filer_name")
         )
         pct = _format_pct(meta.get("holding_pct"))
-        if holder and pct:
-            return (f"{holder} files a change report raising its {pct} stake",
+        if not holder:
+            return (None, None)
+        # Both arms used to presume the holder was building a position
+        # - "files a change report raising its stake" - which is wrong
+        # for exactly the rows where direction matters most: Toshiba
+        # cut Kioxia from 14.1% to 12.8%. Where the filing states a
+        # previous ratio the direction is known, so the test is
+        # whether that move continues or reverses.
+        previous = meta.get("holding_pct_previous")
+        current = meta.get("holding_pct")
+        if previous is not None and current is not None and current != previous:
+            if current > previous:
+                return (f"{holder} files again with a larger stake",
+                        f"{holder} sells back down, or stops filing")
+            return (f"{holder} keeps selling down, or exits below 5%",
+                    f"{holder} buys back above {pct}" if pct
+                    else f"{holder} buys back in")
+        if pct:
+            return (f"{holder} files a change report moving its {pct} stake",
                     f"{holder}'s stake falls back below 5%")
-        if holder:
-            return (f"{holder} files a change report raising its stake",
-                    f"{holder}'s stake falls back below 5%")
-        return (None, None)
+        return (f"{holder} files a change report moving its stake",
+                f"{holder}'s stake falls back below 5%")
 
     if signal_type == "press":
         company = meta.get("company")
@@ -1163,6 +1336,37 @@ def _checkpoint_tests(
     return (None, None)
 
 
+def _is_latest_seaj_period(period: str | None, published: str | None) -> bool:
+    """True when this industry row is the most recent month published.
+
+    `to_jp_signal` shapes one row at a time and never sees its
+    siblings, so "latest" is decided against the calendar instead: the
+    newest month SEAJ can have released by now. Before the 20th the
+    current month's figure is not out yet, so the newest released
+    month is two back; from the 20th it is one back.
+
+    Falls back to True when the period cannot be read - a checkpoint
+    that might be stale is better than silently dropping the newest
+    row because its label was in an unexpected shape.
+    """
+    from datetime import date, datetime
+    text = (period or "").strip()
+    if not text:
+        return True
+    try:
+        row_month = datetime.strptime(text, "%B %Y").date().replace(day=1)
+    except ValueError:
+        return True
+
+    today = date.today()
+    months_back = 1 if today.day >= 20 else 2
+    year, month = today.year, today.month - months_back
+    while month < 1:
+        month += 12
+        year -= 1
+    return row_month >= date(year, month, 1)
+
+
 def _next_seaj_period_label() -> str:
     """The month the next SEAJ release will cover.
 
@@ -1195,10 +1399,16 @@ def _next_checkpoint(meta: dict[str, Any], signal_type: str,
         return None
 
     if signal_type == "industry":
-        # SEAJ publishes monthly, so the next release is the next read
-        # of the same series - the only thing that confirms or revises
-        # this month's figure. The release day is not scheduled
-        # publicly, so only the period is named.
+        # Only the newest month still has an open question. Every
+        # earlier month was already answered by the release that
+        # followed it - May's figure was confirmed or revised in June,
+        # not by the September release this used to point every row
+        # at. The row's own period was never consulted, so May through
+        # August all claimed the same future checkpoint, and the
+        # supports/weakens text promised that September billings could
+        # confirm a May reading, which they cannot.
+        if not _is_latest_seaj_period(meta.get("period"), published):
+            return None
         baseline = _format_pct(meta.get("industry_baseline_avg_yoy_pct"))
         month = _next_seaj_period_label()
         if baseline:
@@ -1210,6 +1420,27 @@ def _next_checkpoint(meta: dict[str, Any], signal_type: str,
         return {
             "event": "Next SEAJ monthly billings release",
             "date": _next_seaj_release(),
+            "periodEnd": None,
+            "supports": supports,
+            "weakens": weakens,
+        }
+
+    if signal_type == "ownership":
+        # A shareholding is tested by the HOLDER's next filing, not by
+        # the issuer's results. This row used to fall through to the
+        # company-results block below, so `event` named the issuer's
+        # quarter while `supports`/`weakens` - already written about
+        # the holder - described a change report that follows no
+        # quarterly cadence. The two halves of one checkpoint
+        # disagreed. A holder files when its stake moves past a
+        # threshold, on no schedule, so there is no date to give.
+        holder = _short_holder_name(
+            meta.get("translated_filer_name") or meta.get("filer_name"))
+        supports, weakens = _checkpoint_tests(signal_type, meta, "")
+        return {
+            "event": (f"{holder}'s next change report" if holder
+                      else "The holder's next change report"),
+            "date": None,
             "periodEnd": None,
             "supports": supports,
             "weakens": weakens,
@@ -1257,7 +1488,15 @@ def to_jp_signal(row: dict[str, Any]) -> dict[str, Any]:
 
     reporting_period = meta.get("period")
     if reporting_period is None and meta.get("period_type"):
-        reporting_period = f"{meta['period_type'].replace('_', ' ').capitalize()}, against full-year target"
+        # The target is NOT always the full year. A filing can measure
+        # Q1 actuals against a fresh H1 target - confirmed live on
+        # Disco 140120260721597097, and the classifier stores the two
+        # separately for exactly that reason. Hardcoding "full-year"
+        # here made the card contradict its own headline: "Ran ahead
+        # of its half-year target" beside "Quarter, against full-year
+        # target". Read the same field the headline reads.
+        actuals = meta["period_type"].replace("_", " ").capitalize()
+        reporting_period = f"{actuals}, against {_target_period_label(meta)} target"
 
     # An empty string is not a reason - the filing had a 理由 heading
     # with nothing under it. Send null so the card omits the quote
@@ -1299,4 +1538,10 @@ def to_jp_signal(row: dict[str, Any]) -> dict[str, Any]:
         # rows name a customer, so a consumer must render [] as "no
         # customer named", never as missing data.
         "entities": row.get("entities") or [],
+        # The filing's title in its original language, so a reader can
+        # check the issuer's own wording against the English on the
+        # card. Null where no separate original exists - a filing
+        # published only in English, or one whose stored title is an
+        # EDINET id and form name rather than the company's prose.
+        "sourceTitle": meta.get("original_language_title"),
     }

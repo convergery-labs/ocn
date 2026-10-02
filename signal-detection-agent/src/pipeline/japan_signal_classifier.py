@@ -85,7 +85,11 @@ from typing import Any
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-from pipeline.japan_companies import JAPAN_TICKER_UNIVERSE, mentioned_customers
+from pipeline.japan_companies import (
+    JAPAN_TICKER_UNIVERSE,
+    company_for,
+    mentioned_customers,
+)
 from pipeline.taiwan_signal_classifier import _get_nested, _translate_one
 
 logger = logging.getLogger(__name__)
@@ -1594,11 +1598,31 @@ def classify_results_against_forecast(
                 "full_year": "full-year",
             }.get(target_period_type or "", "full-year")
 
+            # How much of the year the REPORTED PERIOD covers - not how
+            # much had passed when the company filed. Results are
+            # published weeks after the period closes, so the filing
+            # date overstates it: Ibiden's 2025-10-30 half-year filing
+            # measured 58.4% (30 October's share of an April-March
+            # year) against a period that is exactly 50% of it. The
+            # 8.4-point gap is subtracted from progress everywhere
+            # downstream, and flipped that card from "ahead 3.4" to
+            # "behind 5.0" - the verdict, not just the number.
+            #
+            # A half-year is half a year and a full year is all of it,
+            # by definition, so those need no date arithmetic. Only a
+            # quarter is ambiguous from the type alone (Q1/Q2/Q3 all
+            # say 四半期), so it still falls back to the filing date,
+            # which remains the best available estimate there.
             pub_dt = _article_published_dt(a)
-            elapsed_pct = (
-                _fiscal_year_elapsed_fraction(pub_dt, ticker["fiscal_year_end"]) * 100.0
-                if ticker and pub_dt else None
-            )
+            if period_type == "half_year":
+                elapsed_pct = 50.0
+            elif period_type == "full_year":
+                elapsed_pct = 100.0
+            elif ticker and pub_dt:
+                elapsed_pct = _fiscal_year_elapsed_fraction(
+                    pub_dt, ticker["fiscal_year_end"]) * 100.0
+            else:
+                elapsed_pct = None
 
             habit_key = (code, period_type)
             if habit_key in stored_progress_habits:
@@ -1932,9 +1956,14 @@ def classify_missing_revision(
                 continue  # no consistent pattern - spec's own "present nothing" case
 
             counts[signal] += 1
+            # A month NAME, not its number. "in month 7" leaks the
+            # stored integer onto the card; the view layer's own
+            # caveat was fixed for this and this second site was
+            # missed, so the number still reached a reader.
+            month_name = date(2000, month, 1).strftime("%B")
             reason_text = (
-                f"{company_name} normally files a forecast announcement in month "
-                f"{month} ({len(distinct_years)} of the last "
+                f"{company_name} normally files a forecast announcement in "
+                f"{month_name} ({len(distinct_years)} of the last "
                 f"{as_of.year - min(distinct_years) + 1} years) and has not done so "
                 f"this year - the usual window has now passed."
             )
@@ -2735,8 +2764,7 @@ def classify_capacity_and_ownership(
                 reason_text = (
                     f"{company} announced a capacity investment of approximately "
                     f"{investment_jpy / 100_000_000:,.0f} oku yen ({pct_of_assets:.1f}% of total "
-                    f"assets) - real information, but not large enough relative to this company's "
-                    f"balance sheet to stand out on its own."
+                    f"assets)."
                 )
             else:
                 reason_text = (
@@ -2750,7 +2778,7 @@ def classify_capacity_and_ownership(
             reason_code = "capacity_news_no_figure"
             reason_text = (
                 f"{company} published capacity/investment news with no stated yen figure - real "
-                f"information, but not measurable against the investment-size threshold."
+                f"information; the announcement states no yen figure."
             )
 
         meta["capex_investment_jpy"] = investment_jpy
@@ -2783,6 +2811,12 @@ def classify_capacity_and_ownership(
         issuer_code = meta.get("code")
         holding_ratio = meta.get("holding_ratio")
         holding_pct = holding_ratio * 100.0 if holding_ratio is not None else None
+        # The holder's previous ratio, where the filing states one. A
+        # change report without it reads "12.8% stake changed", which
+        # hides whether the holder bought or sold - the one thing a
+        # reader wants from an ownership row.
+        previous_ratio = meta.get("holding_ratio_previous")
+        previous_pct = previous_ratio * 100.0 if previous_ratio is not None else None
 
         # docTypeCode 350 only exists once a holder has already crossed
         # 5%, so the filing's existence is a genuine crossing event. That
@@ -2797,6 +2831,28 @@ def classify_capacity_and_ownership(
         is_initial = _OWNERSHIP_INITIAL_REPORT_MARKER in doc_description
         is_passive = _OWNERSHIP_PASSIVE_REGIME_MARKER in doc_description
         stake = f"{holding_pct:.1f}%" if holding_pct is not None else "an unstated stake"
+        # The issuer's English name, not its bare TSE code. These
+        # sentences read "in the company (code 3436)" because they were
+        # written before the issuer lookup twelve lines below, and never
+        # updated to use it - the resolved name was already being stored
+        # on the row the whole time.
+        _issuer = _JAPAN_TICKER_BY_CODE.get(issuer_code) or {}
+        issuer_label = _issuer.get("company") or f"the company (code {issuer_code})"
+
+        # "raised to 12.8% from 14.1%" is wrong even when the numbers
+        # are right, so the verb is taken from the comparison, not
+        # assumed. Equal ratios do happen (a filing triggered by a
+        # contract change, not a trade), and read as "held at".
+        if previous_pct is None or holding_pct is None:
+            move_verb, from_clause = "changed its stake in", ""
+        elif holding_pct > previous_pct:
+            move_verb = "raised its stake in"
+            from_clause = f", from {previous_pct:.1f}%"
+        elif holding_pct < previous_pct:
+            move_verb = "cut its stake in"
+            from_clause = f", from {previous_pct:.1f}%"
+        else:
+            move_verb, from_clause = "held its stake in", ""
 
         if is_passive:
             # Declared non-controlling. An index or custody position
@@ -2808,11 +2864,11 @@ def classify_capacity_and_ownership(
             )
             if is_initial:
                 opening = (
-                    f"{company} has newly crossed 5% in the company (code {issuer_code}), "
+                    f"{company} has newly crossed 5% in {issuer_label}, "
                     f"now holding {stake}"
                 )
             else:
-                opening = f"{company} holds {stake} of the company (code {issuer_code})"
+                opening = (f"{company} holds {stake} of {issuer_label}{from_clause}")
             reason_text = (
                 f"{opening} - filed under the passive-investor regime, which is only "
                 f"available to a holder not seeking control."
@@ -2821,7 +2877,7 @@ def classify_capacity_and_ownership(
             signal = "SIGNAL"
             reason_code = "holder_crosses_five_pct"
             reason_text = (
-                f"{company} has newly crossed 5% in the company (code {issuer_code}), "
+                f"{company} has newly crossed 5% in {issuer_label}, "
                 f"now holding {stake} - an initial large-shareholding report filed on an "
                 f"active basis, not under the passive-investor regime."
             )
@@ -2829,12 +2885,14 @@ def classify_capacity_and_ownership(
             signal = "SIGNAL"
             reason_code = "active_holder_changes_stake"
             reason_text = (
-                f"{company} has changed its stake in the company (code {issuer_code}) to "
-                f"{stake} - a change report filed on an active basis, not under the "
+                f"{company} has {move_verb} {issuer_label} to {stake}{from_clause} - "
+                f"a change report filed on an active basis, not under the "
                 f"passive-investor regime."
             )
 
         meta["holding_pct"] = round(holding_pct, 2) if holding_pct is not None else None
+        meta["holding_pct_previous"] = (
+            round(previous_pct, 2) if previous_pct is not None else None)
         meta["signal_reason_code"] = reason_code
         # "company" here is the TARGET company being reported on (issuer_code),
         # not the filer (see "company" local var above, which is
@@ -2885,8 +2943,7 @@ def classify_capacity_and_ownership(
                 reason_text = (
                     f"{company} announced a buyback program authorizing up to "
                     f"{program_limit_shares:,} shares ({pct_of_shares:.1f}% of shares "
-                    f"outstanding) - real information, but not large enough to stand out on "
-                    f"its own."
+                    f"outstanding)."
                 )
             else:
                 reason_text = (
@@ -2898,7 +2955,7 @@ def classify_capacity_and_ownership(
         else:
             signal = "WEAK"
             reason_code = "buyback_announced_no_figure"
-            reason_text = f"{company} announced a buyback program with no parseable share-count cap."
+            reason_text = f"{company} announced a buyback program; it states no share-count cap."
 
         meta["buyback_program_limit_shares"] = program_limit_shares
         meta["buyback_pct_of_shares_outstanding"] = round(pct_of_shares, 2) if pct_of_shares is not None else None
@@ -3402,13 +3459,20 @@ def classify_press(
                     f"reports reliably ahead of formal disclosure."
                 )
             else:
-                reason_code = "press_high_first_tier"
-                # No "- a specific, checkable claim" suffix. That is the
-                # rule that fired, not news: the reader already sees the
-                # High badge, and restating the test adds nothing to
-                # what was reported. Why it qualified belongs in the
-                # caveat, which is where the card explains itself.
-                reason_text = f"{source_label} reports: {story}"
+                # The company has already announced this - that is what
+                # "not unconfirmed" means on a press row, and the card's
+                # own caveat says so ("{company} announced this itself;
+                # {source} is reporting it after the fact"). A High
+                # badge beside that caveat contradicts it: a re-report
+                # carries no information the company's own disclosure
+                # did not already carry, and the disclosure is the
+                # better source. Weak, with the re-report stated.
+                signal = "WEAK"
+                reason_code = "press_report_of_company_announcement"
+                reason_text = (
+                    f"{source_label} reports: {story} - the company had already "
+                    f"announced this."
+                )
         else:
             signal = "WEAK"
             reason_code = "press_weak"
@@ -3483,10 +3547,15 @@ Judge the filing itself, not whether the company is important.
 A compensation filing from a large company is still ROUTINE.
 If unsure, answer WEAK.
 
-Answer with one word and nothing else:
-HIGH
-WEAK
-ROUTINE"""
+Answer with the tier, then a slash, then the action the title names,
+using the shortest noun phrase that appears in or follows directly
+from the title. Do not add detail the title does not state.
+
+HIGH/spin-off of its display-materials business
+WEAK/change of representative director
+ROUTINE/articles of incorporation
+
+Answer with that single line and nothing else."""
 
 _JAPAN_DISCLOSURE_MAP = {"HIGH": "SIGNAL", "WEAK": "WEAK", "ROUTINE": "NOISE"}
 
@@ -3495,6 +3564,100 @@ _JAPAN_DISCLOSURE_MAP = {"HIGH": "SIGNAL", "WEAK": "WEAK", "ROUTINE": "NOISE"}
 # the same class of event Kabutan carries as a disclosure - the two are
 # often the same event seen through two sources.
 _JAPAN_DISCLOSURE_CATEGORIES = ("jp_disclosure", "jp_extraordinary")
+
+
+# What an extraordinary report was filed FOR. EDINET's own
+# `currentReportReason` is the FSA disclosure ordinance clause the
+# filing cites, and the clause IS the event type - a fixed legal
+# enumeration, not free text, so it maps exactly rather than being
+# guessed at.
+#
+# This is why an extraordinary report needs no PDF fetch to be
+# described: news-retrieval already stores the clause from
+# documents.json (see its own comment on _EDINET_DOC_TYPE_
+# EXTRAORDINARY). Before this map, every such row fell back to "a
+# corporate disclosure whose effect is not established from the
+# filing's own title" - true of the title, but the row carried the
+# answer in a field nothing read.
+#
+# Keys are matched on the clause's numbered tail, since filings write
+# the same clause with full-width and half-width digits
+# interchangeably ("第2項第4号" / "第２項第４号").
+# Only clauses CONFIRMED against a real stored filing are listed.
+# An unlisted clause returns None and keeps the plain sentence, which
+# is why a half-remembered entry is worse than a missing one: it
+# labels a filing with the wrong event and nothing flags it. The first
+# draft of this map carried five clauses written from memory of the
+# ordinance, including "9号" sitting beside the real "9号の2" - close
+# enough to look right and wrong in exactly the way a reader cannot
+# check. Add a clause here when a filing citing it has been read.
+# Japanese-only filing titles that are a standard document NAME rather
+# than a description of an event. Asked to summarise one, the model
+# returns the name verbatim, which puts untranslated Japanese on an
+# English card - confirmed on real Ibiden rows ("定款", "統合報告書").
+# These are ordinary recurring documents, so naming them in English is
+# the whole answer; anything not listed keeps the generic sentence
+# rather than being guessed at.
+_JAPANESE_FORM_NAMES: dict[str, str] = {
+    "定款": "its articles of incorporation",
+    "統合報告書": "its integrated report",
+    "臨時報告書": "an extraordinary report",
+    "訂正臨時報告書": "a corrected extraordinary report",
+    "有価証券報告書": "its annual securities report",
+    "四半期報告書": "its quarterly report",
+    "半期報告書": "its half-year report",
+}
+
+
+def _japanese_form_name(title: str | None) -> str | None:
+    """English for a filing title that is just a document name.
+
+    Matches the title's own text after the fetcher's
+    "{company} ({code}) [{timestamp}]: " prefix, ignoring a trailing
+    date or year the real titles carry ("定款 2026/10/01",
+    "統合報告書 2026").
+    """
+    if not title:
+        return None
+    body = (title.split(": ", 1)[-1] if ": " in title else title).strip()
+    for form, english in _JAPANESE_FORM_NAMES.items():
+        if body.startswith(form):
+            return english
+    return None
+
+
+_EDINET_EXTRAORDINARY_REASONS: dict[str, str] = {
+    # Shin-Etsu S100Z2DU: ストックオプションとして新株予約権を発行
+    "2号の2": "a grant of share options",
+    # Resonac S100Z2WW: 当社の主要株主に異動がありました
+    "4号": "a change in major shareholders",
+    # Lasertec S100Z4BX: 定時株主総会において決議事項が決議されました
+    "9号の2": "a resolution passed at a shareholder meeting",
+}
+
+
+def _extraordinary_reason(meta: dict[str, Any]) -> str | None:
+    """The event an extraordinary report was filed for, if known.
+
+    Reads EDINET's clause code; returns None for a clause not in the
+    map rather than a vague stand-in, so an unmapped filing keeps the
+    honest generic sentence instead of being mislabelled.
+    """
+    clause = meta.get("current_report_reason")
+    if not clause:
+        return None
+    # Normalise full-width digits so one key matches both spellings.
+    normalised = clause.translate(str.maketrans("０１２３４５６７８９",
+                                                "0123456789"))
+    # Match the final 第N号[のM] exactly. A suffix test cannot be used:
+    # "第19条第2項第99号" ends with "9号" and would be read as clause 9,
+    # labelling an unknown filing "a business transfer".
+    found = re.findall(r"第(\d+)号(?:の(\d+))?", normalised)
+    if not found:
+        return None
+    number, sub = found[-1]
+    key = f"{number}号の{sub}" if sub else f"{number}号"
+    return _EDINET_EXTRAORDINARY_REASONS.get(key)
 
 
 def _is_english_disclosure(title: str) -> bool:
@@ -3514,6 +3677,31 @@ def _is_english_disclosure(title: str) -> bool:
         return False
     ascii_letters = sum(1 for ch in body if ch.isascii() and ch.isalpha())
     return ascii_letters > len(body) / 2
+
+
+def _with_english_prefix(title: str | None, company: str | None) -> str | None:
+    """Swap a stored title's Japanese name prefix for the English one.
+
+    Stored titles are "{native_name} ({code}) [{timestamp}]: {body}".
+    Where the body is already the company's own English, only the
+    prefix is left in Japanese - so the English name replaces it and
+    the body is untouched.
+
+    Leaves the title alone when there is no "{prefix}: {body}" split
+    or no English name to use: a title that is all body (EDINET's
+    "4004 [S100Z5EL]: 臨時報告書" has an id prefix, not a name) must
+    not lose or gain text here.
+    """
+    if not title or not company or ": " not in title:
+        return title
+    prefix, body = title.split(": ", 1)
+    # Only rewrite a prefix that really is the name-and-code form the
+    # fetcher writes. An id prefix ("4004 [S100Z5EL]") has no "(code)"
+    # and is left as it stands.
+    if "(" not in prefix:
+        return title
+    _, _, tail = prefix.partition("(")
+    return f"{company} ({tail}: {body}" if tail else title
 
 
 def _pair_bilingual_disclosures(
@@ -3598,7 +3786,25 @@ def _pair_bilingual_disclosures(
             # translate_japan_articles finds the field already populated
             # and leaves it alone, so no model call is spent restating
             # text the company already published.
-            meta["translated_title"] = english[0].get("title")
+            #
+            # Only the BODY of that title is the company's English,
+            # though. The fetcher prepends "{native_name} ({code})
+            # [{timestamp}]: ", which stays Japanese, so the stored
+            # field read "村田製 (6981) [...]: Announcement Concerning
+            # Absorption-type Merger" - half translated, and
+            # inconsistent with a Japanese-only filing, whose whole
+            # title goes through the model and comes back as "Ibiden
+            # (4062) [...]". Rewrite the prefix with the English name
+            # so the field reads as English however it was produced.
+            # No model call - the name is already in the universe table.
+            # Resolved from the universe table, not meta["company"] -
+            # that is not written until classify_corporate_disclosure
+            # runs, well after this, so reading it here would silently
+            # pass None and leave the prefix Japanese.
+            _rec = company_for(meta.get("code"))
+            meta["translated_title"] = _with_english_prefix(
+                english[0].get("title"), (_rec or {}).get("company"),
+            )
         lead["metadata"] = meta
         out.append(lead)
     return out
@@ -3657,46 +3863,89 @@ def classify_corporate_disclosure(
         company_name = (ticker or {}).get("company") or meta.get("company") or code
         title = a.get("title") or ""
         headline = title.split(": ", 1)[-1] if ": " in title else title
-        in_english = bool(meta.get("filed_in_english"))
-
-        answer = _classify_japan_disclosure_substance(
+        # Whether the company also published in English says who the
+        # filing is meant to reach, not what it does - the two are
+        # independent, and a management change is the same event in
+        # either language. So `filed_in_english` is stored on the row
+        # and never alters the tier or the sentence: letting a
+        # publishing decision speak to substance would manufacture
+        # materiality the filing does not have. It is not surfaced as
+        # "unusual" either - 56% of stored disclosures carry an English
+        # version, so it is the norm, not an exception.
+        answer, action = _classify_japan_disclosure_substance(
             company_name, code, headline, model, api_key, base_url, timeout,
         )
         signal = _JAPAN_DISCLOSURE_MAP.get(answer, "WEAK")
 
-        # Whether the company also published in English says who the
-        # filing is meant to reach, not what it does - the two are
-        # independent, and a management change is the same event in
-        # either language. So this is reported alongside the tier and
-        # never alters it: letting a publishing decision override the
-        # substance test would manufacture materiality the filing does
-        # not have. Same role `unconfirmed` plays for J7, where it
-        # labels a signal rather than creating one.
-        # Stored on the row as `filed_in_english` rather than written
-        # into the reason sentence: the view layer surfaces it in
-        # `unusual`, and appending it here too put one fact in three
-        # fields of the same card.
-        english_note = ""
+        # An EDINET-only filing's whole title is its form name
+        # ("臨時報告書"), so the model has nothing to summarise and
+        # returns no action. The clause the filing cites names the
+        # event type exactly - use it rather than falling back to a
+        # sentence about what we could not establish. Only when the
+        # model gave nothing, so a real summary always wins.
+        # Asked to summarise a title that is only Japanese, the model
+        # echoes it back verbatim - confirmed on real rows: "臨時報告書",
+        # "統合報告書", "定款". That is the form name, not a summary,
+        # and it put untranslated Japanese on an English card. Treat an
+        # action with no Latin letters as nothing returned, so the
+        # clause lookup below gets its turn.
+        if action and not any(ch.isascii() and ch.isalpha() for ch in action):
+            action = None
+        if not action:
+            # The ordinance clause first - it names the actual event
+            # ("a change in major shareholders"), where the form name
+            # only says which document was filed.
+            action = _extraordinary_reason(meta) or _japanese_form_name(title)
 
-        if signal == "SIGNAL":
-            reason_code = "material_corporate_action"
+        meta["disclosure_action"] = action
+
+        # An EDINET-only filing's whole title is its form name -
+        # "臨時報告書", nothing to summarise - so the model returns no
+        # action and all such rows fell back to one identical
+        # sentence. The form name IS the fact available: an
+        # extraordinary report is filed for a specific triggering
+        # event, which is more than "a corporate disclosure" says.
+        # Used only when the model gave nothing, so a real summary
+        # always wins.
+        # Name the event, not the category. These sentences used to
+        # restate the tier's definition - "a disclosure that changes
+        # what the company owns, controls or is committing capital to"
+        # - on a filing whose own title read "Partial Spin-off of
+        # Crasus". The action phrase comes from that title, so the
+        # reader learns what happened; the category wording survives
+        # only as the fallback for a filing with no form name either.
+        # Where the action is known the sentence is the same for every
+        # tier - "{company} filed a disclosure of {action}." The tier
+        # is already its own field on the card, so repeating it in
+        # prose said nothing extra, and each tier's wording carried a
+        # trailing clause about what this pipeline could not establish
+        # ("whose effect on the business is not established from the
+        # filing's own title"). That describes our processing, not the
+        # filing, so it is gone: the sentence states the fact and
+        # stops. Only the no-action fallbacks still differ, because
+        # there the tier is the only thing left to say.
+        reason_code = {
+            "SIGNAL": "material_corporate_action",
+            "WEAK": "corporate_disclosure_unclear",
+        }.get(signal, "routine_corporate_filing")
+
+        if action:
+            reason_text = (
+                f"{company_name} filed a routine administrative disclosure - {action}."
+                if signal == "NOISE" else
+                f"{company_name} filed a disclosure of {action}."
+            )
+        elif signal == "SIGNAL":
             reason_text = (
                 f"{company_name} filed a disclosure that changes what the company owns, "
-                f"controls or is committing capital to.{english_note}"
+                f"controls or is committing capital to."
             )
         elif signal == "WEAK":
-            reason_code = "corporate_disclosure_unclear"
-            reason_text = (
-                f"{company_name} filed a corporate disclosure whose effect on the "
-                f"business is not established from the filing's own title."
-                f"{english_note}"
-            )
+            reason_text = f"{company_name} filed a corporate disclosure."
         else:
-            reason_code = "routine_corporate_filing"
             reason_text = (
                 f"{company_name} filed a routine administrative disclosure - "
                 f"compensation, governance paperwork or a scheduled notice."
-                f"{english_note}"
             )
 
         meta["signal_reason_code"] = reason_code
@@ -3726,8 +3975,18 @@ def classify_corporate_disclosure(
 def _classify_japan_disclosure_substance(
     company_name: str, code: str | None, headline: str,
     model: str, api_key: str, base_url: str, timeout: int,
-) -> str:
-    """One model call per disclosure, returning HIGH, WEAK or ROUTINE.
+) -> tuple[str, str | None]:
+    """One model call per disclosure, returning (tier, action).
+
+    `tier` is HIGH, WEAK or ROUTINE. `action` is the short noun phrase
+    naming what the filing does ("spin-off of its display-materials
+    business"), or None when the model returned only a tier.
+
+    The action exists because the reason sentence used to restate the
+    category - "a disclosure that changes what the company owns,
+    controls or is committing capital to" - for a filing whose own
+    title said "Partial Spin-off of Crasus". The reader learned the
+    taxonomy, not the event.
 
     Defaults to WEAK on any failure, the same fail-safe J7 uses: a
     disclosure this module could not read is reported as unestablished
@@ -3741,7 +4000,10 @@ def _classify_japan_disclosure_substance(
     payload = {
         "model": model,
         "temperature": 0,
-        "max_tokens": 5,
+        # Was 5 - enough for the tier word alone. The action phrase
+        # needs room, and a truncated one would read as a sentence
+        # cut off mid-word on the card.
+        "max_tokens": 40,
         "messages": [
             {"role": "system", "content": _JAPAN_DISCLOSURE_SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},
@@ -3757,15 +4019,19 @@ def _classify_japan_disclosure_substance(
         )
         with urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8", errors="ignore"))
-        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-        answer = (content or "").strip().upper()
+        content = (data.get("choices", [{}])[0]
+                   .get("message", {}).get("content", "") or "").strip()
+        # "HIGH/spin-off of its display-materials business" - the tier
+        # is matched case-insensitively, the action kept as written.
+        head, _, tail = content.partition("/")
+        action = tail.strip().rstrip(".") or None
         for tier in ("HIGH", "ROUTINE", "WEAK"):
-            if answer.startswith(tier):
-                return tier
-        return "WEAK"
+            if head.strip().upper().startswith(tier):
+                return tier, action
+        return "WEAK", None
     except Exception as exc:
         logger.warning("[JAPAN_DISCLOSURE] classification failed, defaulting to WEAK: %s", exc)
-        return "WEAK"
+        return "WEAK", None
 
 
 # Hosts whose pages for a ticker exist whether or not anyone has written
