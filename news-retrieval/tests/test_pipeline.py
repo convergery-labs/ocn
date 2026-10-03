@@ -119,7 +119,7 @@ def test_body_from_content_encoded() -> None:
         "https://www.example-unlisted-outlet.com/some-story",
     ],
 )
-def test_fetch_body_with_fallback_makes_no_second_attempt_on_miss(url: str) -> None:
+def test_fetch_body_makes_no_second_attempt_on_miss(url: str) -> None:
     """A direct-fetch miss returns None after exactly one attempt, with no
     archive.ph (or any other) fallback round-trip - including for
     bloomberg.com, which was on the removed archive.ph allowlist.
@@ -128,13 +128,39 @@ def test_fetch_body_with_fallback_makes_no_second_attempt_on_miss(url: str) -> N
     unreachable, each fallback burned its full connect timeout serially,
     stretching a normal 4-7min ai_news run to 13.7min and tripping
     signal-detection-agent's poll timeout. This pins run duration to the
-    direct fetch alone - see _fetch_body_with_fallback's own docstring.
+    direct fetch alone - see _fetch_body's own docstring.
     """
     with patch("trafilatura.fetch_url", return_value=None) as mock_fetch_url:
-        body = pipeline_module._fetch_body_with_fallback(url)
+        body = pipeline_module._fetch_body(url)
 
     assert body is None
     mock_fetch_url.assert_called_once()
+
+
+def test_fetch_body_serializes_extraction() -> None:
+    """trafilatura.extract() is only ever called while _EXTRACT_LOCK is
+    held - the invariant that keeps concurrent lxml tree copies from
+    corrupting the heap and aborting the interpreter.
+
+    Confirmed live from two real faulthandler tracebacks on the
+    geopolitical_news 02:00 UTC run (run 550 2026-10-02 segfault, run 560
+    2026-10-03 "double free or corruption"), both with several threads
+    inside trafilatura.extract() - see _EXTRACT_LOCK's own comment.
+    """
+    seen_locked: list[bool] = []
+
+    def _record_lock_state(*args, **kwargs):
+        seen_locked.append(pipeline_module._EXTRACT_LOCK.locked())
+        return "extracted body"
+
+    with (
+        patch("trafilatura.fetch_url", return_value="<html>page</html>"),
+        patch("trafilatura.extract", side_effect=_record_lock_state),
+    ):
+        body = pipeline_module._fetch_body("http://example.com/a")
+
+    assert body == "extracted body"
+    assert seen_locked == [True]
 
 
 def test_body_trafilatura_fallback() -> None:
