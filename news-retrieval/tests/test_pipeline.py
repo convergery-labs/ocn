@@ -767,7 +767,7 @@ class TestEdinetHoldingRatioPairs:
     def _parse(self, text, monkeypatch):
         """Drive the real parser over `text` with the network stubbed."""
         import io, zipfile
-        import src.pipeline as p
+        p = pipeline_module
 
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w") as zf:
@@ -824,7 +824,7 @@ class TestEdinetHoldingRatioPairs:
         assert self._parse(text, monkeypatch) == (0.0501, None)
 
     def test_unreadable_export_is_fail_open(self, monkeypatch):
-        import src.pipeline as p
+        p = pipeline_module
         def _boom(*a, **k):
             raise OSError("network down")
         monkeypatch.setattr(p.httpx, "get", _boom)
