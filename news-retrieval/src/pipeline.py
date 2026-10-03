@@ -94,25 +94,51 @@ def _clean_summary(raw: str) -> str:
 # Step 1 - fetch
 # ---------------------------------------------------------------------------
 
-def _fetch_body_with_fallback(url: str) -> str | None:
-    """Trafilatura direct fetch, returning None when the fetch or extraction
-    yields nothing (paywall/bot-detection block, or a dead source URL).
+# trafilatura.extract() is NOT safe to run concurrently: it parses the page
+# into an lxml tree and then copy.copy()s that tree several times
+# (_prepare_tree, _extract_and_compare in trafilatura/core.py). Those copies
+# are libxml2 C-level operations, and running them from several threads at
+# once corrupts the heap and kills the whole process - not a Python
+# exception that one worker could absorb, the interpreter aborts.
+#
+# Confirmed live from two real faulthandler tracebacks on the
+# geopolitical_news 02:00 UTC run, both with several threads inside
+# trafilatura.extract() at the moment of death:
+#   run 550 (2026-10-02): "Fatal Python error: Segmentation fault",
+#       crashing thread in core.py bare_extraction
+#   run 560 (2026-10-03): "double free or corruption (!prev)" /
+#       "Fatal Python error: Aborted", crashing thread in
+#       copy.py -> core.py _prepare_tree, with a SECOND thread also in
+#       _prepare_tree and others inside lxml text_content()
+# Both runs died ~7s in and sat as stuck 'running' rows until the watchdog
+# failed them, so the domain produced nothing on either day.
+#
+# Different trafilatura versions on the two days (line numbers differ, and
+# 2.3.0 only released 2026-10-02 16:53 UTC - after run 550 had already
+# crashed), so the version bump is not the cause; concurrent extract() is.
+# Fetching stays parallel - that part is I/O-bound and safe - and only the
+# extraction is serialized, so the win from 10 concurrent downloads is kept.
+_EXTRACT_LOCK = threading.Lock()
 
-    Previously fell back to archive.ph's cached snapshot for a small
-    allowlist of paywalled domains. Removed 2026-09-30: when archive.ph
-    itself is unreachable, every fallback attempt burns its full connect
-    timeout, and those retries are serial - enough to stretch a normal
-    4-7min ai_news run past the downstream poll timeout in
-    signal-detection-agent and fail the daily digest outright. The recovered
-    bodies were not worth making run duration depend on a third-party
-    mirror's uptime.
+
+def _fetch_body(url: str) -> str | None:
+    """Fetch url and return its extracted body text, or None when the fetch
+    or extraction yields nothing (paywall/bot-detection block, or a dead
+    source URL).
+
+    The download runs concurrently with other workers; the extraction is
+    serialized behind _EXTRACT_LOCK - see that constant's comment for the
+    real crashes that forced this.
 
     Shared by all three Trafilatura-backed body-fetch call sites (RSS
     content:encoded fallback, SerpAPI, GDELT) so the behavior stays
     identical across all of them rather than drifting.
     """
     downloaded = trafilatura.fetch_url(url, config=_get_trafilatura_config())
-    return trafilatura.extract(downloaded) if downloaded else None
+    if not downloaded:
+        return None
+    with _EXTRACT_LOCK:
+        return trafilatura.extract(downloaded)
 
 
 def _extract_body(entry: Any, url: str, no_fetch: bool) -> str | None:
@@ -138,7 +164,7 @@ def _extract_body(entry: Any, url: str, no_fetch: bool) -> str | None:
         return clean_body
     if no_fetch:
         return None
-    return _fetch_body_with_fallback(url)
+    return _fetch_body(url)
 
 
 # feedparser's own default User-Agent identifies it as a bot and is
@@ -368,13 +394,13 @@ def _fetch_one_serpapi(source: dict, days_back: int, api_key: str) -> list[dict]
                     seen_urls.add(a["url"])
                     candidates.append(a)
 
-    def _fetch_body(url: str) -> str | None:
+    def _fetch_body_if_url(url: str) -> str | None:
         if not url:
             return None
-        return _fetch_body_with_fallback(url)
+        return _fetch_body(url)
 
     with ThreadPoolExecutor(max_workers=10) as executor:
-        bodies = list(executor.map(_fetch_body, [a["url"] for a in candidates]))
+        bodies = list(executor.map(_fetch_body_if_url, [a["url"] for a in candidates]))
 
     for article, body in zip(candidates, bodies):
         article["body"] = body
@@ -2041,9 +2067,6 @@ def _fetch_gdelt(sources: list[dict], days_back: int, domain_slug: str = "") -> 
             "[GDELT] title-similarity dedup: %d -> %d article(s)",
             before_title_dedup, len(articles),
         )
-
-    def _fetch_body(url: str) -> str | None:
-        return _fetch_body_with_fallback(url)
 
     with ThreadPoolExecutor(max_workers=10) as executor:
         bodies = list(executor.map(_fetch_body, [a["url"] for a in articles]))
@@ -5701,7 +5724,7 @@ def _fetch_monoist_article_body(url: str) -> str | None:
 
     Returns None on any failure (network error, non-200, extraction
     failure) - fail-open, same contract as every other trafilatura-backed
-    body fetch in this file (_fetch_body_with_fallback etc.) - a missing
+    body fetch in this file (_fetch_body etc.) - a missing
     body just means J5's own investment-figure regex has nothing to
     search, not a pipeline failure.
 
@@ -5726,7 +5749,12 @@ def _fetch_monoist_article_body(url: str) -> str | None:
         resp = httpx.get(url, timeout=30.0, follow_redirects=True)
         resp.raise_for_status()
         text = resp.content.decode("cp932", errors="replace")
-        body = trafilatura.extract(text, include_comments=False, include_tables=False)
+        # Held even though this fetcher's own loop is sequential: the lock
+        # guards a process-global C library (see _EXTRACT_LOCK), so the
+        # invariant worth keeping is "every trafilatura.extract() call in
+        # this file holds it", not "the ones that look concurrent today".
+        with _EXTRACT_LOCK:
+            body = trafilatura.extract(text, include_comments=False, include_tables=False)
         if body:
             body = body.split("バックナンバー")[0].rstrip()
         return body or None
