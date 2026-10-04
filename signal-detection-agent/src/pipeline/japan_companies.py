@@ -155,9 +155,6 @@ JAPAN_COMPANIES: dict[str, dict[str, Any]] = {
         "japan_sales_pct": None,
         "market_cap_jpy_tn": 38.2,
         "market_cap_usd_bn": 241.4,
-        "japan_sales_note": (
-            'SoftBank Corp is about 90% of group sales and is mostly domestic, but the group discloses no Japan split'
-        ),
         "customers": [
             _customer('SoftBank Corp subscribers', None, 'FY3/26', relationship='user_base'),
             _customer('Arm China', 16.0, 'FY3/26', aliases=('Arm Technology China', 'アームチャイナ'), relationship='licensee'),
@@ -502,23 +499,161 @@ JAPAN_COMPANIES: dict[str, dict[str, Any]] = {
 for _code, _record in JAPAN_COMPANIES.items():
     _record["code"] = _code
 
-JAPAN_TICKER_UNIVERSE: list[dict[str, Any]] = list(JAPAN_COMPANIES.values())
+# ---------------------------------------------------------------- #
+# research-universe is the owner; the table above is the fallback.   #
+#                                                                     #
+# Fetched once per process and held, because this is reference data  #
+# that changes when someone edits a company, not per-request data.   #
+# A long-running service picks up an edit on its next restart; the   #
+# one-off classify/refresh tasks, which is how Japan actually runs,  #
+# fetch fresh every time by definition.                               #
+#                                                                     #
+# On any failure the hardcoded table above still serves. That is a   #
+# real fallback rather than a stub: it is the same data, and until   #
+# this fetch existed it was the only source.                          #
+# ---------------------------------------------------------------- #
+_remote_companies: dict[str, dict[str, Any]] | None = None
+_remote_tried = False
+
+_UNIVERSE_TIMEOUT_SECONDS = 30.0
+
+
+def _load_remote_companies() -> dict[str, dict[str, Any]] | None:
+    """The tracked Japanese companies from research-universe.
+
+    Returns None if the service is unset or unreachable, which leaves
+    every accessor below reading the local table instead.
+
+    Field names are translated to the ones this module has always used.
+    research-universe says local_code/local_name because it holds Taiwan
+    and Korea too; the rest of the Japan pipeline says code/native_name,
+    and translating here keeps that rename out of four other modules.
+    """
+    import logging
+    import os
+
+    import httpx
+
+    log = logging.getLogger(__name__)
+    base = os.environ.get("RESEARCH_UNIVERSE_URL")
+    if not base:
+        log.warning("[UNIVERSE] RESEARCH_UNIVERSE_URL unset; "
+                    "using the built-in Japan company table")
+        return None
+    try:
+        key = os.environ.get("RESEARCH_UNIVERSE_API_KEY")
+        resp = httpx.get(
+            f"{base}/companies",
+            params={"country": "Japan", "tracked": "true",
+                    "include_customers": "true", "limit": 10000},
+            headers={"Authorization": f"Bearer {key}"} if key else {},
+            timeout=_UNIVERSE_TIMEOUT_SECONDS,
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+    except Exception as exc:                                # noqa: BLE001
+        log.warning("[UNIVERSE] research-universe unreachable, using the "
+                    "built-in Japan company table: %s", exc)
+        return None
+
+    out: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        code = (r.get("local_code") or "").strip()
+        if not code:
+            continue
+        out[code] = {
+            "code": code,
+            "company": r.get("company_name"),
+            "native_name": r.get("local_name"),
+            "fiscal_year_end": r.get("fiscal_year_end"),
+            "tse_prime_pct": r.get("index_weight_pct"),
+            "japan_rank": r.get("home_market_rank"),
+            "japan_sales_pct": r.get("domestic_sales_pct"),
+            "market_cap_jpy_tn": r.get("market_cap_local"),
+            "market_cap_usd_bn": r.get("market_cap_usd_bn"),
+            "market_data_as_of": r.get("market_data_as_of"),
+            "customers": [
+                {
+                    "name": c.get("customer_name"),
+                    "ticker": c.get("customer_ticker"),
+                    "pct_of_sales": c.get("pct_of_sales"),
+                    "period": c.get("period"),
+                    "aliases": tuple(c.get("aliases") or ()),
+                    "relationship": c.get("relationship"),
+                    "is_distributor": c.get("relationship") == "distributor",
+                }
+                for c in (r.get("customers") or [])
+            ],
+        }
+    if not out:
+        log.warning("[UNIVERSE] research-universe returned no tracked "
+                    "Japanese companies; using the built-in table")
+        return None
+    log.info("[UNIVERSE] %d Japanese companies from research-universe",
+             len(out))
+    return out
+
+
+def _companies() -> dict[str, dict[str, Any]]:
+    """The company table every accessor below reads."""
+    global _remote_companies, _remote_tried
+    if not _remote_tried:
+        _remote_tried = True
+        _remote_companies = _load_remote_companies()
+    return _remote_companies if _remote_companies is not None else JAPAN_COMPANIES
+
+
+def reset_universe_cache() -> None:
+    """Drop the fetched universe so the next read re-fetches it."""
+    global _remote_companies, _remote_tried
+    _remote_companies = None
+    _remote_tried = False
+
+
+def japan_ticker_universe() -> list[dict[str, Any]]:
+    """Every tracked Japanese company.
+
+    A function rather than the module-level list it replaced: that list
+    was bound at import time in four modules, so a universe fetched
+    afterwards could never reach them.
+    """
+    return list(_companies().values())
 
 
 def company_for(code: str | None) -> dict[str, Any] | None:
     """Everything known about one tracked company."""
     if not code:
         return None
-    return JAPAN_COMPANIES.get(code)
+    return _companies().get(code)
 
 
-def is_stale(as_of: date | None = None) -> bool:
+def _measured_on(code: str | None = None) -> date:
+    """The date this company's market figures were measured.
+
+    research-universe stamps each company with its own
+    ``market_data_as_of``, so a company refreshed today is not reported
+    stale because its neighbours are. AS_OF is the fallback table's
+    single date, correct for every row in it.
+    """
+    record = company_for(code) if code else None
+    stamped = (record or {}).get("market_data_as_of")
+    if isinstance(stamped, date):
+        return stamped
+    if isinstance(stamped, str):
+        try:
+            return date.fromisoformat(stamped[:10])
+        except ValueError:
+            pass
+    return AS_OF
+
+
+def is_stale(as_of: date | None = None, code: str | None = None) -> bool:
     """True when the valuation figures need a caveat.
 
     Governs the market figures alone - the customer percentages are
     filed facts that only change with the next annual report.
     """
-    return ((as_of or date.today()) - AS_OF).days > _VALUATION_STALE_DAYS
+    return ((as_of or date.today()) - _measured_on(code)).days > _VALUATION_STALE_DAYS
 
 
 def valuation_for(code: str | None,
@@ -538,8 +673,8 @@ def valuation_for(code: str | None,
         "tsePrimePct": record["tse_prime_pct"],
         "japanRank": record["japan_rank"],
         "japanSalesPct": record["japan_sales_pct"],
-        "asOf": AS_OF.isoformat(),
-        "isStale": is_stale(as_of),
+        "asOf": _measured_on(code).isoformat(),
+        "isStale": is_stale(as_of, code),
     }
 
 

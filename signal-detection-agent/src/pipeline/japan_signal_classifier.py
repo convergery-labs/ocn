@@ -86,7 +86,7 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from pipeline.japan_companies import (
-    JAPAN_TICKER_UNIVERSE,
+    japan_ticker_universe,
     company_for,
     mentioned_customers,
 )
@@ -195,7 +195,7 @@ _MIN_REVISIONS_FOR_TRUSTED_HABIT = 3
 # already-loaded fiscal_years each time compute_forecast_habit runs.
 _MIN_FISCAL_YEAR_SPAN_FOR_TRUSTED_HABIT = 3
 
-_JAPAN_TICKER_BY_CODE: dict[str, dict[str, Any]] = {t["code"]: t for t in JAPAN_TICKER_UNIVERSE}
+_JAPAN_TICKER_BY_CODE: dict[str, dict[str, Any]] = {t["code"]: t for t in japan_ticker_universe()}
 
 
 def _get_operating_profit(figures: list[dict[str, Any]] | None) -> dict[str, float | None] | None:
@@ -301,7 +301,7 @@ def _fiscal_year_label(pub_dt: datetime, fiscal_year_end: str) -> int:
     per Japan Signals spec Section 2.4 ("a company's stated year label
     refers to the year it ENDS in... never assume December").
 
-    ``fiscal_year_end``: "MM-DD" (JAPAN_TICKER_UNIVERSE's own field). A
+    ``fiscal_year_end``: "MM-DD" (japan_ticker_universe()'s own field). A
     filing published on or before the fiscal year's own end-of-year date
     in a given calendar year belongs to that calendar year's fiscal year;
     a filing published AFTER that date belongs to the NEXT calendar year's
@@ -892,10 +892,10 @@ def classify_forecast_revision(
             meta["habit_is_trusted"] = habit["is_trusted"]
             meta["fiscal_year"] = fiscal_year
             # native_name: the company's real Japanese name, from the same
-            # static JAPAN_TICKER_UNIVERSE list fiscal_year_end already
+            # static japan_ticker_universe() list fiscal_year_end already
             # comes from (via the ticker dict already in scope above) -
             # not fetched/computed per article. None when ticker itself is
-            # None (a code outside JAPAN_TICKER_UNIVERSE - not expected in
+            # None (a code outside japan_ticker_universe() - not expected in
             # practice, but not assumed away either).
             meta["native_name"] = ticker["native_name"] if ticker else None
             # The machine-readable rule slug (e.g. "exceeds_2x_typical_
@@ -1914,7 +1914,7 @@ def classify_missing_revision(
     results: list[dict[str, Any]] = []
     counts = {"SIGNAL": 0, "WEAK": 0}
 
-    for ticker in JAPAN_TICKER_UNIVERSE:
+    for ticker in japan_ticker_universe():
         code = ticker["code"]
         company_name = ticker["company"]
         announcements = announcements_by_code.get(code, [])
@@ -2169,7 +2169,7 @@ def classify_stale_revision_pattern(
             last_revision_by_code[code] = pub_dt
 
     results: list[dict[str, Any]] = []
-    for ticker in JAPAN_TICKER_UNIVERSE:
+    for ticker in japan_ticker_universe():
         code = ticker["code"]
         habit = stored_habits.get(code)
         if not habit or not habit.get("is_trusted"):
@@ -4492,7 +4492,7 @@ def compute_all_japan_habits(
     this function's return value via models.japan_company_habits.
     replace_habits().
 
-    Returns one dict per JAPAN_TICKER_UNIVERSE company (code, company,
+    Returns one dict per japan_ticker_universe() company (code, company,
     plus every compute_forecast_habit field) - including companies with
     ZERO genuine revisions in the pooled articles (habit fields None,
     sample_size 0, is_trusted False) rather than omitting them, so
@@ -4509,8 +4509,8 @@ def compute_all_japan_habits(
     typical_direction/typical_months are left None for this company's
     row, since no rule reads them for a margin-based company.
     """
-    genuine_by_code: dict[str, list[dict[str, Any]]] = {t["code"]: [] for t in JAPAN_TICKER_UNIVERSE}
-    margin_by_code: dict[str, list[dict[str, Any]]] = {t["code"]: [] for t in JAPAN_TICKER_UNIVERSE}
+    genuine_by_code: dict[str, list[dict[str, Any]]] = {t["code"]: [] for t in japan_ticker_universe()}
+    margin_by_code: dict[str, list[dict[str, Any]]] = {t["code"]: [] for t in japan_ticker_universe()}
     for a in articles:
         meta = a.get("metadata") or {}
         if meta.get("source_category") != "jp_forecast":
@@ -4526,7 +4526,7 @@ def compute_all_japan_habits(
             genuine_by_code[code].append(a)
 
     habits: list[dict[str, Any]] = []
-    for ticker in JAPAN_TICKER_UNIVERSE:
+    for ticker in japan_ticker_universe():
         code = ticker["code"]
         if code in _MARGIN_BASED_CODES:
             margin_habit = compute_margin_revision_habit(margin_by_code[code])

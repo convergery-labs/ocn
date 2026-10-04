@@ -171,6 +171,164 @@ def init_db() -> None:
         """)
 
         # ------------------------------------------------------------------ #
+        # Non-US market profile                                               #
+        #                                                                      #
+        # Every column below is country-NEUTRAL by design. Japan is the first #
+        # market loaded, but Taiwan and Korea follow and must reuse these     #
+        # same columns rather than add their own - which is why none of them  #
+        # is named for an exchange or a currency. The source tables these     #
+        # replace made exactly that mistake three times over: the same idea   #
+        # was called `code` in Japan and `ticker` in Taiwan/Korea, and the    #
+        # local-language name was `native_name` in two of them and           #
+        # `korean_name` in the third.                                         #
+        # ------------------------------------------------------------------ #
+        conn.execute("""
+            ALTER TABLE universe_companies
+            -- Identity ----------------------------------------------------
+            -- The exchange's own code, UNSUFFIXED: '6857', not '6857.T'.
+            -- `ticker` keeps the suffixed form the rest of this table uses;
+            -- this is the key filings are published under, and the only one
+            -- EDINET/TDnet/IRBANK will answer to. TEXT because Kioxia's code
+            -- is '285A' - never cast it to an integer.
+            ADD COLUMN IF NOT EXISTS local_code          TEXT,
+            -- The company's name in its home language, full legal form.
+            ADD COLUMN IF NOT EXISTS local_name          TEXT,
+            -- Other written forms of THIS company, used to match it in
+            -- local-language articles. Distinct from local_name: Resonac
+            -- files as レゾナック・ホールディングス but the press writes
+            -- レゾナック, and matching on the legal name alone found zero
+            -- articles for Resonac and Renesas where the short form found
+            -- 5 and 7.
+            ADD COLUMN IF NOT EXISTS aliases             TEXT[] DEFAULT '{}',
+            -- Forms that LOOK like this company but are not it. A Korean
+            -- chaebol needs this: matching 'Samsung' otherwise picks up
+            -- Samsung Life and Samsung C&T.
+            ADD COLUMN IF NOT EXISTS exclude_terms       TEXT[] DEFAULT '{}',
+            -- What to type into a general web search to find news about
+            -- this company, where its name alone is not enough. Disco and
+            -- Towa are ordinary English words, so each carries
+            -- "<name> Corporation semiconductor"; the other seventeen
+            -- Japanese companies need nothing and leave this NULL, which
+            -- means "search the name". Stored per company because the
+            -- ambiguity is a fact about the name, not about the source.
+            ADD COLUMN IF NOT EXISTS search_query        TEXT,
+            -- 'MM-DD'. Most Japanese issuers close 03-31, most Taiwanese
+            -- and Korean ones 12-31 - which is exactly why it is stored
+            -- per company rather than assumed per country.
+            ADD COLUMN IF NOT EXISTS fiscal_year_end     TEXT,
+
+            -- Valuation and standing --------------------------------------
+            ADD COLUMN IF NOT EXISTS market_cap_usd_bn   NUMERIC,
+            -- Paired: a bare local figure is meaningless without its
+            -- currency, and a column named for one currency cannot hold
+            -- the next country's.
+            ADD COLUMN IF NOT EXISTS market_cap_local    NUMERIC,
+            ADD COLUMN IF NOT EXISTS local_currency      TEXT,
+            -- Also paired: the weight is comparable across countries only
+            -- if the index it is measured against travels with it.
+            ADD COLUMN IF NOT EXISTS index_name          TEXT,
+            ADD COLUMN IF NOT EXISTS index_weight_pct    NUMERIC,
+            ADD COLUMN IF NOT EXISTS home_market_rank    INTEGER,
+            -- Sales booked inside the home country, as a share of total -
+            -- a different question from where the company is listed.
+            -- Advantest is Tokyo-listed with 2.2% of sales in Japan;
+            -- Resonac has 43.4%. A domestic shock reaches the second far
+            -- harder.
+            ADD COLUMN IF NOT EXISTS domestic_sales_pct  NUMERIC,
+            -- Dates domestic_sales_pct, which comes from the annual report
+            -- and holds for a year. Deliberately NOT market_data_as_of:
+            -- see below.
+            ADD COLUMN IF NOT EXISTS financials_period   TEXT,
+
+            -- WHAT market_data_as_of DATES, AND WHAT IT DOES NOT
+            --   The market snapshot ONLY: market_cap_usd_bn,
+            --   market_cap_local, index_weight_pct, home_market_rank.
+            --   Those move daily - three companies in the first Japanese
+            --   load ran stock splits on the very day their figures were
+            --   taken, which is how a stored price goes quietly wrong.
+            --
+            --   It does NOT date domestic_sales_pct or fiscal_year_end.
+            --   One date cannot honestly stamp both, because they go
+            --   stale at completely different rates; financials_period
+            --   dates the annual-report figure instead.
+            ADD COLUMN IF NOT EXISTS market_data_as_of   DATE
+        """)
+
+        # The real identity of a non-US row. `company_name` is already
+        # UNIQUE, but a name is editable and a loader keyed on one creates
+        # a duplicate the first time someone fixes a spelling. Partial so
+        # the ~1,400 existing rows, which have no local_code, are untouched.
+        conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_companies_country_local_code
+                ON universe_companies (country, local_code)
+             WHERE local_code IS NOT NULL
+        """)
+
+        # ------------------------------------------------------------------ #
+        # Disclosed customers and other counterparties                        #
+        #                                                                      #
+        # Stored flat, by name: a counterparty does NOT get its own           #
+        # universe_companies row. Many of them could not have one - this set  #
+        # includes an Italian railway, a US transit authority and a German    #
+        # grid operator, none of which belong in an AI-economy catalogue and  #
+        # none of which have the website and category every row here needs.   #
+        # ------------------------------------------------------------------ #
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS universe_company_customers (
+                id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                company_id      UUID NOT NULL
+                                REFERENCES universe_companies(id) ON DELETE CASCADE,
+
+                customer_name   TEXT NOT NULL,
+                -- The counterparty's own listing wherever it trades - NASDAQ,
+                -- the TSE, Taiwan, Korea, Frankfurt. NOT a US-tradability
+                -- marker. NULL means genuinely unlisted (Arm China, CXMT),
+                -- private (Bosch), a subsidiary of a listed parent (Sony
+                -- Semiconductor Solutions), delisted (Toshiba), or not a
+                -- company at all ("US hyperscalers (unnamed)").
+                customer_ticker TEXT,
+
+                -- Written forms of the counterparty IN THE LANGUAGE OF THE
+                -- SOURCES WE READ - not its names in its own home country.
+                -- Nvidia is American but carries エヌビディア because
+                -- Japanese filings write it that way, and Samsung carries
+                -- the Japanese サムスン電子 rather than the Korean 삼성전자.
+                -- So this array is keyed by SOURCE language, not by the
+                -- counterparty's nationality: when Korean sources are added,
+                -- the same Nvidia needs 엔비디아 alongside, not instead.
+                aliases         TEXT[] NOT NULL DEFAULT '{}',
+
+                relationship    TEXT NOT NULL CHECK (relationship IN (
+                                    'customer', 'distributor', 'licensee',
+                                    'investee', 'partner', 'user_base')),
+
+                -- NULL means NOT DISCLOSED - never zero, and the two are
+                -- never conflated. Japanese issuers must name a customer
+                -- once it passes 10% of sales, so an absent figure is itself
+                -- a filed fact: nobody reached the threshold, not that
+                -- nobody looked. Thresholds differ by country, so do not
+                -- read a NULL here as "under 10%" outside Japan.
+                pct_of_sales    NUMERIC,
+                -- Which report the percentage came from. Ibiden's AMD share
+                -- was 11.0% in FY3/25 and fell below the threshold in
+                -- FY3/26 - the period is what tells a reader the figure is
+                -- not current.
+                period          TEXT,
+
+                UNIQUE (company_id, customer_name, relationship)
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_company_customers_company
+                ON universe_company_customers (company_id)
+        """)
+        # Answers "which tracked companies sell to X" without a scan.
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_company_customers_name
+                ON universe_company_customers (lower(customer_name))
+        """)
+
+        # ------------------------------------------------------------------ #
         # Startup cleanup                                                      #
         # ------------------------------------------------------------------ #
 

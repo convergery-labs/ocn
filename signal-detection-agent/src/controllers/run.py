@@ -72,7 +72,7 @@ from pipeline.japan_signal_classifier import (
     compute_all_japan_habits,
     compute_all_japan_progress_habits,
 )
-from pipeline.japan_companies import JAPAN_TICKER_UNIVERSE
+from pipeline.japan_companies import japan_ticker_universe
 from pipeline.korea_signal_classifier import classify_korea_signal_batch
 from pipeline.korea_signal_summary import generate_korea_signal_summary
 from pipeline.korea_ticker_universe import KOREA_TICKER_UNIVERSE
@@ -1077,7 +1077,7 @@ async def refresh_japan_habits(from_date: str, to_date: str, computed_from_years
     company's own real long-run pattern (see compute_forecast_habit's own
     docstring on why median-based/multi-year framing matters).
 
-    Returns the number of companies written (len(JAPAN_TICKER_UNIVERSE) -
+    Returns the number of companies written (len(japan_ticker_universe()) -
     every tracked company gets a row, even one with zero revisions in the
     pooled window - see compute_all_japan_habits's own docstring).
 
@@ -1175,7 +1175,7 @@ async def refresh_japan_habits(from_date: str, to_date: str, computed_from_years
     # habits's own docstring) - refreshed together in one job rather than
     # a separate CLI command/schedule, since there is no reason to pool
     # news-retrieval's articles twice for the same underlying data.
-    company_name_by_code = {t["code"]: t["company"] for t in JAPAN_TICKER_UNIVERSE}
+    company_name_by_code = {t["code"]: t["company"] for t in japan_ticker_universe()}
     progress_habits = compute_all_japan_progress_habits(all_articles)
     replace_progress_habits([
         {"code": code, "period_type": period_type, "company": company_name_by_code.get(code, code), **habit}

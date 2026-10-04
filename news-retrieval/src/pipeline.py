@@ -633,6 +633,126 @@ def get_tracked_ticker_universe(
     return list(dict.fromkeys(_fetch_universe_tickers(universe_url, universe_api_key)))
 
 
+def get_tracked_company_universe(
+    country: str,
+    universe_url: str | None,
+    universe_api_key: str | None = None,
+) -> list[dict[str, Any]]:
+    """The companies one country's signal pipeline follows, live from
+    research-universe.
+
+    ``tracked=true`` is what narrows the catalogue to the pipeline's own
+    universe, and it is not the same question as country: Japan holds 62
+    catalogue companies but only 19 tracked ones, so filtering on country
+    alone would have this service fetching filings for Keyence and Daikin.
+
+    Field names are translated to the ones the fetchers already use -
+    research-universe calls them local_code/local_name because it holds
+    Taiwan and Korea too, while the fetchers here have always said
+    code/native_name. Translating in one place keeps that rename out of
+    six call sites.
+
+    Supersedes the per-source ``config.companies`` list seed.py bakes in,
+    which remains as the fallback when this service cannot be reached.
+    Preferring the live read fixes a confirmed failure mode: seeding is
+    ``ON CONFLICT DO NOTHING``, so a company added or corrected in code
+    never reached an already-seeded database - an alias added for Resonac
+    and Renesas silently kept matching 62 articles instead of 74 until
+    the stored config was updated by hand.
+
+    Returns an empty list if the URL is unset or the service cannot be
+    reached; the caller falls back to its seeded config rather than
+    fetching nothing.
+    """
+    if not universe_url:
+        logger.warning(
+            "[UNIVERSE] RESEARCH_UNIVERSE_URL unset; %s falls back to "
+            "seeded config", country)
+        return []
+    try:
+        headers = ({"Authorization": f"Bearer {universe_api_key}"}
+                   if universe_api_key else {})
+        resp = httpx.get(
+            f"{universe_url}/companies",
+            params={"country": country, "tracked": "true", "limit": 10000},
+            headers=headers,
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+    except Exception as exc:
+        logger.warning(
+            "[UNIVERSE] research-universe unreachable for %s, falling back "
+            "to seeded config: %s", country, exc)
+        return []
+
+    companies: list[dict[str, Any]] = []
+    for r in rows:
+        code = (r.get("local_code") or "").strip()
+        if not code:
+            continue
+        company = (r.get("company_name") or "").strip()
+        entry: dict[str, Any] = {"code": code, "company": company}
+        if r.get("local_name"):
+            entry["native_name"] = r["local_name"]
+        # Every other written form, carried as the list it is rather
+        # than collapsed to one `short_name`. Japan has at most one per
+        # company today, so the two would look alike - but Korea needs
+        # several (a group prefix plus variants), and picking aliases[0]
+        # would quietly make array order decide which form gets matched.
+        entry["aliases"] = [a for a in (r.get("aliases") or []) if a]
+        if r.get("fiscal_year_end"):
+            entry["fiscal_year_end"] = r["fiscal_year_end"]
+        # Only two of the nineteen Japanese companies carry one: "Disco"
+        # and "Towa" are ordinary English words and a bare-name search
+        # returns nightclubs and unrelated firms. Everyone else searches
+        # on their own name, so NULL upstream means exactly that rather
+        # than a missing value to fill in.
+        entry["search_query"] = r.get("search_query") or company
+        companies.append(entry)
+
+    if not companies:
+        logger.warning(
+            "[UNIVERSE] research-universe returned no tracked companies for "
+            "%s; falling back to seeded config", country)
+        return []
+    logger.info("[UNIVERSE] %s: %d tracked companies from research-universe",
+                country, len(companies))
+    return companies
+
+
+# Resolved once per fetch run and shared by every Japan source_type, so
+# six fetchers in one run make one HTTP call rather than six. Set by
+# _fetch_articles before dispatch and cleared after, rather than cached
+# across runs: a scheduled fetch should see a company added this morning.
+_JAPAN_UNIVERSE: list[dict[str, Any]] | None = None
+
+
+def _japan_companies(sources: list[dict]) -> list[dict[str, Any]]:
+    """The tracked Japanese companies for one fetcher.
+
+    Prefers the universe resolved live from research-universe, and falls
+    back to the ``config.companies`` seeded into each source row when
+    that service could not be reached. Both carry the same keys, so no
+    caller needs to know which one it got.
+
+    The fallback is a real fallback, not a substitute: a seeded config
+    cannot be corrected without a manual UPDATE (sources seed
+    ON CONFLICT DO NOTHING), so it will drift from the live universe the
+    first time a company is added or renamed.
+    """
+    if _JAPAN_UNIVERSE:
+        return _JAPAN_UNIVERSE
+    companies: list[dict[str, Any]] = []
+    for s in sources:
+        companies.extend((s.get("config") or {}).get("companies", []))
+    if companies:
+        logger.warning(
+            "[UNIVERSE] using %d companies from seeded config "
+            "(research-universe unavailable)", len(companies))
+    return companies
+
+
 def _fetch_alpha_vantage(
     sources: list[dict],
     alpha_vantage_key: str,
@@ -4297,10 +4417,7 @@ def _fetch_irbank_financials(sources: list[dict], days_back: int) -> list[dict]:
     """Fetch forecast-revision notices for all companies across all
     irbank_financials sources.
     """
-    companies: list[dict[str, str]] = []
-    for source in sources:
-        config = source.get("config") or {}
-        companies.extend(config.get("companies", []))
+    companies = _japan_companies(sources)
     if not companies:
         return []
 
@@ -4422,10 +4539,7 @@ def _fetch_irbank_buyback(sources: list[dict]) -> list[dict]:
     """Fetch buyback-program history for all companies across all
     irbank_buyback sources.
     """
-    companies: list[dict[str, str]] = []
-    for source in sources:
-        config = source.get("config") or {}
-        companies.extend(config.get("companies", []))
+    companies = _japan_companies(sources)
     if not companies:
         return []
 
@@ -4647,10 +4761,7 @@ def _fetch_irbank_company_reference(sources: list[dict]) -> list[dict]:
     """Fetch the latest total-assets + shares-outstanding reference facts
     for all companies across all irbank_company_reference sources.
     """
-    companies: list[dict[str, str]] = []
-    for source in sources:
-        config = source.get("config") or {}
-        companies.extend(config.get("companies", []))
+    companies = _japan_companies(sources)
     if not companies:
         return []
 
@@ -5763,26 +5874,32 @@ def _fetch_monoist_article_body(url: str) -> str | None:
         return None
 
 
-def _match_japan_company(companies: list[dict[str, str]], text: str) -> dict[str, str] | None:
-    """Find the first company (from JAPAN_TICKER_UNIVERSE-shaped dicts)
-    whose native_name OR short_name appears in text - used by both
-    monoist_capex and press_jp, the two source_types that filter a general
-    news feed client-side rather than querying by ticker/company.
+def _match_japan_company(
+    companies: list[dict[str, Any]], text: str,
+) -> dict[str, Any] | None:
+    """Find the first company whose native_name OR any of its aliases
+    appears in text - used by both monoist_capex and press_jp, the two
+    source_types that filter a general news feed client-side rather than
+    querying by ticker/company.
 
-    short_name (only present on companies where it's genuinely DIFFERENT
-    from native_name - see JAPAN_TICKER_UNIVERSE's own comment in seed.py)
-    was added after confirming live that real press articles frequently
-    use an abbreviated company name a full native_name substring match
-    would miss entirely - e.g. Resonac Holdings (レゾナック・
-    ホールディングス) matched 0 real MONOist articles by its full name vs.
-    5 by its short form (レゾナック), and Renesas Electronics
-    (ルネサスエレクトロニクス) matched 0 vs. 7.
+    Aliases matter because real press articles frequently use an
+    abbreviated name a full native_name substring match would miss
+    entirely: Resonac Holdings (レゾナック・ホールディングス) matched 0
+    real MONOist articles by its full name vs. 5 by レゾナック, and
+    Renesas Electronics (ルネサスエレクトロニクス) matched 0 vs. 7.
+
+    Every alias is tried, not just the first. Japanese companies carry at
+    most one today, so a single value would behave identically - but
+    Korea needs several per company (a group prefix plus variants), and
+    reading only one would leave the rest silently unmatched.
+
+    Both sources of companies use the same `aliases` key: the live
+    research-universe read and the seeded config fallback.
     """
     for c in companies:
         if c["native_name"] in text:
             return c
-        short_name = c.get("short_name")
-        if short_name and short_name in text:
+        if any(a and a in text for a in (c.get("aliases") or [])):
             return c
     return None
 
@@ -5801,10 +5918,7 @@ def _fetch_monoist_capex(sources: list[dict]) -> list[dict]:
     already runs first. Confirmed live this stays cheap in practice: a
     31-day window matched ~15-20 articles, not the full ~950-row listing.
     """
-    companies: list[dict[str, str]] = []
-    for source in sources:
-        config = source.get("config") or {}
-        companies.extend(config.get("companies", []))
+    companies = _japan_companies(sources)
     if not companies:
         return []
 
@@ -6063,10 +6177,7 @@ def _fetch_press_jp(sources: list[dict]) -> list[dict]:
     extension, every free wire substitute for it): the free-to-view
     surface is the headline/timestamp, not the article text itself.
     """
-    companies: list[dict[str, str]] = []
-    for source in sources:
-        config = source.get("config") or {}
-        companies.extend(config.get("companies", []))
+    companies = _japan_companies(sources)
     if not companies:
         return []
 
@@ -6214,10 +6325,7 @@ def _fetch_press_jp_english_check(companies: list[dict[str, str]], days_back: in
 
 
 def _fetch_press_jp_english_check_source(sources: list[dict], days_back: int) -> list[dict]:
-    companies: list[dict[str, str]] = []
-    for source in sources:
-        config = source.get("config") or {}
-        companies.extend(config.get("companies", []))
+    companies = _japan_companies(sources)
     if not companies:
         return []
     return _fetch_press_jp_english_check(companies, days_back)
@@ -6284,6 +6392,15 @@ def _fetch_articles(
     monoist_capex_sources = [s for s in sources if s.get("source_type") == "monoist_capex"]
     press_jp_sources = [s for s in sources if s.get("source_type") == "press_jp"]
     press_jp_english_check_sources = [s for s in sources if s.get("source_type") == "press_jp_english_check"]
+
+    # Resolve the Japanese universe once for the whole run, before any
+    # Japan fetcher dispatches - six source_types share it, and each
+    # would otherwise call research-universe itself. Empty on failure,
+    # which is what makes _japan_companies fall back to seeded config.
+    global _JAPAN_UNIVERSE
+    _JAPAN_UNIVERSE = (
+        get_tracked_company_universe("Japan", universe_url, universe_api_key)
+        if domain_slug == "japan_market_signal" else None)
 
     articles: list[dict] = []
     t0 = time.perf_counter()

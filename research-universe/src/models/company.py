@@ -44,14 +44,34 @@ _DETAIL_COLS = f"""
     c.id::text, c.company_name, c.ticker, c.market, c.country, c.website,
     c.multi_category_reason, c.status, c.agent_added,
     c.added_by, c.added_at, c.verified_by, c.verified_at,
+    c.local_code, c.local_name, c.search_query,
+    COALESCE(c.aliases, '{{}}') AS aliases,
+    COALESCE(c.exclude_terms, '{{}}') AS exclude_terms,
+    c.fiscal_year_end, c.market_cap_usd_bn, c.market_cap_local,
+    c.local_currency, c.index_name, c.index_weight_pct,
+    c.home_market_rank, c.domestic_sales_pct, c.financials_period,
+    c.market_data_as_of,
     {_CATEGORY_NAMES} AS categories,
     {_SUBCATEGORY_NAMES} AS subcategories,
     {_PROPOSED_SUBCATEGORY_NAMES} AS proposed_subcategories
 """
 
+# The market-profile columns are carried on the BRIEF projection too,
+# not just the detail one. The signal pipelines read their whole tracked
+# universe in a single listing call; without these here they would have
+# to follow up with one authenticated detail fetch per company, turning
+# one request into twenty. They are NULL on the ~1,400 rows that predate
+# this, which costs those callers nothing.
 _BRIEF_COLS = f"""
     c.id::text, c.company_name, c.ticker, c.market, c.country, c.website,
     c.status, c.agent_added, c.added_at,
+    c.local_code, c.local_name, c.search_query,
+    COALESCE(c.aliases, '{{}}') AS aliases,
+    COALESCE(c.exclude_terms, '{{}}') AS exclude_terms,
+    c.fiscal_year_end, c.market_cap_usd_bn, c.market_cap_local,
+    c.local_currency, c.index_name, c.index_weight_pct,
+    c.home_market_rank, c.domestic_sales_pct, c.financials_period,
+    c.market_data_as_of,
     {_CATEGORY_NAMES} AS categories,
     {_SUBCATEGORY_NAMES} AS subcategories,
     {_PROPOSED_SUBCATEGORY_NAMES} AS proposed_subcategories
@@ -111,14 +131,49 @@ def get_company(company_id: str) -> dict[str, Any] | None:
         return dict(row) if row else None
 
 
+def get_company_customers(company_id: str) -> list[dict[str, Any]]:
+    """Return one company's disclosed counterparties, largest first.
+
+    Ordered with the disclosed percentages at the top because they are the
+    only ones carrying a filed figure; the rest are named relationships
+    with no size attached, and NULLS LAST keeps them from displacing the
+    ones that do.
+    """
+    with get_db() as conn:
+        return [dict(r) for r in conn.execute(
+            """
+            SELECT customer_name, customer_ticker, aliases, relationship,
+                   pct_of_sales, period
+              FROM universe_company_customers
+             WHERE company_id = :id
+             ORDER BY pct_of_sales DESC NULLS LAST, customer_name
+            """,
+            {"id": company_id},
+        ).fetchall()]
+
+
 def list_companies(
     status: str | None = None,
     country: str | None = None,
     has_ticker: bool | None = None,
+    tracked: bool | None = None,
+    include_customers: bool = False,
     limit: int = 5000,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
-    """Return companies, optionally filtered by status, country, and ticker presence. Ordered by company_name."""
+    """Return companies, optionally filtered by status, country, and ticker presence. Ordered by company_name.
+
+    ``tracked`` selects the companies a signal pipeline actually follows,
+    identified by having a local_code. Country alone is not the same
+    question and will not do: Japan holds 62 catalogue companies but only
+    19 tracked ones, so a consumer filtering on country would try to
+    fetch filings for Keyence and Daikin.
+
+    ``include_customers`` nests each company's disclosed counterparties.
+    Off by default and deliberately opt-in - only the Japan classifier
+    reads them, and switching it on by default would make every caller
+    pay for a join none of the other ~1,400 rows has data for.
+    """
     params: dict[str, Any] = {"limit": limit, "offset": offset}
     where = "WHERE c.ticker != ''"
     if status:
@@ -131,6 +186,10 @@ def list_companies(
         where += " AND c.ticker != 'Private'"
     elif has_ticker is False:
         where += " AND c.ticker = 'Private'"
+    if tracked is True:
+        where += " AND c.local_code IS NOT NULL"
+    elif tracked is False:
+        where += " AND c.local_code IS NULL"
     with get_db() as conn:
         cur = conn.execute(
             f"""
@@ -142,7 +201,32 @@ def list_companies(
             """,
             params,
         )
-        return [dict(r) for r in cur.fetchall()]
+        rows = [dict(r) for r in cur.fetchall()]
+
+        if include_customers and rows:
+            # One query for every company on the page, grouped in memory,
+            # rather than a query per row.
+            by_company: dict[str, list[dict[str, Any]]] = {}
+            for cust in conn.execute(
+                """
+                SELECT company_id::text AS company_id, customer_name,
+                       customer_ticker, aliases, relationship,
+                       pct_of_sales, period
+                  FROM universe_company_customers
+                 -- ::uuid[] because _BRIEF_COLS selects id::text, so the
+                 -- ids arriving here are strings and Postgres will not
+                 -- compare text to uuid on its own.
+                 WHERE company_id = ANY(:ids::uuid[])
+                 ORDER BY pct_of_sales DESC NULLS LAST, customer_name
+                """,
+                {"ids": [r["id"] for r in rows]},
+            ).fetchall():
+                c = dict(cust)
+                by_company.setdefault(c.pop("company_id"), []).append(c)
+            for r in rows:
+                r["customers"] = by_company.get(r["id"], [])
+
+        return rows
 
 
 def get_pending_companies(limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:

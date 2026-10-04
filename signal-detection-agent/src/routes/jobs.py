@@ -13,7 +13,7 @@ from controllers.run import generate_korea_signal_summary_for_date
 from models.jobs import get_job, get_results_summary, list_all_results, list_jobs, list_results, list_taiwan_periods
 from pipeline.japan_companies import company_for, valuation_for
 from pipeline.japan_signal_view import to_jp_signal
-from pipeline.japan_companies import JAPAN_TICKER_UNIVERSE
+from pipeline.japan_companies import japan_ticker_universe
 
 router = APIRouter()
 
@@ -98,7 +98,7 @@ async def get_japan_signal_universe(
     months-old market cap as current.
     """
     companies = []
-    for record in JAPAN_TICKER_UNIVERSE:
+    for record in japan_ticker_universe():
         code = record["code"]
         # Built field by field rather than spread from the record.
         # Spreading leaked whatever the table happened to hold - the
@@ -117,8 +117,6 @@ async def get_japan_signal_universe(
             "marketWeight": valuation_for(code),
             "customers": record["customers"],
         }
-        if record.get("japan_sales_note"):
-            entry["japanSalesNote"] = record["japan_sales_note"]
         companies.append(entry)
     return {"companies": companies}
 

@@ -18,7 +18,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-from pipeline.japan_companies import JAPAN_TICKER_UNIVERSE
+from pipeline.japan_companies import japan_ticker_universe
 
 # ---------------------------------------------------------------- #
 # Card formatting helpers.                                          #
@@ -191,7 +191,7 @@ _CLASSIFICATION = {
 
 _INDUSTRY_SUBJECT = "Japan semiconductor equipment industry"
 
-_JAPAN_TICKER_BY_CODE = {t["code"]: t for t in JAPAN_TICKER_UNIVERSE}
+_JAPAN_TICKER_BY_CODE = {t["code"]: t for t in japan_ticker_universe()}
 
 
 def _is_progress_row(meta: dict[str, Any]) -> bool:

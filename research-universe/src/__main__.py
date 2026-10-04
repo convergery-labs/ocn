@@ -265,5 +265,233 @@ def bulk_import_cmd(json_file: str, dry_run: bool) -> None:
             click.echo(f"  {e}")
 
 
+@cli.command("load-market-universe")
+@click.argument("json_file")
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Report what would change without writing.")
+def load_market_universe_cmd(json_file: str, dry_run: bool) -> None:
+    """Load or refresh one country's tracked companies and their customers.
+
+    Unlike ``bulk-import``, which only inserts and skips anything that
+    already exists, this ENRICHES: most of these companies are already in
+    the universe, curated by hand, and what they lack is the market
+    profile the signal pipelines need - local code, local name, fiscal
+    calendar, aliases. So a company that is already here is updated in
+    place rather than skipped.
+
+    Matched on (country, local_code), never on name: a name is editable,
+    and keying on one creates a duplicate the first time someone fixes a
+    spelling. Rows that predate this loader have no local_code, so they
+    are found by name ONCE and stamped with their code; every run after
+    that matches on the code.
+
+    Curated fields are never overwritten. An existing row keeps its
+    category, website and status - the catalogue's editorial decisions
+    are not this loader's to revise. Only the market-profile columns,
+    which no human curated, are written.
+    """
+    import json as _json
+
+    import db
+    from db import get_db
+    from models.company import normalize_country
+
+    db.init_db()
+
+    with open(json_file) as f:
+        payload = _json.load(f)
+
+    # Rows whose stored name differs from the pipeline's. Spelled out one
+    # by one rather than fuzzy-matched: several of these companies have a
+    # near-namesake in the catalogue already - SoftBank Group sits beside
+    # SoftBank Corp (its subsidiary) and an ADR line, and Renesas appears
+    # twice - so a similarity match would silently enrich the wrong row
+    # and leave the right one to be created as a duplicate. An entry here
+    # is a deliberate statement that two names are one company; anything
+    # not listed must match exactly or be created.
+    name_overrides: dict[str, str] = {
+        o["local_code"]: o["stored_as"]
+        for o in payload.get("name_overrides", [])
+    }
+
+    country = normalize_country(payload["country"])
+    companies = payload["companies"]
+    click.echo(f"{json_file}: {len(companies)} companies, "
+               f"{sum(len(c['customers']) for c in companies)} customers "
+               f"({country})")
+
+    # Taxonomy, needed only for rows we have to create.
+    cat_map: dict[str, int] = {}
+    sub_map: dict[tuple[str, int], int] = {}
+    with get_db() as conn:
+        for r in conn.execute(
+                "SELECT id, name FROM universe_taxonomy WHERE type='category'"
+        ).fetchall():
+            cat_map[r["name"].strip()] = r["id"]
+        for r in conn.execute(
+                "SELECT id, name, parent_id FROM universe_taxonomy "
+                "WHERE type='subcategory'").fetchall():
+            sub_map[(r["name"].strip(), r["parent_id"])] = r["id"]
+
+    created = enriched = cust_rows = 0
+    fixed: list[str] = []
+    errors: list[str] = []
+
+    for c in companies:
+        code, name = c["local_code"], c["company_name"]
+        match_name = name_overrides.get(code, name)
+        try:
+            with get_db() as conn:
+                row = conn.execute(
+                    "SELECT id::text, company_name, ticker, country, market "
+                    "FROM universe_companies "
+                    " WHERE (country = :country AND local_code = :code) "
+                    "    OR LOWER(company_name) = LOWER(:match_name)",
+                    {"country": country, "code": code,
+                     "match_name": match_name},
+                ).fetchone()
+
+                if row is None:
+                    cat_id = cat_map.get(c["category"] or "")
+                    sub_id = sub_map.get((c["subcategory"] or "", cat_id or -1))
+                    if not cat_id:
+                        errors.append(f"{code} {name}: category "
+                                      f"{c['category']!r} not in taxonomy")
+                        continue
+                    if dry_run:
+                        click.echo(f"  CREATE  {code}  {name}")
+                        created += 1
+                        continue
+                    cur = conn.execute(
+                        """
+                        INSERT INTO universe_companies (
+                            company_name, ticker, market, country, website,
+                            category_ids, subcategory_ids,
+                            status, agent_added, added_by
+                        ) VALUES (
+                            :name, :ticker, :market, :country, :website,
+                            :cats, :subs,
+                            'verified', FALSE, 'load-market-universe'
+                        ) RETURNING id::text
+                        """,
+                        {"name": name, "ticker": c["ticker"],
+                         "market": c["market"], "country": country,
+                         "website": c["website"], "cats": [cat_id],
+                         "subs": [sub_id] if sub_id else []},
+                    )
+                    company_id = cur.fetchone()["id"]
+                    created += 1
+                else:
+                    company_id = row["id"]
+                    # An ADR ticker on a row whose country is also wrong is
+                    # a mis-add, not a deliberate choice of listing: the
+                    # company is Japanese either way. Corrected, and said
+                    # out loud rather than silently.
+                    if row["country"] != country:
+                        fixed.append(f"{code} {name}: country "
+                                     f"{row['country']} -> {country}, "
+                                     f"ticker {row['ticker']} -> {c['ticker']}")
+                        if not dry_run:
+                            conn.execute(
+                                "UPDATE universe_companies "
+                                "   SET country = :country, market = :market, "
+                                "       ticker = :ticker "
+                                " WHERE id = :id",
+                                {"country": country, "market": c["market"],
+                                 "ticker": c["ticker"], "id": company_id},
+                            )
+                    # The registered company name. The catalogue and the
+                    # pipelines disagreed on four of these - one said
+                    # "Murata", the other "Murata Manufacturing"; one
+                    # "Kioxia", the other "Kioxia Holdings" - and a
+                    # company name is not a cosmetic field here: it is
+                    # what an English-language news search is run on, so
+                    # the shorter form silently returns fewer articles.
+                    # The file carries the decided name and it wins.
+                    if row["company_name"] != name:
+                        fixed.append(f"{code}: name "
+                                     f"{row['company_name']!r} -> {name!r}")
+                        if not dry_run:
+                            conn.execute(
+                                "UPDATE universe_companies "
+                                "   SET company_name = :name WHERE id = :id",
+                                {"name": name, "id": company_id},
+                            )
+                    enriched += 1
+                    if dry_run:
+                        click.echo(f"  ENRICH  {code}  {name}")
+
+                if dry_run:
+                    cust_rows += len(c["customers"])
+                    continue
+
+                conn.execute(
+                    """
+                    UPDATE universe_companies SET
+                        local_code         = :code,
+                        local_name         = :local_name,
+                        search_query       = :search_query,
+                        aliases            = :aliases,
+                        exclude_terms      = :exclude_terms,
+                        fiscal_year_end    = :fiscal_year_end,
+                        market_cap_usd_bn  = :market_cap_usd_bn,
+                        market_cap_local   = :market_cap_local,
+                        local_currency     = :local_currency,
+                        index_name         = :index_name,
+                        index_weight_pct   = :index_weight_pct,
+                        home_market_rank   = :home_market_rank,
+                        domestic_sales_pct = :domestic_sales_pct,
+                        financials_period  = :financials_period,
+                        market_data_as_of  = :market_data_as_of
+                      WHERE id = :id
+                    """,
+                    {**{k: c[k] for k in (
+                        "local_name", "search_query", "aliases", "exclude_terms",
+                        "fiscal_year_end", "market_cap_usd_bn",
+                        "market_cap_local", "local_currency", "index_name",
+                        "index_weight_pct", "home_market_rank",
+                        "domestic_sales_pct", "financials_period",
+                        "market_data_as_of")},
+                     "code": code, "id": company_id},
+                )
+
+                # Replaced wholesale: the source file is the record, so a
+                # customer dropped from it should disappear here too. An
+                # upsert would leave the stale row behind for good.
+                conn.execute(
+                    "DELETE FROM universe_company_customers "
+                    " WHERE company_id = :id", {"id": company_id})
+                for cust in c["customers"]:
+                    conn.execute(
+                        """
+                        INSERT INTO universe_company_customers (
+                            company_id, customer_name, customer_ticker,
+                            aliases, relationship, pct_of_sales, period
+                        ) VALUES (
+                            :id, :customer_name, :customer_ticker,
+                            :aliases, :relationship, :pct_of_sales, :period
+                        )
+                        """,
+                        {**cust, "id": company_id},
+                    )
+                    cust_rows += 1
+        except Exception as exc:                      # noqa: BLE001
+            errors.append(f"{code} {name}: {exc}")
+
+    click.echo(f"\n=== {'DRY RUN ' if dry_run else ''}DONE ===")
+    click.echo(f"Created  : {created}")
+    click.echo(f"Enriched : {enriched}")
+    click.echo(f"Customers: {cust_rows}")
+    if fixed:
+        click.echo(f"\nCorrected ({len(fixed)}):")
+        for f in fixed:
+            click.echo(f"  {f}")
+    if errors:
+        click.echo(f"\nErrors ({len(errors)}):")
+        for e in errors:
+            click.echo(f"  {e}")
+        raise SystemExit(1)
+
+
 if __name__ == "__main__":
     cli()
