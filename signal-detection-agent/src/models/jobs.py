@@ -215,11 +215,6 @@ def insert_taiwan_signal_classification(
                 result.get("reason"),
                 article.get("published"),
                 json.dumps(result.get("metadata") or {}, ensure_ascii=False),
-                # Customers this event actually names - see
-                # _attach_mentioned_customers. Empty for most rows, and
-                # that is the honest answer rather than a gap.
-                json.dumps(result.get("entities") or [], ensure_ascii=False),
-                [e["name"].lower() for e in (result.get("entities") or [])],
             ),
         )
 

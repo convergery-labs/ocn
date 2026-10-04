@@ -1935,8 +1935,8 @@ KOREA_GDELT_ENGLISH_SOURCE: dict[str, Any] = {
 # every habit built from its history describes a company that no longer
 # trades. Its past filings were real, but they describe a market the
 # tracked universe no longer covers.
-# short_name: a common abbreviated form real Japanese press articles use
-# INSTEAD OF the full native_name - confirmed as a real, measured gap
+# aliases: other written forms real Japanese press articles use INSTEAD
+# OF the full native_name - confirmed as a real, measured gap
 # 2026-09-28 by comparing full-native_name matches against short-form
 # matches over the same real MONOist article sample: Resonac Holdings
 # (レゾナック・ホールディングス) matched 0 articles by full name vs. 5 by
@@ -1946,8 +1946,11 @@ KOREA_GDELT_ENGLISH_SOURCE: dict[str, Any] = {
 # DIFFERENT from native_name - most company names here are already short
 # enough that press articles use the same string either way (e.g.
 # Advantest's アドバンテスト is never abbreviated further in practice).
+# Named `aliases` to match research-universe, which owns this data now
+# and holds a list per company because Korea needs several; these rows
+# remain as the fallback used when that service cannot be reached.
 # Used by monoist_capex/press_jp's company-name matching (matches against
-# EITHER native_name or short_name, when present) - not by any source
+# native_name OR any alias) - not by any source
 # that queries by native_name as an exact API parameter (Taiwan/Korea's
 # GDELT sources), where using an abbreviation could return TOO MANY
 # unrelated results instead of too few.
@@ -1965,18 +1968,18 @@ JAPAN_TICKER_UNIVERSE: list[dict[str, str]] = [
     {"code": "6146", "company": "Disco", "native_name": "ディスコ", "exchange": "TSE", "fiscal_year_end": "03-31"},
     {"code": "6920", "company": "Lasertec", "native_name": "レーザーテック", "exchange": "TSE", "fiscal_year_end": "06-30"},
     {"code": "5803", "company": "Fujikura", "native_name": "フジクラ", "exchange": "TSE", "fiscal_year_end": "03-31"},
-    {"code": "4063", "company": "Shin-Etsu Chemical", "native_name": "信越化学工業", "short_name": "信越化学", "exchange": "TSE", "fiscal_year_end": "03-31"},
+    {"code": "4063", "company": "Shin-Etsu Chemical", "native_name": "信越化学工業", "aliases": ["信越化学"], "exchange": "TSE", "fiscal_year_end": "03-31"},
     {"code": "3436", "company": "SUMCO", "native_name": "SUMCO", "exchange": "TSE", "fiscal_year_end": "12-31"},
     {"code": "4062", "company": "Ibiden", "native_name": "イビデン", "exchange": "TSE", "fiscal_year_end": "03-31"},
-    {"code": "7735", "company": "Screen Holdings", "native_name": "SCREENホールディングス", "short_name": "SCREEN", "exchange": "TSE", "fiscal_year_end": "03-31"},
+    {"code": "7735", "company": "Screen Holdings", "native_name": "SCREENホールディングス", "aliases": ["SCREEN"], "exchange": "TSE", "fiscal_year_end": "03-31"},
     {"code": "6525", "company": "Kokusai Electric", "native_name": "KOKUSAI ELECTRIC", "exchange": "TSE", "fiscal_year_end": "03-31"},
-    {"code": "4186", "company": "Tokyo Ohka Kogyo", "native_name": "東京応化工業", "short_name": "東京応化", "exchange": "TSE", "fiscal_year_end": "03-31"},
-    {"code": "4004", "company": "Resonac Holdings", "native_name": "レゾナック・ホールディングス", "short_name": "レゾナック", "exchange": "TSE", "fiscal_year_end": "12-31"},
+    {"code": "4186", "company": "Tokyo Ohka Kogyo", "native_name": "東京応化工業", "aliases": ["東京応化"], "exchange": "TSE", "fiscal_year_end": "03-31"},
+    {"code": "4004", "company": "Resonac Holdings", "native_name": "レゾナック・ホールディングス", "aliases": ["レゾナック"], "exchange": "TSE", "fiscal_year_end": "12-31"},
     {"code": "6315", "company": "Towa", "native_name": "TOWA", "exchange": "TSE", "fiscal_year_end": "03-31"},
     {"code": "6981", "company": "Murata Manufacturing", "native_name": "村田製作所", "exchange": "TSE", "fiscal_year_end": "03-31"},
     {"code": "6762", "company": "TDK", "native_name": "TDK", "exchange": "TSE", "fiscal_year_end": "03-31"},
     {"code": "285A", "company": "Kioxia", "native_name": "キオクシア", "exchange": "TSE", "fiscal_year_end": "03-31"},
-    {"code": "6723", "company": "Renesas Electronics", "native_name": "ルネサスエレクトロニクス", "short_name": "ルネサス", "exchange": "TSE", "fiscal_year_end": "12-31"},
+    {"code": "6723", "company": "Renesas Electronics", "native_name": "ルネサスエレクトロニクス", "aliases": ["ルネサス"], "exchange": "TSE", "fiscal_year_end": "12-31"},
     {"code": "6501", "company": "Hitachi", "native_name": "日立製作所", "exchange": "TSE", "fiscal_year_end": "03-31"},
     {"code": "9984", "company": "SoftBank Group", "native_name": "ソフトバンクグループ", "exchange": "TSE", "fiscal_year_end": "03-31"},
 ]
@@ -2411,7 +2414,7 @@ JAPAN_MONOIST_CAPEX_SOURCE: dict[str, Any] = {
         "companies": [
             {
                 "code": t["code"], "company": t["company"], "native_name": t["native_name"],
-                **({"short_name": t["short_name"]} if "short_name" in t else {}),
+                **({"aliases": t["aliases"]} if "aliases" in t else {}),
             }
             for t in JAPAN_TICKER_UNIVERSE
         ],
@@ -2477,7 +2480,7 @@ JAPAN_PRESS_JP_SOURCE: dict[str, Any] = {
         "companies": [
             {
                 "code": t["code"], "company": t["company"], "native_name": t["native_name"],
-                **({"short_name": t["short_name"]} if "short_name" in t else {}),
+                **({"aliases": t["aliases"]} if "aliases" in t else {}),
             }
             for t in JAPAN_TICKER_UNIVERSE
         ],

@@ -354,9 +354,9 @@ class TestCompanyProfile:
         assert valuation_for("6857", date(2027, 6, 1))["isStale"] is True
 
     def test_every_profiled_company_is_in_the_universe(self):
-        from pipeline.japan_companies import JAPAN_COMPANIES
-        from pipeline.japan_companies import JAPAN_TICKER_UNIVERSE
-        codes = {t["code"] for t in JAPAN_TICKER_UNIVERSE}
+        from pipeline.japan_companies import (JAPAN_COMPANIES,
+                                              japan_ticker_universe)
+        codes = {t["code"] for t in japan_ticker_universe()}
         assert set(JAPAN_COMPANIES) == codes
 
 

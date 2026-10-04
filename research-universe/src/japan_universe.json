@@ -1,0 +1,1841 @@
+{
+  "as_of": "2026-10-01",
+  "country": "Japan",
+  "name_overrides": [
+    {
+      "local_code": "285A",
+      "stored_as": "Kioxia Holdings"
+    },
+    {
+      "local_code": "6981",
+      "stored_as": "Murata"
+    },
+    {
+      "local_code": "5803",
+      "stored_as": "Fujikura Ltd"
+    },
+    {
+      "local_code": "7735",
+      "stored_as": "SCREEN Holdings"
+    }
+  ],
+  "companies": [
+    {
+      "local_code": "9984",
+      "company_name": "SoftBank Group",
+      "ticker": "9984.T",
+      "market": "International",
+      "country": "Japan",
+      "website": "https://group.softbank",
+      "local_name": "ソフトバンクグループ",
+      "aliases": [],
+      "exclude_terms": [],
+      "fiscal_year_end": "03-31",
+      "market_cap_usd_bn": 241.4,
+      "market_cap_local": 38.2,
+      "local_currency": "JPY",
+      "index_name": "TSE Prime",
+      "index_weight_pct": 2.71,
+      "home_market_rank": 2,
+      "domestic_sales_pct": null,
+      "financials_period": "FY3/26",
+      "market_data_as_of": "2026-10-01",
+      "category": null,
+      "subcategory": null,
+      "customers": [
+        {
+          "customer_name": "SoftBank Corp subscribers",
+          "customer_ticker": null,
+          "aliases": [
+            "SoftBank Corp subscribers"
+          ],
+          "relationship": "user_base",
+          "pct_of_sales": null,
+          "period": "FY3/26"
+        },
+        {
+          "customer_name": "Arm China",
+          "customer_ticker": null,
+          "aliases": [
+            "Arm China",
+            "Arm Technology China",
+            "アームチャイナ"
+          ],
+          "relationship": "licensee",
+          "pct_of_sales": 16.0,
+          "period": "FY3/26"
+        },
+        {
+          "customer_name": "Apple",
+          "customer_ticker": "AAPL",
+          "aliases": [
+            "Apple",
+            "アップル"
+          ],
+          "relationship": "licensee",
+          "pct_of_sales": null,
+          "period": null
+        },
+        {
+          "customer_name": "Qualcomm",
+          "customer_ticker": "QCOM",
+          "aliases": [
+            "Qualcomm",
+            "クアルコム"
+          ],
+          "relationship": "licensee",
+          "pct_of_sales": null,
+          "period": null
+        },
+        {
+          "customer_name": "MediaTek",
+          "customer_ticker": "2454",
+          "aliases": [
+            "MediaTek",
+            "メディアテック",
+            "聯發科"
+          ],
+          "relationship": "licensee",
+          "pct_of_sales": null,
+          "period": null
+        },
+        {
+          "customer_name": "Amazon",
+          "customer_ticker": "AMZN",
+          "aliases": [
+            "AWS",
+            "Amazon",
+            "アマゾン"
+          ],
+          "relationship": "licensee",
+          "pct_of_sales": null,
+          "period": null
+        },
+        {
+          "customer_name": "Microsoft",
+          "customer_ticker": "MSFT",
+          "aliases": [
+            "Microsoft",
+            "マイクロソフト"
+          ],
+          "relationship": "licensee",
+          "pct_of_sales": null,
+          "period": null
+        },
+        {
+          "customer_name": "Alphabet",
+          "customer_ticker": "GOOGL",
+          "aliases": [
+            "Alphabet",
+            "Google",
+            "グーグル"
+          ],
+          "relationship": "licensee",
+          "pct_of_sales": null,
+          "period": null
+        },
+        {
+          "customer_name": "Nvidia",
+          "customer_ticker": "NVDA",
+          "aliases": [
+            "NVIDIA",
+            "Nvidia",
+            "エヌビディア"
+          ],
+          "relationship": "licensee",
+          "pct_of_sales": null,
+          "period": null
+        },
+        {
+          "customer_name": "OpenAI",
+          "customer_ticker": null,
+          "aliases": [
+            "OpenAI",
+            "オープンAI"
+          ],
+          "relationship": "investee",
+          "pct_of_sales": null,
+          "period": "2025"
+        }
+      ],
+      "search_query": "SoftBank Group"
+    },
+    {
+      "local_code": "285A",
+      "company_name": "Kioxia Holdings",
+      "ticker": "285A.T",
+      "market": "International",
+      "country": "Japan",
+      "website": "https://www.kioxia.com",
+      "local_name": "キオクシア",
+      "aliases": [],
+      "exclude_terms": [],
+      "fiscal_year_end": "03-31",
+      "market_cap_usd_bn": 195.9,
+      "market_cap_local": 31.0,
+      "local_currency": "JPY",
+      "index_name": "TSE Prime",
+      "index_weight_pct": 2.2,
+      "home_market_rank": 4,
+      "domestic_sales_pct": 11.3,
+      "financials_period": "FY3/26",
+      "market_data_as_of": "2026-10-01",
+      "category": null,
+      "subcategory": null,
+      "customers": [
+        {
+          "customer_name": "Apple",
+          "customer_ticker": "AAPL",
+          "aliases": [
+            "Apple",
+            "アップル"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": 20.4,
+          "period": "FY3/26"
+        },
+        {
+          "customer_name": "Sandisk",
+          "customer_ticker": "SNDK",
+          "aliases": [
+            "SanDisk",
+            "Sandisk",
+            "サンディスク"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": 8.0,
+          "period": "FY3/26"
+        },
+        {
+          "customer_name": "Dell",
+          "customer_ticker": "DELL",
+          "aliases": [
+            "Dell",
+            "デル"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "FY3/25"
+        },
+        {
+          "customer_name": "Microsoft",
+          "customer_ticker": "MSFT",
+          "aliases": [
+            "Microsoft",
+            "マイクロソフト"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": null
+        },
+        {
+          "customer_name": "HP",
+          "customer_ticker": "HPQ",
+          "aliases": [
+            "HP",
+            "Hewlett-Packard",
+            "ヒューレット・パッカード"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": null
+        },
+        {
+          "customer_name": "Nvidia",
+          "customer_ticker": "NVDA",
+          "aliases": [
+            "NVIDIA",
+            "Nvidia",
+            "エヌビディア"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2025"
+        }
+      ],
+      "search_query": "Kioxia Holdings"
+    },
+    {
+      "local_code": "8035",
+      "company_name": "Tokyo Electron",
+      "ticker": "8035.T",
+      "market": "International",
+      "country": "Japan",
+      "website": "https://www.tel.com",
+      "local_name": "東京エレクトロン",
+      "aliases": [],
+      "exclude_terms": [],
+      "fiscal_year_end": "03-31",
+      "market_cap_usd_bn": 180.5,
+      "market_cap_local": 28.56,
+      "local_currency": "JPY",
+      "index_name": "TSE Prime",
+      "index_weight_pct": 1.98,
+      "home_market_rank": 5,
+      "domestic_sales_pct": 9.8,
+      "financials_period": "FY3/26",
+      "market_data_as_of": "2026-10-01",
+      "category": "Semiconductor Manufacturing",
+      "subcategory": "Semiconductor Equipment",
+      "customers": [
+        {
+          "customer_name": "Samsung Electronics",
+          "customer_ticker": "005930",
+          "aliases": [
+            "Samsung",
+            "Samsung Electronics",
+            "サムスン",
+            "サムスン電子"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": 15.1,
+          "period": "FY3/26"
+        },
+        {
+          "customer_name": "TSMC",
+          "customer_ticker": "TSM",
+          "aliases": [
+            "TSMC",
+            "台湾積体電路",
+            "台積電"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": 12.9,
+          "period": "FY3/26"
+        },
+        {
+          "customer_name": "Intel",
+          "customer_ticker": "INTC",
+          "aliases": [
+            "Intel",
+            "インテル"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "FY3/23"
+        },
+        {
+          "customer_name": "Micron Technology",
+          "customer_ticker": "MU",
+          "aliases": [
+            "Micron",
+            "Micron Technology",
+            "マイクロン"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "FY2025"
+        },
+        {
+          "customer_name": "SK hynix",
+          "customer_ticker": "000660",
+          "aliases": [
+            "SK Hynix",
+            "SK hynix",
+            "SKハイニックス"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2026"
+        },
+        {
+          "customer_name": "Chinese chipmakers (unnamed)",
+          "customer_ticker": null,
+          "aliases": [
+            "Chinese chipmakers (unnamed)"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "FY3/26"
+        }
+      ],
+      "search_query": "Tokyo Electron"
+    },
+    {
+      "local_code": "6857",
+      "company_name": "Advantest",
+      "ticker": "6857.T",
+      "market": "International",
+      "country": "Japan",
+      "website": "https://www.advantest.com",
+      "local_name": "アドバンテスト",
+      "aliases": [],
+      "exclude_terms": [],
+      "fiscal_year_end": "03-31",
+      "market_cap_usd_bn": 172.1,
+      "market_cap_local": 27.23,
+      "local_currency": "JPY",
+      "index_name": "TSE Prime",
+      "index_weight_pct": 1.84,
+      "home_market_rank": 6,
+      "domestic_sales_pct": 2.2,
+      "financials_period": "FY3/26",
+      "market_data_as_of": "2026-10-01",
+      "category": null,
+      "subcategory": null,
+      "customers": [
+        {
+          "customer_name": "Nvidia",
+          "customer_ticker": "NVDA",
+          "aliases": [
+            "NVIDIA",
+            "Nvidia",
+            "エヌビディア"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": 21.6,
+          "period": "FY3/26"
+        },
+        {
+          "customer_name": "TSMC",
+          "customer_ticker": "TSM",
+          "aliases": [
+            "TSMC",
+            "台湾積体電路",
+            "台積電"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": 11.1,
+          "period": "FY3/26"
+        },
+        {
+          "customer_name": "Samsung Electronics",
+          "customer_ticker": "005930",
+          "aliases": [
+            "Samsung",
+            "Samsung Electronics",
+            "サムスン",
+            "サムスン電子"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "FY3/25"
+        },
+        {
+          "customer_name": "SK hynix",
+          "customer_ticker": "000660",
+          "aliases": [
+            "SK Hynix",
+            "SK hynix",
+            "SKハイニックス"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2026"
+        },
+        {
+          "customer_name": "Micron Technology",
+          "customer_ticker": "MU",
+          "aliases": [
+            "Micron",
+            "Micron Technology",
+            "マイクロン"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2026"
+        }
+      ],
+      "search_query": "Advantest"
+    },
+    {
+      "local_code": "6501",
+      "company_name": "Hitachi",
+      "ticker": "6501.T",
+      "market": "International",
+      "country": "Japan",
+      "website": "https://www.hitachi.com",
+      "local_name": "日立製作所",
+      "aliases": [],
+      "exclude_terms": [],
+      "fiscal_year_end": "03-31",
+      "market_cap_usd_bn": 156.0,
+      "market_cap_local": 24.68,
+      "local_currency": "JPY",
+      "index_name": "TSE Prime",
+      "index_weight_pct": 1.82,
+      "home_market_rank": 8,
+      "domestic_sales_pct": 37.0,
+      "financials_period": "FY3/26",
+      "market_data_as_of": "2026-10-01",
+      "category": null,
+      "subcategory": null,
+      "customers": [
+        {
+          "customer_name": "Amprion",
+          "customer_ticker": null,
+          "aliases": [
+            "Amprion"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2024"
+        },
+        {
+          "customer_name": "TenneT",
+          "customer_ticker": null,
+          "aliases": [
+            "TenneT"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2023"
+        },
+        {
+          "customer_name": "National Grid & SSEN (EGL3)",
+          "customer_ticker": "NG",
+          "aliases": [
+            "National Grid & SSEN (EGL3)"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2026"
+        },
+        {
+          "customer_name": "Terna & STEG (ELMED)",
+          "customer_ticker": "TRN",
+          "aliases": [
+            "Terna & STEG (ELMED)"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2026"
+        },
+        {
+          "customer_name": "WMATA",
+          "customer_ticker": null,
+          "aliases": [
+            "WMATA"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2021"
+        },
+        {
+          "customer_name": "Trenitalia",
+          "customer_ticker": null,
+          "aliases": [
+            "Trenitalia"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2026"
+        },
+        {
+          "customer_name": "OpenAI",
+          "customer_ticker": null,
+          "aliases": [
+            "OpenAI",
+            "オープンAI"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2025"
+        }
+      ],
+      "search_query": "Hitachi"
+    },
+    {
+      "local_code": "6981",
+      "company_name": "Murata Manufacturing",
+      "ticker": "6981.T",
+      "market": "International",
+      "country": "Japan",
+      "website": "https://www.murata.com",
+      "local_name": "村田製作所",
+      "aliases": [],
+      "exclude_terms": [],
+      "fiscal_year_end": "03-31",
+      "market_cap_usd_bn": 97.9,
+      "market_cap_local": 15.49,
+      "local_currency": "JPY",
+      "index_name": "TSE Prime",
+      "index_weight_pct": 1.06,
+      "home_market_rank": 15,
+      "domestic_sales_pct": 7.3,
+      "financials_period": "FY3/26",
+      "market_data_as_of": "2026-10-01",
+      "category": null,
+      "subcategory": null,
+      "customers": [
+        {
+          "customer_name": "Hon Hai (Foxconn)",
+          "customer_ticker": "2317",
+          "aliases": [
+            "Foxconn",
+            "Hon Hai",
+            "Hon Hai (Foxconn)",
+            "フォックスコン",
+            "鴻海"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": 10.2,
+          "period": "FY3/24"
+        },
+        {
+          "customer_name": "Apple",
+          "customer_ticker": "AAPL",
+          "aliases": [
+            "Apple",
+            "アップル"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2024"
+        },
+        {
+          "customer_name": "Samsung Electronics",
+          "customer_ticker": "005930",
+          "aliases": [
+            "Samsung",
+            "Samsung Electronics",
+            "サムスン",
+            "サムスン電子"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2023"
+        },
+        {
+          "customer_name": "Nvidia",
+          "customer_ticker": "NVDA",
+          "aliases": [
+            "NVIDIA",
+            "Nvidia",
+            "エヌビディア"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2026"
+        },
+        {
+          "customer_name": "Tesla",
+          "customer_ticker": "TSLA",
+          "aliases": [
+            "Tesla",
+            "テスラ"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2022"
+        }
+      ],
+      "search_query": "Murata Manufacturing"
+    },
+    {
+      "local_code": "4063",
+      "company_name": "Shin-Etsu Chemical",
+      "ticker": "4063.T",
+      "market": "International",
+      "country": "Japan",
+      "website": "https://www.shinetsu.co.jp",
+      "local_name": "信越化学工業",
+      "aliases": [
+        "信越化学"
+      ],
+      "exclude_terms": [],
+      "fiscal_year_end": "03-31",
+      "market_cap_usd_bn": 70.9,
+      "market_cap_local": 11.21,
+      "local_currency": "JPY",
+      "index_name": "TSE Prime",
+      "index_weight_pct": 0.82,
+      "home_market_rank": 24,
+      "domestic_sales_pct": 21.4,
+      "financials_period": "FY3/26",
+      "market_data_as_of": "2026-10-01",
+      "category": "Semiconductor Manufacturing",
+      "subcategory": "Semiconductor Materials",
+      "customers": [
+        {
+          "customer_name": "TSMC",
+          "customer_ticker": "TSM",
+          "aliases": [
+            "TSMC",
+            "台湾積体電路",
+            "台積電"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2025"
+        },
+        {
+          "customer_name": "Samsung Electronics",
+          "customer_ticker": "005930",
+          "aliases": [
+            "Samsung",
+            "Samsung Electronics",
+            "サムスン",
+            "サムスン電子"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2023"
+        },
+        {
+          "customer_name": "Intel",
+          "customer_ticker": "INTC",
+          "aliases": [
+            "Intel",
+            "インテル"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2024"
+        },
+        {
+          "customer_name": "Toyota",
+          "customer_ticker": "7203",
+          "aliases": [
+            "Toyota",
+            "Toyota Motor",
+            "トヨタ",
+            "トヨタ自動車"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "FY3/26"
+        },
+        {
+          "customer_name": "Tokyo Ohka Kogyo",
+          "customer_ticker": "4186",
+          "aliases": [
+            "Tokyo Ohka",
+            "Tokyo Ohka Kogyo",
+            "東京応化工業"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "FY3/26"
+        },
+        {
+          "customer_name": "Kubota",
+          "customer_ticker": "6326",
+          "aliases": [
+            "Kubota",
+            "クボタ"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "FY3/26"
+        },
+        {
+          "customer_name": "Riken Technos",
+          "customer_ticker": "4220",
+          "aliases": [
+            "Riken Technos",
+            "リケンテクノス"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "FY3/26"
+        },
+        {
+          "customer_name": "Topco Scientific",
+          "customer_ticker": "5434",
+          "aliases": [
+            "Topco Scientific",
+            "崇越科技"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "FY3/26"
+        }
+      ],
+      "search_query": "Shin-Etsu Chemical"
+    },
+    {
+      "local_code": "5803",
+      "company_name": "Fujikura",
+      "ticker": "5803.T",
+      "market": "International",
+      "country": "Japan",
+      "website": "https://www.fujikura.co.jp",
+      "local_name": "フジクラ",
+      "aliases": [],
+      "exclude_terms": [],
+      "fiscal_year_end": "03-31",
+      "market_cap_usd_bn": 56.3,
+      "market_cap_local": 8.91,
+      "local_currency": "JPY",
+      "index_name": "TSE Prime",
+      "index_weight_pct": 0.64,
+      "home_market_rank": 31,
+      "domestic_sales_pct": 20.4,
+      "financials_period": "FY3/26",
+      "market_data_as_of": "2026-10-01",
+      "category": null,
+      "subcategory": null,
+      "customers": [
+        {
+          "customer_name": "Alphabet",
+          "customer_ticker": "GOOGL",
+          "aliases": [
+            "Alphabet",
+            "Google",
+            "グーグル"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2025"
+        },
+        {
+          "customer_name": "Apple",
+          "customer_ticker": "AAPL",
+          "aliases": [
+            "Apple",
+            "アップル"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "FY2022"
+        },
+        {
+          "customer_name": "US hyperscalers (unnamed)",
+          "customer_ticker": null,
+          "aliases": [
+            "US hyperscalers (unnamed)"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2026"
+        }
+      ],
+      "search_query": "Fujikura"
+    },
+    {
+      "local_code": "4062",
+      "company_name": "Ibiden",
+      "ticker": "4062.T",
+      "market": "International",
+      "country": "Japan",
+      "website": "https://www.ibiden.com",
+      "local_name": "イビデン",
+      "aliases": [],
+      "exclude_terms": [],
+      "fiscal_year_end": "03-31",
+      "market_cap_usd_bn": 42.4,
+      "market_cap_local": 6.7,
+      "local_currency": "JPY",
+      "index_name": "TSE Prime",
+      "index_weight_pct": 0.46,
+      "home_market_rank": 40,
+      "domestic_sales_pct": 27.1,
+      "financials_period": "FY3/26",
+      "market_data_as_of": "2026-10-01",
+      "category": "Semiconductor Manufacturing",
+      "subcategory": "IC Substrates / PCB",
+      "customers": [
+        {
+          "customer_name": "Nvidia",
+          "customer_ticker": "NVDA",
+          "aliases": [
+            "NVIDIA",
+            "Nvidia",
+            "エヌビディア"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": 29.4,
+          "period": "FY3/26"
+        },
+        {
+          "customer_name": "Intel",
+          "customer_ticker": "INTC",
+          "aliases": [
+            "Intel",
+            "インテル"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": 18.1,
+          "period": "FY3/26"
+        },
+        {
+          "customer_name": "AMD",
+          "customer_ticker": "AMD",
+          "aliases": [
+            "AMD",
+            "エーエムディー"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": 11.0,
+          "period": "FY3/25"
+        },
+        {
+          "customer_name": "Alphabet",
+          "customer_ticker": "GOOGL",
+          "aliases": [
+            "Alphabet",
+            "Google",
+            "グーグル"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2026"
+        },
+        {
+          "customer_name": "Amazon",
+          "customer_ticker": "AMZN",
+          "aliases": [
+            "AWS",
+            "Amazon",
+            "アマゾン"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2026"
+        },
+        {
+          "customer_name": "Toyota",
+          "customer_ticker": "7203",
+          "aliases": [
+            "Toyota",
+            "Toyota Motor",
+            "トヨタ",
+            "トヨタ自動車"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "FY3/26"
+        }
+      ],
+      "search_query": "Ibiden"
+    },
+    {
+      "local_code": "6723",
+      "company_name": "Renesas Electronics",
+      "ticker": "6723.T",
+      "market": "International",
+      "country": "Japan",
+      "website": "https://www.renesas.com",
+      "local_name": "ルネサスエレクトロニクス",
+      "aliases": [
+        "ルネサス"
+      ],
+      "exclude_terms": [],
+      "fiscal_year_end": "12-31",
+      "market_cap_usd_bn": 41.8,
+      "market_cap_local": 6.62,
+      "local_currency": "JPY",
+      "index_name": "TSE Prime",
+      "index_weight_pct": 0.47,
+      "home_market_rank": 42,
+      "domestic_sales_pct": 20.4,
+      "financials_period": "FY3/26",
+      "market_data_as_of": "2026-10-01",
+      "category": null,
+      "subcategory": null,
+      "customers": [
+        {
+          "customer_name": "WT Microelectronics",
+          "customer_ticker": "3036",
+          "aliases": [
+            "WT Micro",
+            "WT Microelectronics",
+            "文曄科技"
+          ],
+          "relationship": "distributor",
+          "pct_of_sales": 17.1,
+          "period": "FY12/25"
+        },
+        {
+          "customer_name": "Hagiwara Electronics",
+          "customer_ticker": "7467",
+          "aliases": [
+            "Hagiwara Electronics",
+            "萩原電気"
+          ],
+          "relationship": "distributor",
+          "pct_of_sales": null,
+          "period": "FY12/24"
+        },
+        {
+          "customer_name": "Ryosan",
+          "customer_ticker": "167A",
+          "aliases": [
+            "Ryosan",
+            "リョーヨーリョーサン",
+            "菱洋エレクトロ"
+          ],
+          "relationship": "distributor",
+          "pct_of_sales": null,
+          "period": "FY12/21"
+        },
+        {
+          "customer_name": "Toyota",
+          "customer_ticker": "7203",
+          "aliases": [
+            "Toyota",
+            "Toyota Motor",
+            "トヨタ",
+            "トヨタ自動車"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2018"
+        },
+        {
+          "customer_name": "Denso",
+          "customer_ticker": "6902",
+          "aliases": [
+            "Denso",
+            "デンソー"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2018"
+        },
+        {
+          "customer_name": "Honda",
+          "customer_ticker": "7267",
+          "aliases": [
+            "Honda",
+            "Honda Motor",
+            "ホンダ",
+            "本田技研"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2025"
+        },
+        {
+          "customer_name": "Bosch",
+          "customer_ticker": null,
+          "aliases": [
+            "Bosch",
+            "Robert Bosch",
+            "ボッシュ"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2024"
+        },
+        {
+          "customer_name": "Tesla",
+          "customer_ticker": "TSLA",
+          "aliases": [
+            "Tesla",
+            "テスラ"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2021"
+        },
+        {
+          "customer_name": "TIER IV",
+          "customer_ticker": null,
+          "aliases": [
+            "TIER IV",
+            "ティアフォー"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2026"
+        }
+      ],
+      "search_query": "Renesas Electronics"
+    },
+    {
+      "local_code": "6146",
+      "company_name": "Disco",
+      "ticker": "6146.T",
+      "market": "International",
+      "country": "Japan",
+      "website": "https://www.disco.co.jp",
+      "local_name": "ディスコ",
+      "aliases": [],
+      "exclude_terms": [],
+      "fiscal_year_end": "03-31",
+      "market_cap_usd_bn": 41.4,
+      "market_cap_local": 6.56,
+      "local_currency": "JPY",
+      "index_name": "TSE Prime",
+      "index_weight_pct": 0.46,
+      "home_market_rank": 43,
+      "domestic_sales_pct": 10.4,
+      "financials_period": "FY3/26",
+      "market_data_as_of": "2026-10-01",
+      "category": null,
+      "subcategory": null,
+      "customers": [
+        {
+          "customer_name": "TSMC",
+          "customer_ticker": "TSM",
+          "aliases": [
+            "TSMC",
+            "台湾積体電路",
+            "台積電"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": 11.0,
+          "period": "FY3/26"
+        },
+        {
+          "customer_name": "Intel",
+          "customer_ticker": "INTC",
+          "aliases": [
+            "Intel",
+            "インテル"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2026"
+        },
+        {
+          "customer_name": "SK hynix",
+          "customer_ticker": "000660",
+          "aliases": [
+            "SK Hynix",
+            "SK hynix",
+            "SKハイニックス"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2026"
+        },
+        {
+          "customer_name": "Samsung Electronics",
+          "customer_ticker": "005930",
+          "aliases": [
+            "Samsung",
+            "Samsung Electronics",
+            "サムスン",
+            "サムスン電子"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": null
+        },
+        {
+          "customer_name": "Micron Technology",
+          "customer_ticker": "MU",
+          "aliases": [
+            "Micron",
+            "Micron Technology",
+            "マイクロン"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": null
+        }
+      ],
+      "search_query": "Disco Corporation semiconductor"
+    },
+    {
+      "local_code": "6762",
+      "company_name": "TDK",
+      "ticker": "6762.T",
+      "market": "International",
+      "country": "Japan",
+      "website": "https://www.tdk.com",
+      "local_name": "TDK",
+      "aliases": [],
+      "exclude_terms": [],
+      "fiscal_year_end": "03-31",
+      "market_cap_usd_bn": 38.4,
+      "market_cap_local": 6.08,
+      "local_currency": "JPY",
+      "index_name": "TSE Prime",
+      "index_weight_pct": 0.42,
+      "home_market_rank": 48,
+      "domestic_sales_pct": 7.3,
+      "financials_period": "FY3/26",
+      "market_data_as_of": "2026-10-01",
+      "category": null,
+      "subcategory": null,
+      "customers": [
+        {
+          "customer_name": "Apple",
+          "customer_ticker": "AAPL",
+          "aliases": [
+            "Apple",
+            "アップル"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2026"
+        },
+        {
+          "customer_name": "Samsung Electronics",
+          "customer_ticker": "005930",
+          "aliases": [
+            "Samsung",
+            "Samsung Electronics",
+            "サムスン",
+            "サムスン電子"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2024"
+        },
+        {
+          "customer_name": "Toshiba",
+          "customer_ticker": null,
+          "aliases": [
+            "Toshiba",
+            "東芝"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2026"
+        },
+        {
+          "customer_name": "Seagate",
+          "customer_ticker": "STX",
+          "aliases": [
+            "Seagate",
+            "シーゲイト"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2026"
+        },
+        {
+          "customer_name": "Western Digital",
+          "customer_ticker": "WDC",
+          "aliases": [
+            "WD",
+            "Western Digital",
+            "ウエスタンデジタル"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2026"
+        }
+      ],
+      "search_query": "TDK"
+    },
+    {
+      "local_code": "6920",
+      "company_name": "Lasertec",
+      "ticker": "6920.T",
+      "market": "International",
+      "country": "Japan",
+      "website": "https://www.lasertec.co.jp",
+      "local_name": "レーザーテック",
+      "aliases": [],
+      "exclude_terms": [],
+      "fiscal_year_end": "06-30",
+      "market_cap_usd_bn": 25.9,
+      "market_cap_local": 4.1,
+      "local_currency": "JPY",
+      "index_name": "TSE Prime",
+      "index_weight_pct": 0.27,
+      "home_market_rank": 67,
+      "domestic_sales_pct": 12.2,
+      "financials_period": "FY3/26",
+      "market_data_as_of": "2026-10-01",
+      "category": null,
+      "subcategory": null,
+      "customers": [
+        {
+          "customer_name": "TSMC",
+          "customer_ticker": "TSM",
+          "aliases": [
+            "TSMC",
+            "台湾積体電路",
+            "台積電"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": 21.4,
+          "period": "FY6/26"
+        },
+        {
+          "customer_name": "Intel",
+          "customer_ticker": "INTC",
+          "aliases": [
+            "Intel",
+            "インテル"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": 20.7,
+          "period": "FY6/26"
+        },
+        {
+          "customer_name": "Samsung Electronics",
+          "customer_ticker": "005930",
+          "aliases": [
+            "Samsung",
+            "Samsung Electronics",
+            "サムスン",
+            "サムスン電子"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": 20.2,
+          "period": "FY6/26"
+        }
+      ],
+      "search_query": "Lasertec"
+    },
+    {
+      "local_code": "4004",
+      "company_name": "Resonac Holdings",
+      "ticker": "4004.T",
+      "market": "International",
+      "country": "Japan",
+      "website": "https://www.resonac.com",
+      "local_name": "レゾナック・ホールディングス",
+      "aliases": [
+        "レゾナック"
+      ],
+      "exclude_terms": [],
+      "fiscal_year_end": "12-31",
+      "market_cap_usd_bn": 19.1,
+      "market_cap_local": 3.02,
+      "local_currency": "JPY",
+      "index_name": "TSE Prime",
+      "index_weight_pct": 0.21,
+      "home_market_rank": 83,
+      "domestic_sales_pct": 43.4,
+      "financials_period": "FY3/26",
+      "market_data_as_of": "2026-10-01",
+      "category": "Semiconductor Manufacturing",
+      "subcategory": "Semiconductor Materials",
+      "customers": [
+        {
+          "customer_name": "Infineon",
+          "customer_ticker": "IFX",
+          "aliases": [
+            "Infineon",
+            "Infineon Technologies",
+            "インフィニオン"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2023"
+        },
+        {
+          "customer_name": "Denso",
+          "customer_ticker": "6902",
+          "aliases": [
+            "Denso",
+            "デンソー"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2023"
+        },
+        {
+          "customer_name": "ROHM",
+          "customer_ticker": "6963",
+          "aliases": [
+            "ROHM",
+            "Rohm",
+            "ローム"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2021"
+        },
+        {
+          "customer_name": "Toshiba Electronic Devices",
+          "customer_ticker": null,
+          "aliases": [
+            "Toshiba",
+            "Toshiba Electronic Devices",
+            "東芝"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2021"
+        },
+        {
+          "customer_name": "Toshiba",
+          "customer_ticker": null,
+          "aliases": [
+            "Toshiba",
+            "東芝"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2024"
+        }
+      ],
+      "search_query": "Resonac Holdings"
+    },
+    {
+      "local_code": "7735",
+      "company_name": "SCREEN Holdings",
+      "ticker": "7735.T",
+      "market": "International",
+      "country": "Japan",
+      "website": "https://www.screen.co.jp",
+      "local_name": "SCREENホールディングス",
+      "aliases": [
+        "SCREEN"
+      ],
+      "exclude_terms": [],
+      "fiscal_year_end": "03-31",
+      "market_cap_usd_bn": 18.6,
+      "market_cap_local": 2.95,
+      "local_currency": "JPY",
+      "index_name": "TSE Prime",
+      "index_weight_pct": 0.2,
+      "home_market_rank": 87,
+      "domestic_sales_pct": 14.1,
+      "financials_period": "FY3/26",
+      "market_data_as_of": "2026-10-01",
+      "category": null,
+      "subcategory": null,
+      "customers": [
+        {
+          "customer_name": "TSMC",
+          "customer_ticker": "TSM",
+          "aliases": [
+            "TSMC",
+            "台湾積体電路",
+            "台積電"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": 14.6,
+          "period": "FY3/26"
+        },
+        {
+          "customer_name": "SiEn",
+          "customer_ticker": null,
+          "aliases": [
+            "SiEn",
+            "芯恩",
+            "青島芯恩"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": 10.3,
+          "period": "FY3/24"
+        },
+        {
+          "customer_name": "Micron Technology",
+          "customer_ticker": "MU",
+          "aliases": [
+            "Micron",
+            "Micron Technology",
+            "マイクロン"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2024"
+        },
+        {
+          "customer_name": "IBM",
+          "customer_ticker": "IBM",
+          "aliases": [
+            "IBM",
+            "アイ・ビー・エム",
+            "日本IBM"
+          ],
+          "relationship": "partner",
+          "pct_of_sales": null,
+          "period": "2025"
+        },
+        {
+          "customer_name": "Samsung Electronics",
+          "customer_ticker": "005930",
+          "aliases": [
+            "Samsung",
+            "Samsung Electronics",
+            "サムスン",
+            "サムスン電子"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2026"
+        },
+        {
+          "customer_name": "SK hynix",
+          "customer_ticker": "000660",
+          "aliases": [
+            "SK Hynix",
+            "SK hynix",
+            "SKハイニックス"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2026"
+        }
+      ],
+      "search_query": "SCREEN Holdings"
+    },
+    {
+      "local_code": "6525",
+      "company_name": "Kokusai Electric",
+      "ticker": "6525.T",
+      "market": "International",
+      "country": "Japan",
+      "website": "https://www.kokusai-electric.com",
+      "local_name": "KOKUSAI ELECTRIC",
+      "aliases": [],
+      "exclude_terms": [],
+      "fiscal_year_end": "03-31",
+      "market_cap_usd_bn": 14.9,
+      "market_cap_local": 2.35,
+      "local_currency": "JPY",
+      "index_name": "TSE Prime",
+      "index_weight_pct": 0.16,
+      "home_market_rank": 102,
+      "domestic_sales_pct": 9.7,
+      "financials_period": "FY3/26",
+      "market_data_as_of": "2026-10-01",
+      "category": null,
+      "subcategory": null,
+      "customers": [
+        {
+          "customer_name": "Samsung Electronics",
+          "customer_ticker": "005930",
+          "aliases": [
+            "Samsung",
+            "Samsung Electronics",
+            "サムスン",
+            "サムスン電子"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": 21.8,
+          "period": "FY3/26"
+        },
+        {
+          "customer_name": "TSMC",
+          "customer_ticker": "TSM",
+          "aliases": [
+            "TSMC",
+            "台湾積体電路",
+            "台積電"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": 13.4,
+          "period": "FY3/26"
+        },
+        {
+          "customer_name": "CXMT",
+          "customer_ticker": null,
+          "aliases": [
+            "CXMT",
+            "ChangXin",
+            "長鑫存儲"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": 20.4,
+          "period": "FY3/25"
+        },
+        {
+          "customer_name": "Micron Technology",
+          "customer_ticker": "MU",
+          "aliases": [
+            "Micron",
+            "Micron Technology",
+            "マイクロン"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "FY3/23"
+        },
+        {
+          "customer_name": "SK hynix",
+          "customer_ticker": "000660",
+          "aliases": [
+            "SK Hynix",
+            "SK hynix",
+            "SKハイニックス"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2024"
+        },
+        {
+          "customer_name": "Intel",
+          "customer_ticker": "INTC",
+          "aliases": [
+            "Intel",
+            "インテル"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2026"
+        },
+        {
+          "customer_name": "YMTC",
+          "customer_ticker": null,
+          "aliases": [
+            "YMTC",
+            "Yangtze Memory",
+            "長江存儲"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2025"
+        }
+      ],
+      "search_query": "Kokusai Electric"
+    },
+    {
+      "local_code": "3436",
+      "company_name": "SUMCO",
+      "ticker": "3436.T",
+      "market": "International",
+      "country": "Japan",
+      "website": "https://www.sumcosi.com",
+      "local_name": "SUMCO",
+      "aliases": [],
+      "exclude_terms": [],
+      "fiscal_year_end": "12-31",
+      "market_cap_usd_bn": 7.7,
+      "market_cap_local": 1.21,
+      "local_currency": "JPY",
+      "index_name": "TSE Prime",
+      "index_weight_pct": 0.09,
+      "home_market_rank": 181,
+      "domestic_sales_pct": 19.4,
+      "financials_period": "FY3/26",
+      "market_data_as_of": "2026-10-01",
+      "category": "Semiconductor Manufacturing",
+      "subcategory": "Semiconductor Materials",
+      "customers": [
+        {
+          "customer_name": "Sumitomo Corporation",
+          "customer_ticker": "8053",
+          "aliases": [
+            "Sumitomo Corp",
+            "Sumitomo Corporation",
+            "住友商事"
+          ],
+          "relationship": "distributor",
+          "pct_of_sales": 27.0,
+          "period": "FY12/25"
+        },
+        {
+          "customer_name": "Samsung Electronics",
+          "customer_ticker": "005930",
+          "aliases": [
+            "Samsung",
+            "Samsung Electronics",
+            "サムスン",
+            "サムスン電子"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "FY12/23"
+        },
+        {
+          "customer_name": "TSMC",
+          "customer_ticker": "TSM",
+          "aliases": [
+            "TSMC",
+            "台湾積体電路",
+            "台積電"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2025"
+        },
+        {
+          "customer_name": "Kioxia",
+          "customer_ticker": "285A",
+          "aliases": [
+            "Kioxia",
+            "キオクシア"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2025"
+        },
+        {
+          "customer_name": "Sony Semiconductor Solutions",
+          "customer_ticker": null,
+          "aliases": [
+            "Sony",
+            "Sony Semiconductor Solutions",
+            "ソニー",
+            "ソニーセミコンダクタ"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2025"
+        }
+      ],
+      "search_query": "SUMCO"
+    },
+    {
+      "local_code": "4186",
+      "company_name": "Tokyo Ohka Kogyo",
+      "ticker": "4186.T",
+      "market": "International",
+      "country": "Japan",
+      "website": "https://www.tok.co.jp",
+      "local_name": "東京応化工業",
+      "aliases": [
+        "東京応化"
+      ],
+      "exclude_terms": [],
+      "fiscal_year_end": "03-31",
+      "market_cap_usd_bn": 6.8,
+      "market_cap_local": 1.07,
+      "local_currency": "JPY",
+      "index_name": "TSE Prime",
+      "index_weight_pct": 0.08,
+      "home_market_rank": 203,
+      "domestic_sales_pct": 15.5,
+      "financials_period": "FY3/26",
+      "market_data_as_of": "2026-10-01",
+      "category": "Semiconductor Manufacturing",
+      "subcategory": "Semiconductor Materials",
+      "customers": [
+        {
+          "customer_name": "TSMC",
+          "customer_ticker": "TSM",
+          "aliases": [
+            "TSMC",
+            "台湾積体電路",
+            "台積電"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": 33.6,
+          "period": "FY12/25"
+        },
+        {
+          "customer_name": "Samsung Electronics",
+          "customer_ticker": "005930",
+          "aliases": [
+            "Samsung",
+            "Samsung Electronics",
+            "サムスン",
+            "サムスン電子"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2026"
+        },
+        {
+          "customer_name": "SK hynix",
+          "customer_ticker": "000660",
+          "aliases": [
+            "SK Hynix",
+            "SK hynix",
+            "SKハイニックス"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2026"
+        },
+        {
+          "customer_name": "Intel",
+          "customer_ticker": "INTC",
+          "aliases": [
+            "Intel",
+            "インテル"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2020"
+        }
+      ],
+      "search_query": "Tokyo Ohka Kogyo"
+    },
+    {
+      "local_code": "6315",
+      "company_name": "Towa",
+      "ticker": "6315.T",
+      "market": "International",
+      "country": "Japan",
+      "website": "https://www.towajapan.co.jp",
+      "local_name": "TOWA",
+      "aliases": [],
+      "exclude_terms": [],
+      "fiscal_year_end": "03-31",
+      "market_cap_usd_bn": 1.1,
+      "market_cap_local": 0.181,
+      "local_currency": "JPY",
+      "index_name": "TSE Prime",
+      "index_weight_pct": 0.01,
+      "home_market_rank": 612,
+      "domestic_sales_pct": 12.7,
+      "financials_period": "FY3/26",
+      "market_data_as_of": "2026-10-01",
+      "category": null,
+      "subcategory": null,
+      "customers": [
+        {
+          "customer_name": "SK hynix",
+          "customer_ticker": "000660",
+          "aliases": [
+            "SK Hynix",
+            "SK hynix",
+            "SKハイニックス"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "FY3/26"
+        },
+        {
+          "customer_name": "Samsung Electronics",
+          "customer_ticker": "005930",
+          "aliases": [
+            "Samsung",
+            "Samsung Electronics",
+            "サムスン",
+            "サムスン電子"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "FY3/13"
+        },
+        {
+          "customer_name": "TSMC",
+          "customer_ticker": "TSM",
+          "aliases": [
+            "TSMC",
+            "台湾積体電路",
+            "台積電"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2026"
+        },
+        {
+          "customer_name": "ASE Group",
+          "customer_ticker": "3711",
+          "aliases": [
+            "ASE",
+            "ASE Group",
+            "日月光"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2026"
+        },
+        {
+          "customer_name": "Amkor Technology",
+          "customer_ticker": "AMKR",
+          "aliases": [
+            "Amkor",
+            "Amkor Technology",
+            "アムコー"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2026"
+        },
+        {
+          "customer_name": "Micron Technology",
+          "customer_ticker": "MU",
+          "aliases": [
+            "Micron",
+            "Micron Technology",
+            "マイクロン"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "2026"
+        },
+        {
+          "customer_name": "Powertech Technology",
+          "customer_ticker": "6239",
+          "aliases": [
+            "Powertech",
+            "Powertech Technology",
+            "力成科技"
+          ],
+          "relationship": "customer",
+          "pct_of_sales": null,
+          "period": "FY3/14"
+        }
+      ],
+      "search_query": "Towa Corporation semiconductor"
+    }
+  ]
+}
