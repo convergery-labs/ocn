@@ -29,8 +29,8 @@ class CompanyBrief(BaseModel):
 
     # Market profile. Null on every row that predates it, which is most
     # of the catalogue - absence means "not researched", never zero.
-    local_code: str | None = None
-    local_name: str | None = None
+    code: str | None = None
+    native_name: str | None = None
     search_query: str | None = None
     aliases: list[str] = []
     exclude_terms: list[str] = []
@@ -71,8 +71,8 @@ class CompanyDetail(BaseModel):
     # Market profile - null on every row loaded before this existed, which
     # is most of the catalogue. A consumer must treat absence as "not
     # researched for this company", never as zero.
-    local_code: str | None = None
-    local_name: str | None = None
+    code: str | None = None
+    native_name: str | None = None
     search_query: str | None = None
     aliases: list[str] = []
     exclude_terms: list[str] = []
@@ -114,7 +114,7 @@ def list_companies(
     status: str | None = Query(default=None, description="Filter by status: 'verified' or 'pending_review'"),
     country: str | None = Query(default=None, description="Filter by country, e.g. 'United States' (aliases like 'US'/'USA' accepted)"),
     has_ticker: bool | None = Query(default=None, description="true = exclude private (ticker='Private') companies; false = only private companies"),
-    tracked: bool | None = Query(default=None, description="true = only companies a signal pipeline follows (those with a local_code). Narrower than country: Japan has 62 catalogue companies but 19 tracked ones."),
+    tracked: bool | None = Query(default=None, description="true = only companies a signal pipeline follows (those with a code). Narrower than country: Japan has 62 catalogue companies but 19 tracked ones."),
     include_customers: bool = Query(default=False, description="Nest each company's disclosed customers and counterparties."),
     limit: int = Query(default=5000, ge=1, le=10000),
     offset: int = Query(default=0, ge=0),

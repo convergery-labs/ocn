@@ -247,7 +247,7 @@ class TestCheckpointTests:
             "holding_pct": 5.94,
         }, "Q4")
         assert supports == (
-            "Sumitomo Mitsui Trust AM files a change report moving its 5.9% stake"
+            "Sumitomo Mitsui Trust AM files a change report moving its 5.94% stake"
         )
         assert weakens == "Sumitomo Mitsui Trust AM's stake falls back below 5%"
         assert "raising" not in supports
@@ -353,11 +353,23 @@ class TestCompanyProfile:
         assert v["isStale"] is False
         assert valuation_for("6857", date(2027, 6, 1))["isStale"] is True
 
-    def test_every_profiled_company_is_in_the_universe(self):
-        from pipeline.japan_companies import (JAPAN_COMPANIES,
-                                              japan_ticker_universe)
-        codes = {t["code"] for t in japan_ticker_universe()}
-        assert set(JAPAN_COMPANIES) == codes
+    def test_the_universe_has_no_second_copy_to_drift_from(self):
+        """A hardcoded table of the same companies used to sit beside
+        the fetch as a fallback, and this test asserted the two agreed.
+        They stopped agreeing - the table still said Kioxia and Murata
+        where the database said Kioxia Holdings and Murata
+        Manufacturing - and the fallback served the stale names
+        silently. The table is gone; what is worth asserting now is
+        that it has not come back.
+        """
+        import pipeline.japan_companies as jc
+        assert not hasattr(jc, "JAPAN_COMPANIES")
+
+    def test_every_company_carries_what_the_card_reads(self):
+        from pipeline.japan_companies import japan_ticker_universe
+        for c in japan_ticker_universe():
+            assert c["code"] and c["company"], c
+            assert "customers" in c
 
 
 class TestMentionedCustomers:
@@ -452,6 +464,219 @@ class TestSignalImplication:
     def test_empty_meta_is_safe(self):
         from pipeline.japan_signal_view import signal_implication
         assert isinstance(signal_implication({}), str)
+
+
+class TestIndustryReadingIsLegible:
+    """J4 judges one national monthly reading against its own recent run.
+
+    All three facts were present but ordered so that none landed: "Ran
+    3.1 times its usual distance from the recent average of 12.3%" left
+    out the month's own figure entirely, called a standard deviation a
+    "usual distance", and put 3.1 beside 12.3% where the two invite
+    being multiplied.
+    """
+
+    @staticmethod
+    def _card(yoy, average, spreads):
+        from pipeline.japan_signal_view import to_jp_signal
+        meta = {"source_category": "jp_industry", "period": "August 2026",
+                "signal_reason_code": "industry_unusual",
+                "industry_baseline_avg_yoy_pct": average,
+                "industry_spreads_away": spreads,
+                "billings_3mo_avg_millions_jpy": 597900}
+        if yoy is not None:
+            meta["yoy_pct"] = yoy
+        return to_jp_signal({
+            "source_id": "seaj-billings://2026-08-final",
+            "signal_detection": "signal", "signal_score": None,
+            "signal_reason": "r", "published": "2026-09-15T00:00:00Z",
+            "title": "t", "metadata": meta})
+
+    def test_the_month_own_reading_comes_first(self):
+        u = self._card(47.4, 12.3, 3.15)["unusual"]
+        assert u.startswith("+47.4% year-on-year")
+
+    def test_the_baseline_and_the_swing_are_both_named(self):
+        u = self._card(47.4, 12.3, 3.15)["unusual"]
+        assert "recent average of 12.3%" in u
+        assert "3.1x the usual swing" in u
+
+    def test_a_contraction_keeps_its_sign(self):
+        """A shrinking industry is the reading a trader most needs to
+        see as negative, not as a bare magnitude."""
+        assert self._card(-4.2, 9.8, -1.6)["unusual"].startswith("-4.2% year-on-year")
+
+    def test_the_multiplier_never_sits_against_the_average(self):
+        """3.1 beside 12.3% read as a product. They are now separated
+        by the clause naming what each measures."""
+        u = self._card(47.4, 12.3, 3.15)["unusual"]
+        assert "3.1 times its usual distance" not in u
+        assert u.index("12.3%") < u.index("3.1x")
+
+    def test_a_missing_month_figure_still_reads(self):
+        u = self._card(None, 12.3, 3.15)["unusual"]
+        assert u == "3.1x the usual swing against a recent average of 12.3%."
+
+
+class TestOwnershipShowsTheMove:
+    """An ownership change report is an event about a delta.
+
+    Presented as a snapshot it was unreadable: two Capital Research
+    filings on Resonac four days apart - a +0.78 point build, then a
+    +0.02 point nothing - came out identical on 20 of 26 card fields,
+    because `change` was empty and `unusual` described the position
+    rather than the move. A reader could not tell them apart.
+    """
+
+    @staticmethod
+    def _card(cur, prev, passive=False):
+        from pipeline.japan_signal_view import to_jp_signal
+        rc = ("holder_crosses_five_pct_passive" if prev is None
+              else "holder_changes_existing_stake_passive" if passive
+              else "active_holder_changes_stake")
+        return to_jp_signal({
+            "source_id": "edinet-filing://E00751/S1",
+            "signal_detection": "signal", "signal_score": None,
+            "signal_reason": "r", "published": "2026-10-06T01:30:00Z",
+            "title": "t",
+            "metadata": {"code": "4004", "company": "Resonac Holdings",
+                         "source_category": "jp_ownership",
+                         "signal_reason_code": rc, "holding_pct": cur,
+                         "holding_pct_previous": prev,
+                         "translated_filer_name": "Capital Research"},
+        })
+
+    def test_change_carries_both_ends_and_the_delta(self):
+        assert self._card(12.40, 11.62)["change"] == "11.62% → 12.40% · +0.78 pts"
+
+    def test_a_sell_down_signs_the_delta_negative(self):
+        assert self._card(12.84, 14.06)["change"] == "14.06% → 12.84% · -1.22 pts"
+
+    def test_an_initial_report_has_no_previous_to_move_from(self):
+        assert self._card(6.49, None)["change"] == "New position · 6.49%"
+
+    def test_the_two_resonac_filings_are_distinguishable(self):
+        """The bug this exists for: both read "raised stake to 12.4%"."""
+        a = self._card(12.40, 11.62)
+        b = self._card(12.42, 12.40)
+        assert a["change"] != b["change"]
+        assert a["unusual"] != b["unusual"]
+        assert a["headline"] != b["headline"]
+
+    def test_a_real_move_leads_with_its_size(self):
+        u = self._card(12.40, 11.62)["unusual"]
+        assert u.startswith("A 0.78-point increase")
+        assert "active basis" in u
+
+    def test_a_point_or_more_reads_as_a_build(self):
+        assert "1.11-point build" in self._card(7.30, 6.19, passive=True)["unusual"]
+
+    def test_a_sub_tenth_move_is_called_what_it_is(self):
+        """A holding drifts this much without a decision behind it.
+        Calling it unusual would dress up nothing as something."""
+        u = self._card(12.42, 12.40)["unusual"]
+        assert "effectively unchanged" in u
+        assert "build" not in u and "increase" not in u
+
+    def test_an_initial_report_names_the_threshold_it_crossed(self):
+        assert "crossing the 5% disclosure threshold" in self._card(6.49, None)["unusual"]
+
+
+class TestHoldingPrecision:
+    """A holding percentage is shown as the filing states it.
+
+    EDINET reports the ratio to four decimals (0.1242), so the stored
+    percentage is exactly two. One decimal rounded a filed figure into
+    a different number, and could erase a real move: Capital Research
+    went 12.40% -> 12.42% of Resonac, which rendered as "Raised stake
+    to 12.4% from 12.4%" - a headline asserting a change and showing
+    none.
+    """
+
+    @staticmethod
+    def _row(pct, prev):
+        return {
+            "source_id": "edinet-filing://E00751/S1",
+            "signal_detection": "signal", "signal_score": None,
+            "signal_reason": "r", "published": "2026-10-06T01:30:00Z",
+            "title": "t",
+            "metadata": {
+                "code": "4004", "company": "Resonac Holdings",
+                "source_category": "jp_ownership",
+                "signal_reason_code": "active_holder_changes_stake",
+                "holding_pct": pct, "holding_pct_previous": prev,
+                "translated_filer_name": "Capital Research and Management Company",
+            },
+        }
+
+    def test_a_move_smaller_than_one_decimal_still_shows_both_ends(self):
+        from pipeline.japan_signal_view import to_jp_signal
+        h = to_jp_signal(self._row(12.42, 12.40))["headline"]
+        assert "12.42%" in h and "12.40%" in h
+        assert "12.4% from 12.4%" not in h
+
+    def test_filed_precision_is_not_rounded_away(self):
+        from pipeline.japan_signal_view import to_jp_signal
+        h = to_jp_signal(self._row(12.84, 14.06))["headline"]
+        assert "12.84%" in h and "14.06%" in h
+
+    def test_a_trailing_zero_decimal_is_kept(self):
+        """"12.4%" beside "12.42%" invites the question of whether the
+        first is less precise or simply shorter."""
+        from pipeline.japan_signal_view import to_jp_signal
+        assert "12.40%" in to_jp_signal(self._row(12.40, 11.62))["headline"]
+
+
+class TestCardIdentityFields:
+    """`code` is the TSE code everywhere a reader meets it.
+
+    The card is the only place that could disagree, because it is built
+    field by field rather than copied from the row: it names the stored
+    `metadata.code` itself, and it also carries which rule fired. Those
+    are two different facts, and one of them being called `code` while
+    the other went out as `ticker` put one word on two meanings inside
+    one object - inverted against the stored row, the universe endpoint
+    and the ?code= filter, all three of which say `code` for the TSE
+    code.
+    """
+
+    @staticmethod
+    def _row(**over):
+        row = {
+            "source_id": "edinet-filing://E00751/S1",
+            "signal_detection": "signal", "signal_score": None,
+            "signal_reason": "r", "published": None, "title": "t",
+            "metadata": {"code": "4004", "company": "Resonac Holdings",
+                         "source_category": "jp_ownership"},
+        }
+        row.update(over)
+        return row
+
+    def test_code_is_the_tse_code(self):
+        from pipeline.japan_signal_view import to_jp_signal
+        assert to_jp_signal(self._row())["code"] == "4004"
+
+    def test_signal_type_carries_the_rule_that_fired(self):
+        from pipeline.japan_signal_view import to_jp_signal
+        assert to_jp_signal(self._row())["signalType"] == "J6"
+
+    def test_ticker_is_gone(self):
+        """`ticker` means metadata.ticker on this API, which only
+        sec_filing rows populate - so ?ticker= never matched a Japan
+        row. Carrying the word on the card implied a filter that does
+        not work, and 6857 is not the ticker in any case: 6857.T is.
+        """
+        from pipeline.japan_signal_view import to_jp_signal
+        assert "ticker" not in to_jp_signal(self._row())
+
+    def test_card_code_joins_to_the_universe(self):
+        """The join a consumer actually writes: card.code against the
+        universe's own code, with no translation between them.
+        """
+        from pipeline.japan_companies import company_for
+        from pipeline.japan_signal_view import to_jp_signal
+        card = to_jp_signal(self._row())
+        assert company_for(card["code"])["company"] == card["company"]
 
 
 class TestCardCarriesEntities:
@@ -906,11 +1131,11 @@ class TestOwnershipDirection:
 
     def test_sell_down_says_cut_and_names_the_prior_level(self):
         h = self._card(holding_pct=12.84, holding_pct_previous=14.06)["headline"]
-        assert h.startswith("Cut stake to 12.8% from 14.1%")
+        assert h.startswith("Cut stake to 12.84% from 14.06%")
 
     def test_build_up_says_raised(self):
         h = self._card(holding_pct=5.9, holding_pct_previous=5.1)["headline"]
-        assert h.startswith("Raised stake to 5.9% from 5.1%")
+        assert h.startswith("Raised stake to 5.90% from 5.10%")
 
     def test_no_previous_keeps_the_neutral_wording(self):
         """An initial report has no prior position to compare."""
@@ -935,7 +1160,7 @@ class TestOwnershipDirection:
                          "filer_name": "Sumitomo Mitsui Trust Asset Management Co., Ltd.",
                          "signal_reason_code": "holder_changes_existing_stake_passive",
                          "holding_pct": 8.24, "holding_pct_previous": 9.31}})
-        assert "cut to 8.2% from 9.3%" in c["headline"]
+        assert "cut to 8.24% from 9.31%" in c["headline"]
 
     def test_passive_initial_report_stays_neutral(self):
         """No prior position exists, so there is no move to describe."""
@@ -947,7 +1172,7 @@ class TestOwnershipDirection:
                          "filer_name": "Nomura Securities Co., Ltd.",
                          "signal_reason_code": "holder_crosses_five_pct_passive",
                          "holding_pct": 5.35}})
-        assert c["headline"] == "Passive 5.3% stake filed by Nomura Securities"
+        assert c["headline"] == "Passive 5.35% stake filed by Nomura Securities"
 
 
 class TestCapexAndFormNameHeadlines:

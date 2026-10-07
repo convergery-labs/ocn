@@ -195,7 +195,6 @@ _MIN_REVISIONS_FOR_TRUSTED_HABIT = 3
 # already-loaded fiscal_years each time compute_forecast_habit runs.
 _MIN_FISCAL_YEAR_SPAN_FOR_TRUSTED_HABIT = 3
 
-_JAPAN_TICKER_BY_CODE: dict[str, dict[str, Any]] = {t["code"]: t for t in japan_ticker_universe()}
 
 
 def _get_operating_profit(figures: list[dict[str, Any]] | None) -> dict[str, float | None] | None:
@@ -421,7 +420,7 @@ def compute_forecast_habit(revisions: list[dict[str, Any]]) -> dict[str, Any]:
     for r in revisions:
         meta = r.get("metadata") or {}
         code = meta.get("code")
-        ticker = _JAPAN_TICKER_BY_CODE.get(code)
+        ticker = company_for(code)
         pub_dt = _article_published_dt(r)
         if ticker and pub_dt:
             fiscal_years.add(_fiscal_year_label(pub_dt, ticker["fiscal_year_end"]))
@@ -667,7 +666,7 @@ def classify_forecast_revision(
     counts = {"SIGNAL": 0, "WEAK": 0, "NOISE": 0}
 
     for code, company_revisions in by_code.items():
-        ticker = _JAPAN_TICKER_BY_CODE.get(code)
+        ticker = company_for(code)
         company_revisions.sort(key=lambda a: _article_published_dt(a) or datetime.min.replace(tzinfo=timezone.utc))
         # Prefer the pre-computed, full-history habit (see this function's
         # own docstring on why) - only fall back to computing it from this
@@ -1547,7 +1546,7 @@ def classify_results_against_forecast(
     counts = {"SIGNAL": 0, "WEAK": 0}
 
     for code, company_actuals in by_code.items():
-        ticker = _JAPAN_TICKER_BY_CODE.get(code)
+        ticker = company_for(code)
         for a in company_actuals:
             meta = a["metadata"]
             figures = meta["figures"]
@@ -2544,6 +2543,24 @@ _OWNERSHIP_HOLDING_THRESHOLD_PCT = 5.0  # "a holder crosses five percent"
 # one within each of those.
 _OWNERSHIP_INITIAL_REPORT_MARKER = "大量保有報告書"
 _OWNERSHIP_PASSIVE_REGIME_MARKER = "特例対象株券等"
+
+
+def _format_holding_pct(value: float) -> str:
+    """A holding percentage at the precision the filing states it.
+
+    EDINET reports the ratio to four decimal places (0.1242), so the
+    percentage is exactly two (12.42%) and both are stored. Rendering
+    one decimal rounded a filed figure into a different number -
+    14.06% became 14.1% - and could erase a real move outright: a
+    12.40% to 12.42% increase read "raised its stake to 12.4%, from
+    12.4%".
+
+    A trailing zero decimal is kept rather than trimmed. These are two
+    figures a reader compares digit by digit, and "12.4%" beside
+    "12.42%" invites the question of whether the first is less precise
+    or simply shorter.
+    """
+    return f"{value:.2f}%"
 _BUYBACK_PCT_OF_SHARES_THRESHOLD = 5.0  # "a buyback of five percent or more of shares outstanding"
 _CO_OCCURRENCE_WINDOW_DAYS = 14  # "another signal from the same company landed within fourteen days"
 
@@ -2784,7 +2801,7 @@ def classify_capacity_and_ownership(
         meta["capex_investment_jpy"] = investment_jpy
         meta["capex_pct_of_total_assets"] = round(pct_of_assets, 2) if pct_of_assets is not None else None
         meta["signal_reason_code"] = reason_code
-        meta["native_name"] = (_JAPAN_TICKER_BY_CODE.get(code) or {}).get("native_name")
+        meta["native_name"] = (company_for(code) or {}).get("native_name")
         a["metadata"] = meta
 
         results.append({
@@ -2830,13 +2847,21 @@ def classify_capacity_and_ownership(
         doc_description = meta.get("doc_description") or a.get("title") or ""
         is_initial = _OWNERSHIP_INITIAL_REPORT_MARKER in doc_description
         is_passive = _OWNERSHIP_PASSIVE_REGIME_MARKER in doc_description
-        stake = f"{holding_pct:.1f}%" if holding_pct is not None else "an unstated stake"
+        # Two decimals, because that is the precision EDINET filings
+        # state and this field stores: the XBRL ratio is 4dp (0.1242),
+        # so the percentage is exactly 2dp. Rounding to one threw away
+        # filed precision on every row - 14.06% was shown as 14.1% -
+        # and collapsed real moves entirely: Capital Research went from
+        # 12.40% to 12.42% of Resonac, which read "raised its stake to
+        # 12.4%, from 12.4%", a claim of a change with no change shown.
+        stake = (_format_holding_pct(holding_pct) if holding_pct is not None
+                 else "an unstated stake")
         # The issuer's English name, not its bare TSE code. These
         # sentences read "in the company (code 3436)" because they were
         # written before the issuer lookup twelve lines below, and never
         # updated to use it - the resolved name was already being stored
         # on the row the whole time.
-        _issuer = _JAPAN_TICKER_BY_CODE.get(issuer_code) or {}
+        _issuer = company_for(issuer_code) or {}
         issuer_label = _issuer.get("company") or f"the company (code {issuer_code})"
 
         # "raised to 12.8% from 14.1%" is wrong even when the numbers
@@ -2847,10 +2872,10 @@ def classify_capacity_and_ownership(
             move_verb, from_clause = "changed its stake in", ""
         elif holding_pct > previous_pct:
             move_verb = "raised its stake in"
-            from_clause = f", from {previous_pct:.1f}%"
+            from_clause = f", from {_format_holding_pct(previous_pct)}"
         elif holding_pct < previous_pct:
             move_verb = "cut its stake in"
-            from_clause = f", from {previous_pct:.1f}%"
+            from_clause = f", from {_format_holding_pct(previous_pct)}"
         else:
             move_verb, from_clause = "held its stake in", ""
 
@@ -2901,7 +2926,7 @@ def classify_capacity_and_ownership(
         # signal type's "company"/"native_name" fields describe the
         # tracked company itself, so jp_ownership rows should too, kept
         # consistent rather than left as the one real exception.
-        issuer_ticker = _JAPAN_TICKER_BY_CODE.get(issuer_code)
+        issuer_ticker = company_for(issuer_code)
         meta["company"] = issuer_ticker["company"] if issuer_ticker else None
         meta["native_name"] = issuer_ticker["native_name"] if issuer_ticker else None
         a["metadata"] = meta
@@ -2960,7 +2985,7 @@ def classify_capacity_and_ownership(
         meta["buyback_program_limit_shares"] = program_limit_shares
         meta["buyback_pct_of_shares_outstanding"] = round(pct_of_shares, 2) if pct_of_shares is not None else None
         meta["signal_reason_code"] = reason_code
-        meta["native_name"] = (_JAPAN_TICKER_BY_CODE.get(code) or {}).get("native_name")
+        meta["native_name"] = (company_for(code) or {}).get("native_name")
         a["metadata"] = meta
 
         results.append({
@@ -3495,7 +3520,7 @@ def classify_press(
         meta["signal_reason_code"] = reason_code
         meta["company_revision_habit"] = company_revision_habit
         meta["progress_vs_usual"] = progress_vs_usual
-        meta["native_name"] = (_JAPAN_TICKER_BY_CODE.get(code) or {}).get("native_name") if code else None
+        meta["native_name"] = (company_for(code) or {}).get("native_name") if code else None
         a["metadata"] = meta
 
         results.append({
@@ -3859,7 +3884,7 @@ def classify_corporate_disclosure(
     for a in _pair_bilingual_disclosures(candidates):
         meta = a.get("metadata") or {}
         code = meta.get("code")
-        ticker = _JAPAN_TICKER_BY_CODE.get(code or "")
+        ticker = company_for(code or "")
         company_name = (ticker or {}).get("company") or meta.get("company") or code
         title = a.get("title") or ""
         headline = title.split(": ", 1)[-1] if ": " in title else title
@@ -4175,7 +4200,7 @@ def _english_coverage_pool(articles: list[dict[str, Any]]) -> dict[str, list[dat
 
         title = a.get("title") or ""
         url = (a.get("url") or "").lower()
-        ticker = _JAPAN_TICKER_BY_CODE.get(code)
+        ticker = company_for(code)
         company = (ticker or {}).get("company") or meta.get("company")
 
         # Three ways a hit looks like coverage without being any: it is

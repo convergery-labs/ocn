@@ -35,6 +35,7 @@ DEFAULT_PROMPT_V2: Path = PROMPTS_DIR / "ai_universe_signal_classifier_v2_refine
 TAIWAN_SIGNAL_DOMAIN: str = os.environ.get("TAIWAN_SIGNAL_DOMAIN", "taiwan_market_signal")
 KOREA_SIGNAL_DOMAIN: str = os.environ.get("KOREA_SIGNAL_DOMAIN", "korea_market_signal")
 JAPAN_SIGNAL_DOMAIN: str = os.environ.get("JAPAN_SIGNAL_DOMAIN", "japan_market_signal")
+CHINA_SIGNAL_DOMAIN: str = os.environ.get("CHINA_SIGNAL_DOMAIN", "china_market_signal")
 NEWS_DOMAIN: str = os.environ.get("NEWS_DOMAIN", "ai_news")
 GEOPOLITICAL_SIGNAL_DOMAIN: str = os.environ.get("GEOPOLITICAL_SIGNAL_DOMAIN", "geopolitical_news")
 # Stage B is a forced one-word HIGH/WEAK call, same shape/cost tier as
@@ -117,6 +118,18 @@ MACRO_SIGNAL_MODEL: str = os.environ.get("MACRO_SIGNAL_MODEL") or SEC_FILING_MOD
 # model. Independently tunable via its own env var, same pattern as every
 # other *_MODEL constant here.
 JAPAN_SIGNAL_MODEL: str = os.environ.get("JAPAN_SIGNAL_MODEL") or SEC_FILING_MODEL
+# Every china_market_signal LLM call - C1's binding verdict and the
+# translation pass - routes through here. Same reasoning as
+# JAPAN_SIGNAL_MODEL and MACRO_SIGNAL_MODEL above: this domain's two
+# model uses are a structured extraction (BINDING/NON-BINDING/UNCLEAR
+# plus named entities and an effective date) and a translation, and both
+# are the kind of call where a fabricated value is a real cost rather
+# than a defaulted WEAK. C1 already demonstrated this concretely - the
+# model returned a 发文日期 as an effective date, which the spec forbids,
+# and a guard now drops any date the pattern matcher cannot corroborate.
+# Independently tunable via its own env var, same pattern as every other
+# *_MODEL constant here.
+CHINA_SIGNAL_MODEL: str = os.environ.get("CHINA_SIGNAL_MODEL") or SEC_FILING_MODEL
 MACRO_SIGNAL_PROMPT: Path = PROMPTS_DIR / "macro_signal_interpret_v1.txt"
 # One blocking HTTP call per collapsed event, same shape as
 # TAIWAN_CLASSIFY_CONCURRENCY - independently tunable since event volume

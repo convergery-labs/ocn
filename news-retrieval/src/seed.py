@@ -119,6 +119,23 @@ DOMAINS: list[dict[str, Any]] = [
             " given these free substitutes - see news-retrieval/CLAUDE.md."
         ),
     },
+    {
+        "name": "China Market Signal",
+        "slug": "china_market_signal",
+        "description": (
+            "Chinese government policy actions (export licensing,"
+            " antitrust, security reviews), mainland and Hong Kong company"
+            " filings, and Chinese-language trade press for the companies"
+            " that compete with or supply the US AI-economy universe."
+            " Unlike the other three market domains, a positive signal"
+            " here is usually a NEGATIVE read for the US names attached"
+            " to it - direction is carried downstream by"
+            " signal-detection-agent, not here. Customs (GACC) and the"
+            " statistics bureau (NBS) were both confirmed unreachable"
+            " (JS-cookie anti-bot and a network-level block respectively)"
+            " - see news-retrieval/CLAUDE.md."
+        ),
+    },
 ]
 
 # P0 core universe (spec Section 14.1), hardcoded pending research-universe
@@ -2035,10 +2052,14 @@ JAPAN_IRBANK_FINANCIALS_SOURCE: dict[str, Any] = {
         "filing_pdf) - not from IRBANK's own HTML, which carries neither."
     ),
     "config": {
-        "companies": [
-            {"code": t["code"], "company": t["company"]}
-            for t in JAPAN_TICKER_UNIVERSE
-        ],
+        # Resolved live from research-universe at fetch time
+        # (get_tracked_company_universe) rather than seeded here.
+        # `sources` seeds ON CONFLICT DO NOTHING, so a company
+        # added or corrected in code never reached a database that
+        # had already been seeded - an alias added for Resonac and
+        # Renesas silently kept matching 62 articles instead of 74
+        # until the stored config was updated by hand. The source
+        # row is still required for domain registration.
     },
 }
 
@@ -2072,10 +2093,14 @@ JAPAN_IRBANK_BUYBACK_SOURCE: dict[str, Any] = {
         " but carries no comparable structured numbers."
     ),
     "config": {
-        "companies": [
-            {"code": t["code"], "company": t["company"]}
-            for t in JAPAN_TICKER_UNIVERSE
-        ],
+        # Resolved live from research-universe at fetch time
+        # (get_tracked_company_universe) rather than seeded here.
+        # `sources` seeds ON CONFLICT DO NOTHING, so a company
+        # added or corrected in code never reached a database that
+        # had already been seeded - an alias added for Resonac and
+        # Renesas silently kept matching 62 articles instead of 74
+        # until the stored config was updated by hand. The source
+        # row is still required for domain registration.
     },
 }
 
@@ -2121,10 +2146,14 @@ JAPAN_IRBANK_COMPANY_REFERENCE_SOURCE: dict[str, Any] = {
         " fiscal-period figure is kept per run."
     ),
     "config": {
-        "companies": [
-            {"code": t["code"], "company": t["company"]}
-            for t in JAPAN_TICKER_UNIVERSE
-        ],
+        # Resolved live from research-universe at fetch time
+        # (get_tracked_company_universe) rather than seeded here.
+        # `sources` seeds ON CONFLICT DO NOTHING, so a company
+        # added or corrected in code never reached a database that
+        # had already been seeded - an alias added for Resonac and
+        # Renesas silently kept matching 62 articles instead of 74
+        # until the stored config was updated by hand. The source
+        # row is still required for domain registration.
     },
 }
 
@@ -2411,13 +2440,10 @@ JAPAN_MONOIST_CAPEX_SOURCE: dict[str, Any] = {
         " for this source)."
     ),
     "config": {
-        "companies": [
-            {
-                "code": t["code"], "company": t["company"], "native_name": t["native_name"],
-                **({"aliases": t["aliases"]} if "aliases" in t else {}),
-            }
-            for t in JAPAN_TICKER_UNIVERSE
-        ],
+        # Resolved live from research-universe at fetch time
+        # (get_tracked_company_universe) rather than seeded here -
+        # see the note on irbank_financials above for why a seeded
+        # copy cannot be kept correct.
     },
 }
 
@@ -2477,13 +2503,10 @@ JAPAN_PRESS_JP_SOURCE: dict[str, Any] = {
         " exists)."
     ),
     "config": {
-        "companies": [
-            {
-                "code": t["code"], "company": t["company"], "native_name": t["native_name"],
-                **({"aliases": t["aliases"]} if "aliases" in t else {}),
-            }
-            for t in JAPAN_TICKER_UNIVERSE
-        ],
+        # Resolved live from research-universe at fetch time
+        # (get_tracked_company_universe) rather than seeded here -
+        # see the note on irbank_financials above for why a seeded
+        # copy cannot be kept correct.
     },
 }
 
@@ -2542,15 +2565,608 @@ JAPAN_PRESS_JP_ENGLISH_CHECK_SOURCE: dict[str, Any] = {
         " sources - not a primary signal source itself."
     ),
     "config": {
+        # Resolved live from research-universe at fetch time
+        # (get_tracked_company_universe) rather than seeded here -
+        # see the note on irbank_financials above for why a seeded
+        # copy cannot be kept correct.
+    },
+}
+
+# ===========================================================================
+# China Market Signal
+# ===========================================================================
+#
+# Hardcoded here, NOT read from research-universe, unlike Japan. That is a
+# deliberate interim choice: research-universe currently files these
+# companies under two different `country` values ("China" for Hygon,
+# Loongson and Inspur; "China/Hong Kong" for Naura, SMIC, Cambricon and the
+# rest) with no rule distinguishing them, and Alibaba and Tencent are filed
+# as "United States" with ADR tickers. `get_tracked_company_universe()`
+# matches `country` exactly, so reading live today would return an arbitrary
+# subset. Migrating is a separate decision about what that column means -
+# see news-retrieval/CLAUDE.md.
+#
+# `company` is the exact `company_name` already stored in
+# research-universe for the fifteen that exist there (hence "Amec", not
+# "AMEC"; "Lenovo", not "Lenovo Group"; "Inspur Electronic Information",
+# not "Inspur Information"), so that a later migration needs no name
+# reconciliation. Five - ACM Research Shanghai, Piotech, Hwatsing, China
+# Northern Rare Earth, JL MAG - are not in research-universe at all.
+#
+# `native_name` is the exchange's OWN registered short name (`zwjc` in
+# cninfo's szse_stock.json), confirmed live for all 16 mainland codes on
+# 2026-10-05 - not the full legal name. This is the same finding Japan made
+# the hard way (Resonac's legal レゾナック・ホールディングス matched zero real
+# articles vs. 5 for レゾナック): Chinese press writes 中芯国际, never
+# 中芯国际集成电路制造. `aliases` carries the other written forms.
+#
+# `code` is TEXT throughout - 002371, 000977, 000725 and 0700 all lose
+# their leading zeros as integers, the same reason Taiwan and Japan store
+# theirs as text.
+#
+# Exchange-internal identifiers are NOT stored here. cninfo's `org_id`
+# and HKEX's `stockId` are both required to query their APIs at all (a
+# bare code returns zero rows / an empty 200 rather than an error), and
+# both were hardcoded here until 2026-10-06. They are now resolved per
+# run by `china_code.py` - cninfo from its own bulk new/data/
+# szse_stock.json, HKEX from its autocomplete - the same pattern Japan
+# (edinet_code.py), Korea (dart_corp_code.py) and the US (SEC
+# company_tickers.json) already use.
+#
+# This matters as the universe grows: adding a company here needs only
+# its `code` (and `hk_code` if it is HK-listed). Both identifiers are
+# looked up automatically, verified live for codes never hardcoded -
+# Xiaomi 01810 -> 190371, JD 09618 -> 1000042149. A hand-copied id
+# would otherwise be one transcription error away from a source that
+# silently returns nothing.
+#
+# `exchange` was removed at the same time: it was never read. cninfo's
+# column is derived from the code prefix (_cninfo_column: 0/3 -> szse,
+# else sse), and nothing else consulted the field.
+CHINA_TICKER_UNIVERSE: list[dict[str, Any]] = [
+    # --- Equipment: the substitution front line ---------------------------
+    {"code": "002371", "company": "Naura Technology", "native_name": "北方华创",
+     "aliases": ["北方华创科技集团", "NAURA"], "fiscal_year_end": "12-31"},
+    {"code": "688012", "company": "Amec", "native_name": "中微公司",
+     "aliases": ["中微半导体设备", "AMEC"], "fiscal_year_end": "12-31"},
+    {"code": "688082", "company": "ACM Research Shanghai",
+     "native_name": "盛美上海", "aliases": ["盛美半导体"],
+     "fiscal_year_end": "12-31"},
+    {"code": "688072", "company": "Piotech", "native_name": "拓荆科技",
+     "aliases": ["拓荆"], "fiscal_year_end": "12-31"},
+    {"code": "688120", "company": "Hwatsing Technology",
+     "native_name": "华海清科", "aliases": [], "fiscal_year_end": "12-31"},
+    # --- Foundry and memory ----------------------------------------------
+    # SMIC and Hua Hong are dual-listed; the mainland code is primary here
+    # because cninfo answers to it. Their HK codes (0981, 1347) are what
+    # hkex_filing queries - carried as `hk_code`, not a separate row.
+    {"code": "688981", "company": "SMIC", "native_name": "中芯国际",
+     "aliases": ["中芯国际集成电路制造", "中芯"], "hk_code": "00981", "fiscal_year_end": "12-31"},
+    {"code": "688347", "company": "Hua Hong Semiconductor",
+     "native_name": "华虹宏力", "aliases": ["华虹半导体", "华虹公司", "华虹"],
+     "hk_code": "01347",
+     "fiscal_year_end": "12-31"},
+    {"code": "603986", "company": "GigaDevice", "native_name": "兆易创新",
+     "aliases": ["兆易"], "fiscal_year_end": "12-31"},
+    # --- Domestic accelerators: the Nvidia substitution read --------------
+    {"code": "688256", "company": "Cambricon", "native_name": "寒武纪",
+     "aliases": ["中科寒武纪科技", "寒武纪科技"], "fiscal_year_end": "12-31"},
+    {"code": "688041", "company": "Hygon Information Technology",
+     "native_name": "海光信息", "aliases": ["海光信息技术", "海光"],
+     "fiscal_year_end": "12-31"},
+    {"code": "688047", "company": "Loongson Technology",
+     "native_name": "龙芯中科", "aliases": ["龙芯中科技术", "龙芯"],
+     "fiscal_year_end": "12-31"},
+    # --- Servers, systems and components ----------------------------------
+    {"code": "000977", "company": "Inspur Electronic Information",
+     "native_name": "浪潮信息", "aliases": ["浪潮电子信息产业"],
+     "exclude_terms": ["浪潮软件", "浪潮数字"], "fiscal_year_end": "12-31"},
+    {"code": "002475", "company": "Luxshare Precision",
+     "native_name": "立讯精密", "aliases": ["立讯精密工业", "立讯"],
+     "fiscal_year_end": "12-31"},
+    # BOE's registered short name carries its share-class suffix ("京东方A");
+    # press writes 京东方 without it, so both are needed.
+    {"code": "000725", "company": "BOE Technology", "native_name": "京东方A",
+     "aliases": ["京东方", "京东方科技集团", "BOE"], "fiscal_year_end": "12-31"},
+    # --- Materials and the retaliation lever -------------------------------
+    {"code": "600111", "company": "China Northern Rare Earth",
+     "native_name": "北方稀土", "aliases": ["中国北方稀土"],
+     "exclude_terms": ["包钢股份"], "fiscal_year_end": "12-31"},
+    {"code": "300748", "company": "JL MAG Rare-Earth",
+     "native_name": "金力永磁", "aliases": ["金力永磁科技"], "fiscal_year_end": "12-31"},
+    # --- Hong Kong-listed only (no mainland code, no cninfo org_id) --------
+    {"code": "00992", "company": "Lenovo", "native_name": "联想集团",
+     "aliases": ["联想", "Lenovo"], "hk_code": "00992", "fiscal_year_end": "03-31"},
+    {"code": "09988", "company": "Alibaba Group", "native_name": "阿里巴巴",
+     "aliases": ["阿里巴巴集团", "阿里", "阿里云"], "hk_code": "09988", "fiscal_year_end": "03-31"},
+    {"code": "00700", "company": "Tencent", "native_name": "腾讯控股",
+     "aliases": ["腾讯", "腾讯云"], "hk_code": "00700", "fiscal_year_end": "12-31"},
+    {"code": "09888", "company": "Baidu", "native_name": "百度",
+     "aliases": ["百度智能云"], "hk_code": "09888", "fiscal_year_end": "12-31"},
+]
+
+# Every China source row carries `source_outlet_type` in its config, and
+# every article it produces carries the same value in metadata. Three
+# values, and the distinction is load-bearing rather than decorative: a
+# state outlet is authoritative for WHAT POLICY IS but is not independent
+# confirmation of a commercial fact, and conflating the two would let a
+# policy-signalling article count as corroboration of a company claim.
+# Set at fetch time because it is a property of the source, which the
+# classifier cannot recover from the article text.
+#   official       - a ministry/regulator publishing its own action
+#   state_press    - state news agency relaying policy
+#   commercial_press - a commercial outlet reporting
+
+# China policy sources. Four separate ministry/regulator listing pages,
+# each its own source_type because each publishes a different KIND of
+# action and the downstream classifier rules differ per kind - not
+# because the HTML differs (it does, but that is handled in one parser).
+#
+# Confirmed live 2026-10-05 against all four: the announcement list IS in
+# the initial HTML for MOFCOM, SAMR and CAC (no JS execution needed), and
+# article bodies render as plain text. MIIT is the exception - its listing
+# page returns a 2,048-byte shell with ZERO anchors and builds the list
+# client-side, so its listing is fetched from the same CMS's article pages
+# rather than the index. MOFCOM's English site (english.mofcom.gov.cn)
+# refuses a bare request and needs full browser headers; the Chinese site
+# does not, which is why the Chinese original is the primary fetch and the
+# English version is a later cross-check rather than the source of record.
+CHINA_POLICY_SOURCES: list[dict[str, Any]] = [
+    {
+        "domain_slug": "china_market_signal",
+        "url": "mofcom_policy:china_market_signal",
+        "name": "MOFCOM Policy Announcements (China)",
+        "source_type": "mofcom_policy",
+        "frequency_name": "daily",
+        "description": (
+            "Ministry of Commerce policy releases and announcements"
+            " (公告) - export licensing changes, trade countermeasures,"
+            " anti-dumping rulings and control-list revisions. The single"
+            " highest-impact China source: these move US prices within"
+            " the hour and nothing else in this programme covers the"
+            " Chinese side of export control. Listing confirmed present"
+            " in the initial HTML; article bodies render as plain text."
+        ),
+        "config": {
+            "source_outlet_type": "official",
+            "issuing_body": "MOFCOM",
+            "listing_urls": [
+                "http://www.mofcom.gov.cn/zcfb/index.html",
+                "http://www.mofcom.gov.cn/zcfb/dwmygl/index.html",
+                "http://www.mofcom.gov.cn/zcfb/gpmy/index.html",
+            ],
+        },
+    },
+    {
+        "domain_slug": "china_market_signal",
+        "url": "miit_policy:china_market_signal",
+        "name": "MIIT Policy Documents (China)",
+        "source_type": "miit_policy",
+        "frequency_name": "daily",
+        "description": (
+            "Ministry of Industry and Information Technology policy"
+            " documents and industry news - industrial policy, standards,"
+            " and catalogues of encouraged/restricted technologies. Its"
+            " listing page is a client-side-rendered shell (confirmed"
+            " live: 2,048 bytes, zero anchors), so the CMS article paths"
+            " are walked directly instead of the index."
+        ),
+        "config": {
+            "source_outlet_type": "official",
+            "issuing_body": "MIIT",
+            # Same shape as SAMR: the section pages are client-side
+            # shells (/zwgk/zcwj/wjfb/ returns ~2KB with zero anchors)
+            # and the home page is the only server-rendered listing.
+            # Note MIIT writes art_<hash>.htm, not .html - the one
+            # character that made this source return nothing until the
+            # link pattern was loosened.
+            "listing_urls": [
+                "https://www.miit.gov.cn/",
+            ],
+        },
+    },
+    {
+        "domain_slug": "china_market_signal",
+        "url": "samr_action:china_market_signal",
+        "name": "SAMR Regulatory Actions (China)",
+        "source_type": "samr_action",
+        "frequency_name": "daily",
+        "description": (
+            "State Administration for Market Regulation - antitrust"
+            " investigations and penalty decisions, including those"
+            " naming foreign companies. Feeds the C7 rule"
+            " (a named US company is always at least a weak signal)."
+        ),
+        "config": {
+            "source_outlet_type": "official",
+            "issuing_body": "SAMR",
+            # The section subpages (/xw/mtjj/, /xw/zj/) return a ~3KB
+            # shell with zero article anchors - confirmed live; they
+            # build their lists client-side. The HOME page carries the
+            # same stories as real server-rendered links, so it is the
+            # listing used instead of the sections.
+            "listing_urls": [
+                "https://www.samr.gov.cn/",
+            ],
+        },
+    },
+    {
+        "domain_slug": "china_market_signal",
+        "url": "cac_review:china_market_signal",
+        "name": "CAC Security Reviews (China)",
+        "source_type": "cac_review",
+        "frequency_name": "daily",
+        "description": (
+            "Cyberspace Administration of China - cybersecurity reviews"
+            " of foreign technology products. This is the mechanism used"
+            " in the 2023 memory procurement case, which is the template"
+            " for a single-name US earnings event."
+        ),
+        "config": {
+            "source_outlet_type": "official",
+            "issuing_body": "CAC",
+            # Its section index pages 404; the home page serves the real
+            # dated article links (/YYYY-MM/DD/c_<id>.htm) - confirmed
+            # live, including the two 征求意见稿 consultation notices that
+            # the binding-vs-non-binding classifier exists to separate.
+            "listing_urls": [
+                "https://www.cac.gov.cn/",
+            ],
+        },
+    },
+    {
+        "domain_slug": "china_market_signal",
+        "url": "cn_state_press:china_market_signal",
+        "name": "Xinhua English (China)",
+        "source_type": "cn_state_press",
+        "frequency_name": "daily",
+        "description": (
+            "State news agency, English service - frequently publishes a"
+            " policy announcement before the issuing ministry's own site"
+            " updates, so it is the authoritative TIMESTAMP for policy."
+            " Tagged state_press, never official: authoritative for what"
+            " policy is, not independent confirmation of a commercial"
+            " claim."
+        ),
+        "config": {
+            "source_outlet_type": "state_press",
+            # english.news.cn/business/index.htm is a DEAD page that still
+            # returns 200 - its newest article is from 2021 (confirmed
+            # live). A fetcher pointed at it would run clean forever and
+            # produce nothing current, which is the worst kind of broken.
+            # The home page carries live dated links (/YYYYMMDD/<hash>/
+            # c.html) and is used instead.
+            "listing_urls": [
+                "https://english.news.cn/",
+            ],
+        },
+    },
+]
+
+# hkex_filing: the six dual-listed/HK-listed companies, in English, from
+# HKEX's own disclosure site. Hong Kong listing rules require English
+# alongside Chinese, so this is the one company source in the China module
+# needing no translation at all - which is why it is built before the
+# fourteen mainland-only names.
+#
+# `hkex_stock_id` is HKEX's own INTERNAL issuer id and is NOT the stock
+# code - SMIC's code is 00981 but its id is 7249, Lenovo's 00992 is 2325,
+# and Alibaba's 09988 is 1000015694. Confirmed live 2026-10-05, and worth
+# stating because passing the stock code as `stockId` returns an empty
+# result set with HTTP 200 rather than an error: five of these six
+# companies silently returned nothing until the real ids were resolved,
+# and Tencent only worked by coincidence (its code 00700 -> 700 happened
+# to be a valid, unrelated id). Resolved once from HKEX's own
+# search/prefix.do autocomplete and stored, not looked up per run.
+CHINA_HKEX_SOURCE: dict[str, Any] = {
+    "domain_slug": "china_market_signal",
+    "url": "hkex_filing:china_market_signal",
+    "name": "HKEX Filings (China)",
+    "source_type": "hkex_filing",
+    "frequency_name": "daily",
+    "description": (
+        "Company filings for the Hong Kong-listed names in the China"
+        " universe (SMIC, Hua Hong, Lenovo, Alibaba, Tencent, Baidu) via"
+        " hkexnews.hk - English by listing requirement, so no translation"
+        " layer is needed for any of them."
+    ),
+    "config": {
+        "source_outlet_type": "official",
         "companies": [
-            {
-                "code": t["code"],
-                "company": t["company"],
-                "search_query": _JAPAN_ENGLISH_CHECK_SEARCH_QUERY_OVERRIDES.get(
-                    t["code"], t["company"]
-                ),
-            }
-            for t in JAPAN_TICKER_UNIVERSE
+            # hkex_stock_id is NOT carried: it is resolved per run from
+            # HKEX's own autocomplete (china_code.resolve_hkex_stock_ids),
+            # so a company added here needs only its listing code.
+            {"code": t["code"], "company": t["company"],
+             "native_name": t["native_name"], "hk_code": t["hk_code"]}
+            for t in CHINA_TICKER_UNIVERSE if t.get("hk_code")
+        ],
+    },
+}
+
+# cninfo_filing: the officially designated disclosure site for every
+# Shanghai- and Shenzhen-listed company. Confirmed live 2026-10-05 against
+# all 16 mainland codes.
+#
+# Two findings that shape the fetcher, both confirmed live:
+#   1. The announcement query needs `stock` = "CODE,ORGID". A bare code
+#      returns zero rows with totalAnnouncement=0 - NOT an error, which is
+#      what makes this worth stating: it fails silently and looks like a
+#      company with no filings. org_id is stored per company above.
+#   2. `column` must be "szse" for Shenzhen codes (000/002/300) and "sse"
+#      for Shanghai ones (600/603/688). Sending the wrong one also
+#      returns zero rows rather than erroring.
+# Date scoping works via `seDate` as "YYYY-MM-DD~YYYY-MM-DD", so days_back
+# is applied server-side rather than by walking and cutting off.
+CHINA_CNINFO_SOURCE: dict[str, Any] = {
+    "domain_slug": "china_market_signal",
+    "url": "cninfo_filing:china_market_signal",
+    "name": "CNINFO Filings (China)",
+    "source_type": "cninfo_filing",
+    "frequency_name": "daily",
+    "description": (
+        "Announcements and periodic reports for the mainland-listed"
+        " China universe companies, via cninfo.com.cn - the officially"
+        " designated disclosure site for the Shanghai and Shenzhen"
+        " exchanges. Stores announcement metadata and the filing PDF"
+        " link; the substitution signal (C2) lives in these filings."
+    ),
+    "config": {
+        "source_outlet_type": "official",
+        "companies": [
+            # org_id is NOT carried: it is resolved per run from cninfo's
+            # own bulk stock list (china_code.resolve_cninfo_org_ids), so
+            # a company added here needs only its code.
+            #
+            # Membership is "has a mainland listing", which is exactly
+            # "code != hk_code": SMIC and Hua Hong are dual-listed and
+            # belong in BOTH this list and the HKEX one (688981/00981,
+            # 688347/01347), while Lenovo, Alibaba, Tencent and Baidu
+            # store their HK code in `code` because they have no mainland
+            # listing at all.
+            {"code": t["code"], "company": t["company"],
+             "native_name": t["native_name"]}
+            for t in CHINA_TICKER_UNIVERSE
+            if t.get("code") and t["code"] != t.get("hk_code")
+        ],
+    },
+}
+
+# press_cn: Chinese-language commercial trade and financial press.
+# GDELT is NOT used for this domain (explicit decision): Taiwan's GDELT
+# path is scoped sourcelang:chinese sourcecountry:TW and covers
+# traditional-character Taiwanese press, not simplified mainland outlets.
+#
+# Outlet selection is what the probe allowed, not a wish list. Confirmed
+# live 2026-10-05: ITHome (691 anchors, 103 dated rows), Jiemian (169
+# anchors, dated rows in the markup) and EEFocus (391 anchors) all return
+# a parseable listing. Yicai and STCN serve a captcha challenge to an
+# automated client and semiinsights.com refuses the connection outright -
+# all three are therefore excluded rather than retried, on the same
+# principle Korea applied to its blocked customs API.
+CHINA_PRESS_SOURCE: dict[str, Any] = {
+    "domain_slug": "china_market_signal",
+    "url": "press_cn:china_market_signal",
+    "name": "China Trade and Financial Press",
+    "source_type": "press_cn",
+    "frequency_name": "daily",
+    "description": (
+        "Chinese-language commercial press (ITHome, Jiemian, EEFocus),"
+        " filtered client-side to the China universe by native_name or"
+        " alias - none of these outlets has a per-company query. Tagged"
+        " commercial_press to keep it separable from state_press: the"
+        " two answer different questions and must not corroborate each"
+        " other."
+    ),
+    "config": {
+        "source_outlet_type": "commercial_press",
+        # RSS where an outlet publishes a usable one. ITHome's feed
+        # carries 60 dated entries with real editorial summaries against
+        # 50 undated headlines from its HTML listing - strictly more,
+        # and the summary removes a per-article body fetch, so the HTML
+        # listing is dropped rather than kept alongside. Every other
+        # Chinese outlet tried (Jiemian, EEFocus, Yicai, STCN, CLS,
+        # 36kr, Sina, Huxiu, laoyaoba, eet-china, semiinsights, tmtpost)
+        # returns 404, an empty feed, or is unreachable.
+        "rss_urls": {
+            "https://www.ithome.com/rss/": "ithome",
+        },
+        "listing_urls": [
+            "https://www.jiemian.com/lists/116.html",
+            "https://www.eefocus.com/",
+            # ijiwei (集微网) newsflash - added for coverage after the
+            # first three were measured at ~150 headlines per run
+            # between them. This one carries 92 dated semiconductor
+            # trade items on its own, and is the densest China-specific
+            # source found: its homepage times out, its /news and /n
+            # paths return a 1.8KB shell, and only /kuaixun serves a
+            # real server-rendered list.
+            "https://www.ijiwei.com/kuaixun",
+        ],
+        "companies": [
+            {"code": t["code"], "company": t["company"],
+             "native_name": t["native_name"],
+             "aliases": t.get("aliases", []),
+             "exclude_terms": t.get("exclude_terms", [])}
+            for t in CHINA_TICKER_UNIVERSE
+        ],
+    },
+}
+
+# Companies whose stored name is not a usable English search query.
+# Confirmed live 2026-10-05 against real search results, not guessed:
+# "Amec" returned a Spanish article about an unrelated firm (there is a
+# large UK engineering company of that name), and "Piotech" returned the
+# German semiconductor-equipment makers PVA TePla and SUSS MicroTec. Both
+# would have silently measured the English-coverage lag of the wrong
+# company. Same mechanism Japan uses for Disco and Towa - ordinary words
+# that a bare-name search answers wrongly - and the same reason it is
+# stored per company: the ambiguity is a fact about the name.
+_CHINA_ENGLISH_CHECK_QUERY_OVERRIDES: dict[str, str] = {
+    "688012": "AMEC Advanced Micro-Fabrication Equipment China",
+    "688072": "Piotech semiconductor China",
+    "688120": "Hwatsing Technology CMP China",
+    "688082": "ACM Research Shanghai",
+    "603986": "GigaDevice Semiconductor",
+    "688041": "Hygon Information Technology",
+    "000725": "BOE Technology display",
+    "600111": "China Northern Rare Earth",
+    "300748": "JL MAG Rare-Earth",
+    # Lenovo, Alibaba, Tencent, Baidu, SMIC, Cambricon, Naura, Inspur,
+    # Luxshare, Hua Hong and Loongson are unambiguous on their own names.
+}
+
+# comtrade_china_trade: C6 (trade data), reached from the PARTNER side.
+#
+# The spec asks for Chinese customs data on integrated-circuit and
+# semiconductor-equipment trade. China's own two publishers are both
+# unreachable from here (GACC serves a JS cookie challenge, NBS is
+# network-blocked), and Comtrade's CHINA-REPORTED monthly series stops at
+# 2024-12 - confirmed live across 202501-202504, all count=0.
+#
+# What IS available, free, keyless and current to within ~2-3 months: what
+# the EXPORTERS report shipping TO China. Confirmed live 2026-10-05 for
+# 2026-07 - Japan $1.275bn, Netherlands $0.582bn, USA $0.082bn of
+# semiconductor equipment (HS 8486).
+#
+# This is not a workaround, it is arguably the better measurement for the
+# question C6 exists to answer. Export controls bite on the EXPORTER's
+# side: Washington restricts what American and allied firms may sell, so
+# the US/Japan/Netherlands export series IS the control measure, recorded
+# by the governments doing the restricting rather than by the country
+# being restricted. The live figures show it plainly - US equipment
+# exports to China run $77-97m/month while Japan's run $0.7-1.3bn.
+#
+# Reporters are the three equipment-export-control jurisdictions plus
+# Korea (memory). Products are the two the spec names:
+#   8542 integrated circuits
+#   8486 semiconductor manufacturing equipment
+# Flow X (exports) only: an import flow here would be these countries
+# buying FROM China, a different question.
+#
+# Seeded monthly (min_days_back 30): the underlying series updates
+# monthly, so a daily --days-back 1 run correctly skips it, same gating
+# seaj_billings uses.
+CHINA_COMTRADE_SOURCE: dict[str, Any] = {
+    "domain_slug": "china_market_signal",
+    "url": "comtrade_china_trade:china_market_signal",
+    "name": "China Semiconductor Trade (partner-reported)",
+    "source_type": "comtrade_china_trade",
+    "frequency_name": "monthly",
+    "description": (
+        "Monthly integrated-circuit (HS 8542) and semiconductor-equipment"
+        " (HS 8486) exports TO China, as reported by the United States,"
+        " Japan, the Netherlands and South Korea, via the UN Comtrade"
+        " preview API (free, no key). Substitutes for Chinese customs"
+        " data, which is unreachable - and measures export controls from"
+        " the side that imposes them. ~2-3 month lag."
+    ),
+    "config": {
+        "source_outlet_type": "official",
+        # UN M49 country codes, which is what Comtrade keys on.
+        # The three equipment-export-control jurisdictions. South Korea
+        # was tried and dropped: its Comtrade series lags ~9 months
+        # (2025-12 is its newest, vs 2026-07 for the other three), so it
+        # would contribute only stale rows. Korea's own customs service
+        # publishes a current semiconductor export figure and is already
+        # fetched by this service under korea_market_signal
+        # (kr_customs_export) - that is where a Korea read should come
+        # from, not from here.
+        "reporters": [
+            {"code": "842", "name": "United States"},
+            {"code": "392", "name": "Japan"},
+            {"code": "528", "name": "Netherlands"},
+        ],
+        "commodities": [
+            {"code": "8542", "label": "Integrated circuits"},
+            {"code": "8486", "label": "Semiconductor manufacturing equipment"},
+        ],
+        "partner_code": "156",  # China
+    },
+}
+
+# nbs_ic_output: the other half of C6 - China's own monthly integrated-
+# circuit PRODUCTION volume, from the National Bureau of Statistics.
+#
+# Comtrade (above) measures what the world ships INTO China, in dollars.
+# This measures what China itself makes, in units. Together they answer
+# the two halves of C6: are export controls biting, and is domestic
+# output replacing what was restricted. One without the other reads a
+# fall in imports as a win for controls when it may simply be
+# substitution.
+#
+# **Only reachable from ECS.** Confirmed live 2026-10-05: stats.gov.cn is
+# blocked at the network layer from a local dev machine ("The URL has
+# been blocked as per the instructions of the Competent Government
+# Authority" - an ISP-level block, not a refusal by the site) but returns
+# 127KB of normal HTML from the staging ECS task. A developer running
+# this domain locally will see this one source fail and every other one
+# work; that is expected, not a bug.
+#
+# NBS's structured easyquery API (data.stats.gov.cn/easyquery.htm) is WAF-
+# blocked even from ECS (`reason:UrlACL`), so the figure is read from the
+# monthly industrial-output press release, which carries it as a table
+# row: 集成电路（亿块） followed by the month's output and its YoY percent.
+# Confirmed live against the August 2026 release - 529 亿块 (52.9bn
+# units), +20.6% YoY.
+#
+# Monthly frequency: NBS publishes this once a month, around the 15th.
+CHINA_NBS_IC_OUTPUT_SOURCE: dict[str, Any] = {
+    "domain_slug": "china_market_signal",
+    "url": "nbs_ic_output:china_market_signal",
+    "name": "NBS IC Production (China)",
+    "source_type": "nbs_ic_output",
+    "frequency_name": "monthly",
+    "description": (
+        "China's monthly integrated-circuit production volume (集成电路,"
+        " 亿块) and its year-on-year change, from the National Bureau of"
+        " Statistics' monthly industrial-output release. The domestic-"
+        "output half of C6, paired with comtrade_china_trade's import"
+        " side. Reachable from ECS only - stats.gov.cn is network-blocked"
+        " from local dev machines."
+    ),
+    "config": {
+        "source_outlet_type": "official",
+        "issuing_body": "NBS",
+        "index_url": "http://www.stats.gov.cn/sj/zxfb/",
+    },
+}
+
+# press_cn_english_check: the spec's English-coverage-lag requirement -
+# how long after a Chinese-language report does English coverage appear,
+# measured per company. Same shape as Japan's press_jp_english_check and
+# Korea's KOREA_GDELT_ENGLISH_SOURCE: an independent per-company search,
+# not a per-article cross-reference.
+CHINA_PRESS_ENGLISH_CHECK_SOURCE: dict[str, Any] = {
+    "domain_slug": "china_market_signal",
+    "url": "press_cn_english_check:china_market_signal",
+    "name": "China Press English-Coverage Check",
+    "source_type": "press_cn_english_check",
+    "frequency_name": "daily",
+    "description": (
+        "Per-company English-language news search (DuckDuckGo News, free,"
+        " no API key) for the China universe - measures how far English"
+        " coverage lags the Chinese-language original, the same check"
+        " Japan and Korea already run."
+    ),
+    "config": {
+        "source_outlet_type": "commercial_press",
+        # The three listed accelerator makers - Cambricon, Hygon,
+        # Loongson. Their article bodies ARE fetched, unlike every other
+        # company's, because this is the only source that carries their
+        # news at all: they file nothing resembling a product milestone
+        # (77 cninfo filings over a year, all governance) and press_cn
+        # returns zero accelerator articles. The search snippet alone is
+        # one truncated sentence, too thin for signal-detection-agent's
+        # C4 rule, which needs a stated volume, a named customer or a
+        # procurement award. Scoped to three codes rather than all
+        # twenty, since this costs one page fetch per surviving article
+        # and no other company's rule needs a body here.
+        "fetch_body_for_codes": ["688256", "688041", "688047"],
+        "companies": [
+            {"code": t["code"], "company": t["company"],
+             "search_query": _CHINA_ENGLISH_CHECK_QUERY_OVERRIDES.get(
+                 t["code"], t["company"])}
+            for t in CHINA_TICKER_UNIVERSE
         ],
     },
 }
@@ -3094,6 +3710,21 @@ SOURCES: list[dict[str, Any]] = [
     JAPAN_MONOIST_CAPEX_SOURCE,
     JAPAN_PRESS_JP_SOURCE,
     JAPAN_PRESS_JP_ENGLISH_CHECK_SOURCE,
+    # ------------------------------------------------------------------
+    # China market signal. Eight source_types, not the ten originally
+    # scoped: customs (GACC) serves a JS-cookie anti-bot challenge that
+    # needs a browser to defeat, and the statistics bureau (NBS) is
+    # blocked at the network layer from this environment. Both were
+    # confirmed live 2026-10-05 and are deliberately absent rather than
+    # stubbed - see news-retrieval/CLAUDE.md for the probe record.
+    # ------------------------------------------------------------------
+    *CHINA_POLICY_SOURCES,
+    CHINA_HKEX_SOURCE,
+    CHINA_CNINFO_SOURCE,
+    CHINA_COMTRADE_SOURCE,
+    CHINA_NBS_IC_OUTPUT_SOURCE,
+    CHINA_PRESS_SOURCE,
+    CHINA_PRESS_ENGLISH_CHECK_SOURCE,
 ]
 
 # VC commentary / investor blogs.
