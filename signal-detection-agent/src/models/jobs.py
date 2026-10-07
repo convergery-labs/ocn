@@ -392,6 +392,88 @@ def get_existing_japan_signal_source_ids(source_ids: list[str]) -> set[str]:
     return {r["source_id"] for r in rows}
 
 
+def insert_china_signal_classification(
+    job_id: int, article: dict[str, Any], result: dict[str, Any],
+) -> None:
+    """Upsert one agent_classifications row for a china_market_signal item.
+
+    Same shape as insert_korea_signal_classification and
+    insert_japan_signal_classification - a deterministic rule/lookup
+    result, so signal_score is left NULL rather than defaulted, even for
+    C1 where a model supplies the binding verdict: the model answers
+    BINDING/NON-BINDING/UNCLEAR, not a score, and inventing one would
+    misrepresent what it returned.
+
+    `source_id` is the article's own url, which news-retrieval already
+    guarantees globally unique (a real article URL for policy and press,
+    a synthetic cninfo-filing:// / hkex-filing:// / comtrade-china:// key
+    for the rest), so the partial unique index in db.py has a real
+    natural key to conflict against.
+
+    Named entities go in `entities_json`, the column that exists for
+    them, NOT in the metadata blob. Three separate name fields had
+    accumulated there instead - `named_items` (product and technology
+    categories a measure names), `named_foreign` (foreign companies or
+    countries it names, extracted by the C1 model and then silently
+    dropped, never persisted at all) and `named_us` (US tickers the C7
+    matcher found). A consumer looking for "which entities does this
+    row name" had to know all three keys and that one of them did not
+    exist. They are one question and they now have one answer, in the
+    shape the ai_news path already established: [{"name", "type"}],
+    with `entity_names_normalized` carrying the lowercased names for
+    filtering, same as insert_classification does.
+    """
+    entities = result.get("entities") or []
+    entity_names_normalized = [
+        e["name"].lower() for e in entities if e.get("name")
+    ]
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO agent_classifications (
+                job_id, source_type, source_id, url, title,
+                signal_detection, signal_score, signal_reason,
+                published, entities_json, entity_names_normalized, metadata
+            ) VALUES (%s, 'china_market_signal', %s, %s, %s, %s, %s, %s, %s,
+                      %s, %s, %s)
+            ON CONFLICT DO NOTHING
+            """,
+            (
+                job_id,
+                article.get("url"),
+                article.get("url"),
+                article.get("title"),
+                result["signal"],
+                result.get("signal_score"),
+                result.get("reason"),
+                article.get("published"),
+                json.dumps(entities, ensure_ascii=False),
+                entity_names_normalized,
+                json.dumps(result.get("metadata") or {}, ensure_ascii=False),
+            ),
+        )
+
+
+def get_existing_china_signal_source_ids(source_ids: list[str]) -> set[str]:
+    """Return the subset of source_ids already classified as
+    source_type='china_market_signal', across ALL prior jobs - same
+    dedup role as get_existing_japan_signal_source_ids. A China article's
+    url can legitimately reappear across several news-retrieval polls
+    (the policy rules run every 4 hours) before this job ever sees it.
+    """
+    if not source_ids:
+        return set()
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT source_id FROM agent_classifications
+            WHERE source_type = 'china_market_signal' AND source_id = ANY(%s)
+            """,
+            (source_ids,),
+        ).fetchall()
+    return {r["source_id"] for r in rows}
+
+
 def insert_macro_signal_event(
     job_id: int, event: dict[str, Any], interpretation: dict[str, Any] | None,
 ) -> None:

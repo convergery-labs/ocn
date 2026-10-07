@@ -289,6 +289,62 @@ def classify_korea_signals(from_date: str | None, to_date: str | None) -> None:
     logger.info("korea_market_signal job_id=%s finished", job_id)
 
 
+@cli.command("classify-china-signals")
+@click.option(
+    "--from-date",
+    default=None,
+    help="Start date (YYYY-MM-DD) of the news-retrieval run window to pool. "
+    "Defaults to today (UTC) - i.e. classify all of today's completed "
+    "china_market_signal runs so far.",
+)
+@click.option(
+    "--to-date",
+    default=None,
+    help="End date (YYYY-MM-DD) of the news-retrieval run window to pool. "
+    "Defaults to today (UTC).",
+)
+def classify_china_signals(from_date: str | None, to_date: str | None) -> None:
+    """One-shot: pool today's completed china_market_signal
+    news-retrieval runs, classify, persist. Entry point for the
+    scheduled task - runs to completion and exits (not a server).
+
+    Runs Gate 1 filing triage, all seven signal types (C1-C7), the
+    read-through to US tickers, the WOULD CONFIRM / WOULD CONTRADICT
+    pass and translation. C2-C6 were unimplemented while their
+    thresholds had no stored distribution to derive from; they are now
+    built on a MAD baseline computed from real accumulated data, with
+    trust floors (_C2_MIN_OBSERVATIONS, _C6_MIN_PERIODS) that make the
+    classifier decline to judge rather than invent a baseline. See
+    pipeline/china_signal_classifier.py's own docstring.
+
+    Scheduled twice daily (10:00 and 14:00 UTC, MON-FRI). Defaults to
+    today (UTC) and skips already-classified source_ids, so the two
+    passes are additive rather than duplicative.
+    """
+    import asyncio
+    from datetime import datetime, timezone
+
+    import config
+    from controllers.run import run_china_signal_classification
+    from models.jobs import create_job
+
+    logger.info("Initialising database...")
+    init_db()
+    seed()
+
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    from_date = from_date or today
+    to_date = to_date or today
+
+    job_id = create_job(domain=config.CHINA_SIGNAL_DOMAIN)
+    logger.info(
+        "Created china_market_signal job_id=%s from_date=%s to_date=%s",
+        job_id, from_date, to_date,
+    )
+    asyncio.run(run_china_signal_classification(job_id, from_date, to_date))
+    logger.info("china_market_signal job_id=%s finished", job_id)
+
+
 @cli.command("summarize-korea-signals")
 @click.option(
     "--date",

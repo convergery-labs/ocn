@@ -793,6 +793,165 @@ resource "aws_cloudwatch_event_target" "news_retrieval_geopolitical_news_expire_
   })
 }
 
+resource "aws_cloudwatch_event_rule" "news_retrieval_china_market_signal_policy" {
+  name = "${var.env}-news-retrieval-china-market-signal-policy"
+  # Every 4 hours bounded to 00:00-12:00 UTC (08:00-20:00 Beijing, CST =
+  # UTC+8 year-round, no DST), Mon-Fri. This is the one group where lag is
+  # the product rather than a tolerance: the China Signals spec's own
+  # Section 1 puts policy's lead time at "immediate - policy moves prices
+  # the same hour", against two-to-four quarters for Japan's company
+  # forecasts. A ministry announcement found eight hours late has already
+  # been priced.
+  #
+  # Bounded rather than all-day because MOFCOM, MIIT, SAMR and CAC publish
+  # during Beijing office hours - an overnight poll would re-walk the same
+  # unchanged listings. Mon-Fri for the same reason, accepting that a
+  # weekend announcement waits until Monday morning; that is a real but
+  # small gap, since these four bodies rarely publish at a weekend.
+  #
+  # Not bounded to the TRADING session (01:30-07:00 UTC) the way the
+  # filings rule below is: policy is published by ministries on their own
+  # schedule and has no relationship to when the exchanges are open.
+  schedule_expression = "cron(0 0-12/4 ? * MON-FRI *)"
+}
+
+resource "aws_cloudwatch_event_target" "news_retrieval_china_market_signal_policy" {
+  rule     = aws_cloudwatch_event_rule.news_retrieval_china_market_signal_policy.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+
+  ecs_target {
+    # Family-only ARN (no revision suffix) - see the daily fetch target
+    # above for why this is unpinned rather than a specific revision.
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.news_retrieval.family}"
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets          = var.public_subnet_ids
+      security_groups  = [var.news_sg_id]
+      assign_public_ip = true
+    }
+  }
+
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name = "news-retrieval"
+        # --days-back 2, not 1: the government listings carry no
+        # publication TIME, only a date, so a run early in the UTC day
+        # looking back exactly one day can miss an announcement published
+        # late on the Beijing day that straddles the UTC boundary. The
+        # extra day costs nothing (global URL dedup) and closes that seam.
+        command = ["python", "__main__.py", "trigger", "--domain", "china_market_signal", "--days-back", "2"]
+      }
+    ]
+  })
+}
+
+resource "aws_cloudwatch_event_rule" "news_retrieval_china_market_signal_filings" {
+  name = "${var.env}-news-retrieval-china-market-signal-filings"
+  # Twice daily, anchored to the real mainland session (09:30-15:00 CST =
+  # 01:30-07:00 UTC) in the same shape as Japan's pre-open/post-close
+  # pair: 01:00 UTC catches anything filed overnight ahead of the open,
+  # 08:00 UTC catches the post-close cluster. Chinese issuers file the
+  # bulk of their announcements after the close, which is why the second
+  # run sits an hour past it rather than at the bell.
+  #
+  # Runs the whole domain, not just the filing source_types - the trigger
+  # command is domain-scoped and there is no per-source_type flag. That
+  # means policy and press are re-fetched here too, which is harmless
+  # (global URL dedup) and costs two extra listing walks a day.
+  schedule_expression = "cron(0 1,8 ? * MON-FRI *)"
+}
+
+resource "aws_cloudwatch_event_target" "news_retrieval_china_market_signal_filings" {
+  rule     = aws_cloudwatch_event_rule.news_retrieval_china_market_signal_filings.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+
+  ecs_target {
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.news_retrieval.family}"
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets          = var.public_subnet_ids
+      security_groups  = [var.news_sg_id]
+      assign_public_ip = true
+    }
+  }
+
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name = "news-retrieval"
+        # --days-back 3 covers a weekend of filings on the Monday run
+        # without a separate rule. cninfo and HKEX are both date-RANGE
+        # queries, so a wider window costs one request per company, not
+        # one per day - unlike Japan's EDINET, which loops per day and is
+        # why that domain deliberately keeps its daily window at 1.
+        command = ["python", "__main__.py", "trigger", "--domain", "china_market_signal", "--days-back", "3"]
+      }
+    ]
+  })
+}
+
+resource "aws_cloudwatch_event_rule" "news_retrieval_china_market_signal_monthly" {
+  name = "${var.env}-news-retrieval-china-market-signal-monthly"
+  # The ONLY schedule that ever includes the two C6 trade sources
+  # (comtrade_china_trade and nbs_ic_output, both frequency_name
+  # "monthly", min_days_back 30) - the rules above run --days-back 2 and
+  # 3, which never satisfy load_sources' `f.min_days_back <= days_back`
+  # gate. Without this rule those two would only ever run by hand, the
+  # same trap Japan's seaj_billings sits behind.
+  #
+  # 20th of the month, 05:00 UTC. NBS publishes the previous month's
+  # industrial-output release (which carries the IC production figure)
+  # around the 15th - confirmed live, the August 2026 figure landed
+  # 15 September - so the 20th sits safely past it. Comtrade has no fixed
+  # release day and lags 2-3 months regardless, so it is indifferent to
+  # the date; the walk-back window in _fetch_comtrade_china_trade picks up
+  # whatever has been published since the last run.
+  #
+  # Runs the whole domain again, like Japan's monthly rule - harmless
+  # duplicate work once a month, resolved by global URL dedup.
+  #
+  # NOTE: nbs_ic_output is reachable ONLY from inside AWS. stats.gov.cn is
+  # network-blocked from local dev machines (HTTP 403, a "blocked as per
+  # the instructions of the Competent Government Authority" page), so this
+  # scheduled run is the only path that actually produces that source - a
+  # developer running the same command locally will see it fail open and
+  # return nothing. See news-retrieval/CLAUDE.md.
+  schedule_expression = "cron(0 5 20 * ? *)"
+}
+
+resource "aws_cloudwatch_event_target" "news_retrieval_china_market_signal_monthly" {
+  rule     = aws_cloudwatch_event_rule.news_retrieval_china_market_signal_monthly.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+
+  ecs_target {
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.news_retrieval.family}"
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets          = var.public_subnet_ids
+      security_groups  = [var.news_sg_id]
+      assign_public_ip = true
+    }
+  }
+
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name = "news-retrieval"
+        # 35, not 31: Comtrade's walk-back needs to reach past its own
+        # 2-3 month publication lag, and _fetch_comtrade_china_trade
+        # derives the number of months it attempts from days_back
+        # (max(4, days_back//30 + 3)). 35 keeps that at the floor of 4
+        # months while clearing the 30-day gate.
+        command = ["python", "__main__.py", "trigger", "--domain", "china_market_signal", "--days-back", "35"]
+      }
+    ]
+  })
+}
+
 resource "aws_cloudwatch_event_rule" "news_retrieval_company_news_expire_weekly" {
   name = "${var.env}-news-retrieval-company-news-expire-weekly"
   # Sunday 05:00 UTC - after the daily 01:00 UTC company_news fetch and
@@ -1501,6 +1660,97 @@ resource "aws_cloudwatch_event_target" "signal_detection_agent_japan_signals_pos
       {
         name    = "signal-detection-agent"
         command = ["python", "-m", "src", "classify-japan-signals"]
+      }
+    ]
+  })
+}
+
+resource "aws_cloudwatch_event_rule" "signal_detection_agent_china_signals_filings" {
+  name        = "${var.env}-signal-detection-agent-china-signals-filings"
+  description = "Classify pooled china_market_signal news-retrieval runs (Gate 1 triage, C1-C7, read-through, confirmation, translate) - after the daily mainland filings fetches"
+  # Anchored to the three news-retrieval china_market_signal fetch rules
+  # above, not to a round number: without this rule the domain fetches
+  # on all three and classifies on none, so articles accumulate
+  # unjudged.
+  #
+  # 10:00 UTC = 2 hours after the 08:00 UTC post-close filings fetch
+  # (news_retrieval_china_market_signal_filings, cron(0 1,8 ...)), which
+  # covers the 01:30-07:00 UTC mainland session. Also lands after the
+  # 08:00 UTC policy fetch in the 4-hourly series, so one pass picks up
+  # both that morning's filings and the policy/press of the preceding
+  # 12 hours. Two hours rather than one because cninfo and HKEX fetches
+  # pull filing PDFs per company, which is slower than Japan's
+  # equivalent - same "generous buffer, not a measured runtime"
+  # convention every other offset in this file uses.
+  #
+  # classify-china-signals defaults from_date=to_date=today (UTC),
+  # pooling ALL of today's completed china_market_signal runs and
+  # skipping already-classified source_ids
+  # (get_existing_china_signal_source_ids), so this pass and the
+  # evening one below are additive and idempotent, not duplicative,
+  # even though both fall on the same UTC calendar day.
+  #
+  # MON-FRI only, matching the fetch rules: the mainland exchanges and
+  # the ministries both observe the working week, and a weekend pass
+  # would re-pool a window with nothing new in it.
+  schedule_expression = "cron(0 10 ? * MON-FRI *)"
+}
+
+resource "aws_cloudwatch_event_target" "signal_detection_agent_china_signals_filings" {
+  rule     = aws_cloudwatch_event_rule.signal_detection_agent_china_signals_filings.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+  ecs_target {
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.signal_detection_agent.family}"
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets         = var.private_subnet_ids
+      security_groups = [var.signal_detection_agent_sg_id]
+    }
+  }
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "signal-detection-agent"
+        command = ["python", "-m", "src", "classify-china-signals"]
+      }
+    ]
+  })
+}
+
+resource "aws_cloudwatch_event_rule" "signal_detection_agent_china_signals_evening" {
+  name        = "${var.env}-signal-detection-agent-china-signals-evening"
+  description = "Classify pooled china_market_signal news-retrieval runs - second daily pass, catching the afternoon/evening policy and press fetches"
+  # 14:00 UTC = 22:00 Beijing, after the 12:00 UTC fetch that ends the
+  # policy rule's 00:00-12:00 UTC 4-hourly series (cron(0 0-12/4 ...)).
+  # That series exists because MOFCOM/MIIT/SAMR publish through the
+  # Beijing working day and 重大事项 filings cluster after close; a
+  # single morning classify pass would leave everything published after
+  # 08:00 UTC waiting until the next day.
+  #
+  # Also the pass that picks up the monthly comtrade_china_trade and
+  # nbs_ic_output rows: that fetch runs 05:00 UTC on the 20th
+  # (news_retrieval_china_market_signal_monthly), well before this.
+  schedule_expression = "cron(0 14 ? * MON-FRI *)"
+}
+
+resource "aws_cloudwatch_event_target" "signal_detection_agent_china_signals_evening" {
+  rule     = aws_cloudwatch_event_rule.signal_detection_agent_china_signals_evening.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+  ecs_target {
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.signal_detection_agent.family}"
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets         = var.private_subnet_ids
+      security_groups = [var.signal_detection_agent_sg_id]
+    }
+  }
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "signal-detection-agent"
+        command = ["python", "-m", "src", "classify-china-signals"]
       }
     ]
   })

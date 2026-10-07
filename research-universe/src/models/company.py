@@ -44,7 +44,7 @@ _DETAIL_COLS = f"""
     c.id::text, c.company_name, c.ticker, c.market, c.country, c.website,
     c.multi_category_reason, c.status, c.agent_added,
     c.added_by, c.added_at, c.verified_by, c.verified_at,
-    c.local_code, c.local_name, c.search_query,
+    c.code, c.native_name, c.search_query,
     COALESCE(c.aliases, '{{}}') AS aliases,
     COALESCE(c.exclude_terms, '{{}}') AS exclude_terms,
     c.fiscal_year_end, c.market_cap_usd_bn, c.market_cap_local,
@@ -65,7 +65,7 @@ _DETAIL_COLS = f"""
 _BRIEF_COLS = f"""
     c.id::text, c.company_name, c.ticker, c.market, c.country, c.website,
     c.status, c.agent_added, c.added_at,
-    c.local_code, c.local_name, c.search_query,
+    c.code, c.native_name, c.search_query,
     COALESCE(c.aliases, '{{}}') AS aliases,
     COALESCE(c.exclude_terms, '{{}}') AS exclude_terms,
     c.fiscal_year_end, c.market_cap_usd_bn, c.market_cap_local,
@@ -164,7 +164,7 @@ def list_companies(
     """Return companies, optionally filtered by status, country, and ticker presence. Ordered by company_name.
 
     ``tracked`` selects the companies a signal pipeline actually follows,
-    identified by having a local_code. Country alone is not the same
+    identified by having a code. Country alone is not the same
     question and will not do: Japan holds 62 catalogue companies but only
     19 tracked ones, so a consumer filtering on country would try to
     fetch filings for Keyence and Daikin.
@@ -187,9 +187,9 @@ def list_companies(
     elif has_ticker is False:
         where += " AND c.ticker = 'Private'"
     if tracked is True:
-        where += " AND c.local_code IS NOT NULL"
+        where += " AND c.code IS NOT NULL"
     elif tracked is False:
-        where += " AND c.local_code IS NULL"
+        where += " AND c.code IS NULL"
     with get_db() as conn:
         cur = conn.execute(
             f"""

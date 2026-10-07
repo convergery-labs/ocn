@@ -25,6 +25,7 @@ async def get_all_results(
     signal_detection: str | None = Query(default=None),
     source_type: str | None = Query(default=None, description="Filter by source_type, e.g. 'news' or 'sec_filing'"),
     ticker: str | None = Query(default=None, description="Filter by ticker (only populated for source_type='sec_filing' today)"),
+    code: str | None = Query(default=None, description="Filter by metadata.code - the exchange code a market-signal domain files a company under, NOT the same field as ticker. japan_market_signal stores a TSE code ('6857', or Kioxia\'s '285A'); china_market_signal stores a mainland or HK code ('688981' SMIC, '09988' Alibaba). Case-insensitive."),
     period: str | None = Query(default=None, description="Filter by metadata.period_gregorian, e.g. '2026-07' (only populated for taiwan_market_signal mops_revenue rows)"),
     source_category: str | None = Query(default=None, description="Filter by metadata.source_category, e.g. 'mops_revenue', 'mops_material', 'gdelt' (only populated for taiwan_market_signal rows)"),
     grade: str | None = Query(default=None, description="Filter by metadata.grade: 'TOP', 'STRONG', or 'STANDARD' (only populated for geopolitical_signal rows Stage D has graded)"),
@@ -40,7 +41,7 @@ async def get_all_results(
     caller: dict[str, Any] = Depends(require_auth),
 ) -> dict[str, Any]:
     """Return paginated classification results across all jobs, newest first."""
-    return list_all_results(limit=limit, cursor=cursor, signal_detection=signal_detection, source_type=source_type, ticker=ticker, period=period, source_category=source_category, grade=grade, impacted_category=impacted_category, impacted_ticker=impacted_ticker, channel=channel, corroborated=corroborated, published_from=published_from, published_to=published_to, macro_series=macro_series, macro_suspect=macro_suspect, macro_interpreted_only=macro_interpreted_only)
+    return list_all_results(limit=limit, cursor=cursor, signal_detection=signal_detection, source_type=source_type, ticker=ticker, code=code, period=period, source_category=source_category, grade=grade, impacted_category=impacted_category, impacted_ticker=impacted_ticker, channel=channel, corroborated=corroborated, published_from=published_from, published_to=published_to, macro_series=macro_series, macro_suspect=macro_suspect, macro_interpreted_only=macro_interpreted_only)
 
 
 @router.get("/korea-signals/summary")

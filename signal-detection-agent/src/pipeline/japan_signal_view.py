@@ -18,7 +18,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-from pipeline.japan_companies import japan_ticker_universe
+from pipeline.japan_companies import company_for
 
 # ---------------------------------------------------------------- #
 # Card formatting helpers.                                          #
@@ -56,6 +56,10 @@ def _format_pct(value: float | None, signed: bool = False) -> str | None:
     trailing zero decimal: 53.3% stays 53.3%, 27.6% stays 27.6%, 40.0%
     reads 40%. ``signed`` prefixes a + on a positive value, for a field
     where the direction is part of the number.
+
+    Holding percentages do not come through here - they are filed to
+    two decimals and shown at that precision. See
+    ``_format_holding_pct``.
     """
     if value is None:
         return None
@@ -63,6 +67,24 @@ def _format_pct(value: float | None, signed: bool = False) -> str | None:
     if signed and value > 0:
         text = f"+{text}"
     return f"{text}%"
+
+
+def _format_holding_pct(value: float | None) -> str | None:
+    """A holding percentage at the precision the filing states it.
+
+    EDINET reports the ratio to four decimal places (0.1242), so the
+    percentage is exactly two (12.42%) and both are stored. Rounding to
+    one turned a filed figure into a different number - 14.06% shown as
+    14.1% - and could erase a real move outright: Capital Research went
+    from 12.40% to 12.42% of Resonac, which read "Raised stake to 12.4%
+    from 12.4%", a headline claiming a change and showing none.
+
+    A trailing zero decimal is kept rather than trimmed. These are two
+    figures a reader compares digit by digit, and "12.4%" beside
+    "12.42%" invites the question of whether the first is less precise
+    or simply shorter.
+    """
+    return None if value is None else f"{value:.2f}%"
 
 
 def _format_jpy_millions(value: float | None) -> str | None:
@@ -96,6 +118,23 @@ def _format_jpy_millions(value: float | None) -> str | None:
 # points is the width of that ordinary band: inside it the company is
 # on track, outside it the gap is the story.
 _PROGRESS_ON_TRACK_BAND_PTS = 5.0
+
+# How far a holding has to move before the filing describes a decision
+# rather than drift. Both read off the real stored distribution of 13
+# ownership filings rather than chosen in the abstract, and both
+# affect WORDING ONLY - no rule reads them, and a filing below the
+# flat bar is still classified exactly as it was.
+#
+# The stored moves fall into three clear groups: five between 1.07 and
+# 1.22 points, three between 0.10 and 0.78, and two at 0.02. Nothing
+# sits between 0.02 and 0.10, and nothing between 0.78 and 1.07, so
+# both bars land in real gaps rather than cutting through a cluster.
+#
+# 13 filings is a thin sample. These are thresholds for choosing a
+# word, which is why that is tolerable here and would not be for a
+# rule that decides whether something is a signal.
+_OWNERSHIP_FLAT_MOVE_PTS = 0.1
+_OWNERSHIP_LARGE_MOVE_PTS = 1.0
 
 
 def signal_implication(meta: dict[str, Any]) -> str:
@@ -191,7 +230,6 @@ _CLASSIFICATION = {
 
 _INDUSTRY_SUBJECT = "Japan semiconductor equipment industry"
 
-_JAPAN_TICKER_BY_CODE = {t["code"]: t for t in japan_ticker_universe()}
 
 
 def _is_progress_row(meta: dict[str, Any]) -> bool:
@@ -539,7 +577,7 @@ def _headline(signal_type: str, meta: dict[str, Any]) -> str:
             meta.get("translated_filer_name") or meta.get("filer_name")
         )
         code = meta.get("signal_reason_code") or ""
-        pct = _format_pct(meta.get("holding_pct"))
+        pct = _format_holding_pct(meta.get("holding_pct"))
         stake = f"{pct} stake" if pct else "stake"
         previous = meta.get("holding_pct_previous")
         current = meta.get("holding_pct")
@@ -554,7 +592,8 @@ def _headline(signal_type: str, meta: dict[str, Any]) -> str:
             # the card's own checkpoint already said "keeps selling
             # down" - the two halves disagreed.
             what = (f"Passive stake {'raised' if current > previous else 'cut'} to "
-                    f"{_format_pct(current)} from {_format_pct(previous)}")
+                    f"{_format_holding_pct(current)} from "
+                    f"{_format_holding_pct(previous)}")
         elif "crosses_five_pct" in code:
             what = f"New {stake} crossing 5%"
         elif moved:
@@ -565,7 +604,8 @@ def _headline(signal_type: str, meta: dict[str, Any]) -> str:
             # percentage here - "Cut to 12.8% stake from 14.1%" puts
             # the noun in the middle of the two figures.
             what = (f"{'Raised' if current > previous else 'Cut'} stake to "
-                    f"{_format_pct(current)} from {_format_pct(previous)}")
+                    f"{_format_holding_pct(current)} from "
+                    f"{_format_holding_pct(previous)}")
         else:
             what = f"{stake.capitalize()} changed"
         # Verb-first and without the issuer's name: the card prints the
@@ -643,10 +683,25 @@ def _change(signal_type: str, meta: dict[str, Any]) -> str | None:
             return f"up to {shares:,} shares"
         return None
     if signal_type == "ownership":
-        # The holding percentage is already the card's big number, so
-        # repeating it here says nothing. Show what the stake is worth
-        # in shares where the filing gives it, otherwise nothing.
-        return None
+        # A change report is an event about a DELTA, and this is the
+        # field that carries one. Left empty, the card presented the
+        # filing as a snapshot: two Capital Research filings on
+        # Resonac four days apart - a +0.78 point build, then a +0.02
+        # point nothing - were identical on 20 of 26 fields, because
+        # only the stake was shown and the stake barely moved.
+        current = meta.get("holding_pct")
+        previous = meta.get("holding_pct_previous")
+        if current is None:
+            return None
+        if previous is None:
+            # An initial report has no previous ratio to move from -
+            # the holder was under 5% and therefore not filing. The
+            # crossing itself is the event.
+            return f"New position · {_format_holding_pct(current)}"
+        delta = round(current - previous, 2)
+        return (f"{_format_holding_pct(previous)} → "
+                f"{_format_holding_pct(current)} · "
+                f"{'+' if delta > 0 else ''}{delta:.2f} pts")
     if signal_type == "capacity":
         yen = meta.get("capex_investment_jpy")
         if yen is not None:
@@ -755,8 +810,20 @@ def _unusual(meta: dict[str, Any]) -> str | None:
     spreads = meta.get("industry_spreads_away")
     average = meta.get("industry_baseline_avg_yoy_pct")
     if spreads is not None and average is not None:
-        return (f"Ran {abs(spreads):.1f} times its usual distance from the "
-                f"recent average of {_format_pct(average)}.")
+        # The reading leads, then what it is being judged against, then
+        # how far outside the usual range it sits. "Ran 3.1 times its
+        # usual distance from the recent average of 12.3%" stated the
+        # same three facts in an order no reader could unpack: the
+        # month's own figure was missing entirely, "usual distance" is
+        # a standard deviation under a name nobody uses for one, and
+        # 3.1 sat next to 12.3% inviting them to be multiplied.
+        yoy = meta.get("yoy_pct")
+        swing = f"{abs(spreads):.1f}x the usual swing"
+        if yoy is None:
+            return (f"{swing.capitalize()} against a recent average of "
+                    f"{_format_pct(average)}.")
+        return (f"{_format_pct(yoy, signed=True)} year-on-year against a "
+                f"recent average of {_format_pct(average)} - {swing}.")
     days = meta.get("days_since_last_revision")
     gap = meta.get("typical_days_between_revisions")
     if days is not None and gap:
@@ -777,9 +844,31 @@ def _unusual(meta: dict[str, Any]) -> str | None:
     holding = meta.get("holding_pct")
     if holding is not None:
         code = meta.get("signal_reason_code") or ""
-        basis = ("filed under the passive-investor regime" if "passive" in code
-                 else "filed on an active basis")
-        return f"A {_format_pct(holding)} stake, {basis}."
+        basis = ("Filed under the passive-investor regime"
+                 if "passive" in code else "Filed on an active basis")
+        previous = meta.get("holding_pct_previous")
+        if previous is None:
+            return (f"A new {_format_holding_pct(holding)} stake crossing "
+                    f"the 5% disclosure threshold. {basis}.")
+        # The move leads, the position follows. Describing only the
+        # position - "A 12.4% stake, filed on an active basis" - was
+        # true of every filing this holder makes, so it read the same
+        # on a 0.78-point build and a 0.02-point twitch and
+        # distinguished neither.
+        delta = round(holding - previous, 2)
+        size = abs(delta)
+        if size < _OWNERSHIP_FLAT_MOVE_PTS:
+            # Not called unusual, because it is not: a holder's
+            # position drifts by this much without a decision behind
+            # it. Saying so is more use than dressing it up.
+            return (f"A {size:.2f}-point change - the stake is effectively "
+                    f"unchanged at {_format_holding_pct(holding)}. {basis}.")
+        if size >= _OWNERSHIP_LARGE_MOVE_PTS:
+            word = "build" if delta > 0 else "sell-down"
+        else:
+            word = "increase" if delta > 0 else "reduction"
+        return (f"A {size:.2f}-point {word}, taking the holder to "
+                f"{_format_holding_pct(holding)}. {basis}.")
     # Filing in English was once reported here as unusual. It is not:
     # 56% of stored disclosures carry an English version, and for
     # SoftBank, Murata and Advantest it is every one. The line also
@@ -937,7 +1026,7 @@ def _evidence(meta: dict[str, Any]) -> dict[str, Any]:
     add("Billings, 3-month average",
         _format_jpy_millions(meta.get("billings_3mo_avg_millions_jpy")))
     add("Year-on-year", _format_pct(meta.get("yoy_pct"), signed=True))
-    add("Holding", _format_pct(meta.get("holding_pct")))
+    add("Holding", _format_holding_pct(meta.get("holding_pct")))
     add("Buyback share of shares outstanding",
         _format_pct(meta.get("buyback_pct_of_shares_outstanding")))
     add("Investment share of total assets",
@@ -1271,7 +1360,7 @@ def _checkpoint_tests(
         holder = _short_holder_name(
             meta.get("translated_filer_name") or meta.get("filer_name")
         )
-        pct = _format_pct(meta.get("holding_pct"))
+        pct = _format_holding_pct(meta.get("holding_pct"))
         if not holder:
             return (None, None)
         # Both arms used to presume the holder was building a position
@@ -1446,7 +1535,7 @@ def _next_checkpoint(meta: dict[str, Any], signal_type: str,
             "weakens": weakens,
         }
 
-    ticker = _JAPAN_TICKER_BY_CODE.get(meta.get("code") or "")
+    ticker = company_for(meta.get("code"))
     if ticker:
         period = _next_quarter_end(ticker.get("fiscal_year_end"))
         if period:
@@ -1463,7 +1552,7 @@ def _next_checkpoint(meta: dict[str, Any], signal_type: str,
             }
 
     # No read-through fallback. It only ran for a company absent from
-    # _JAPAN_TICKER_BY_CODE, and every tracked company is in it, so the
+    # the tracked universe, and every tracked company is in it, so the
     # branch above always returned first - unreachable since it was
     # written. A row with no checkpoint returns None.
     return None
@@ -1506,9 +1595,20 @@ def to_jp_signal(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": row.get("source_id") or row.get("url"),
         "type": signal_type,
-        "code": code,
+        # `code` is the TSE code, the same thing it means in the stored
+        # row's metadata, on /japan-signals/universe, and in the ?code=
+        # filter. Which of the eight rules fired is `signalType`: J1 is
+        # not a code of anything, and naming it `code` here while the
+        # TSE code went out as `ticker` left one word meaning two
+        # things in one object, inverted between layers.
+        #
+        # `ticker` would also be wrong rather than merely inconsistent:
+        # on this API it already means metadata.ticker, which only
+        # sec_filing rows carry - which is why ?ticker=6857 silently
+        # matches nothing here. And 6857 is not the ticker; 6857.T is.
+        "signalType": code,
         "company": meta.get("company") or (_INDUSTRY_SUBJECT if is_industry else None),
-        "ticker": meta.get("code"),
+        "code": meta.get("code"),
         "isIndustry": is_industry,
         "classification": _CLASSIFICATION.get(row.get("signal_detection"), "Noise"),
         "implication": signal_implication(meta),

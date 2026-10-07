@@ -87,7 +87,7 @@ AV (Alpha Vantage) data is never fetched on the request path. A background polle
 |------|----------|----------------|
 | `quotes` | Hourly, 14:00-20:00 UTC, Mon-Fri (CloudWatch) | `GLOBAL_QUOTE` per ticker, SPY/QQQ/SOXX indices, `MARKET_STATUS` |
 | `daily` | 00:30 UTC daily (CloudWatch) | Macro indicators once per run, not per ticker: `FEDERAL_FUNDS_RATE`, `CPI`, `TREASURY_YIELD`, `UNEMPLOYMENT`, `NONFARM_PAYROLL`, `REAL_GDP`, `RETAIL_SALES`, `DURABLES`, `TOP_GAINERS_LOSERS`; then per ticker: `OVERVIEW` (+ `ROC` and `MOM` momentum, merged into the same item), `EARNINGS`, `TIME_SERIES_DAILY_ADJUSTED` |
-| `sec_filings` | 12:00 UTC daily (CloudWatch) | SEC EDGAR 8-K/10-Q/10-K metadata + filing link per ticker (see SEC Filings below) |
+| `sec_filings` | 12:00 UTC daily (CloudWatch) | SEC EDGAR 8-K/10-Q/10-K plus foreign-issuer 6-K/20-F/40-F metadata + filing link per ticker (see SEC Filings below) |
 
 Run manually: `python __main__.py poll-market --mode quotes`
 
@@ -122,7 +122,7 @@ DynamoDB access for the poller is granted via an IAM role policy (`aws_iam_role_
 
 ### SEC Filings
 
-Fetched from SEC EDGAR (`data.sec.gov`), not Alpha Vantage. Ticker→CIK mapping via `https://www.sec.gov/files/company_tickers.json` (cached process-lifetime), filings list via `https://data.sec.gov/submissions/CIK{cik}.json`. Only 8-K, 10-Q, and 10-K form types are kept. Deduplicated per ticker by `accession_number` — each filing is a permanent, unique key from EDGAR, so re-running the poller never creates duplicates and skips filings already stored. Stores metadata + a link to the primary document only, not the filing body — `signal-detection-agent`'s daily filing-classification job reads this metadata via `GET /market/sec-filings/{ticker}` and fetches the body text itself (see `src/sec_edgar.py`).
+Fetched from SEC EDGAR (`data.sec.gov`), not Alpha Vantage. Ticker→CIK mapping via `https://www.sec.gov/files/company_tickers.json` (cached process-lifetime), filings list via `https://data.sec.gov/submissions/CIK{cik}.json`. Six form types are kept: 8-K, 10-Q, 10-K and — for foreign private issuers, which file none of those three — 6-K, 20-F and 40-F. The foreign forms matter for the non-US names in the universe: Alibaba files 6-K and nothing else, so a domestic-only filter would store zero filings for it while looking like it worked. Deduplicated per ticker by `accession_number` — each filing is a permanent, unique key from EDGAR, so re-running the poller never creates duplicates and skips filings already stored. Stores metadata + a link to the primary document only, not the filing body — `signal-detection-agent`'s daily filing-classification job reads this metadata via `GET /market/sec-filings/{ticker}` and fetches the body text itself (see `src/sec_edgar.py`).
 
 ### Ticker universe
 
@@ -374,16 +374,438 @@ curl -X POST http://localhost:8000/run \
   -d '{"domain": "japan_market_signal", "days_back": 1}'
 ```
 
-**No schedule wired yet** - unlike Taiwan/Korea, this domain has no CloudWatch rule yet. All 9
-source_types are built and confirmed working together; what remains before scheduling this
-like Taiwan/Korea: run the 5-year backfill manually first (`--days-back 1825`, see above -
-only `irbank_financials` actually needs a multi-year window; every other source_type is
-daily/monthly-scoped already), then add a daily CloudWatch rule with `--days-back 1`, modeled
-on `news_retrieval_taiwan_market_signal`. `seaj_billings` is seeded with `frequency_name:
-"monthly"` (`min_days_back` 30) - a daily `--days-back 1` trigger will correctly skip it most
-days and only include it once `days_back` reaches 30, same gating every other domain's
-sources already use (see `FREQUENCIES` in `seed.py`) - a monthly CloudWatch rule (or a
-`--days-back 31` daily one) is needed for it to actually run periodically once scheduled.
+**Schedules:** three CloudWatch rules in `infra/modules/ecs_cluster/services.tf`, anchored to
+real TSE hours (09:00-15:00 JST, JST = UTC+9, no DST):
+
+| Rule | Schedule (UTC) | `--days-back` |
+|------|----------------|---------------|
+| `..._japan_market_signal_pre_open` | `cron(0 23 * * ? *)` | 1 |
+| `..._japan_market_signal_post_close` | `cron(30 6 * * ? *)` | 1 |
+| `..._japan_market_signal_monthly` | `cron(0 4 25 * ? *)` | 31 |
+
+The monthly rule exists because `seaj_billings` is seeded `frequency_name: "monthly"`
+(`min_days_back` 30), so a daily `--days-back 1` trigger correctly skips it - the same gating
+every other domain's sources use (see `FREQUENCIES` in `seed.py`). It is the ONLY schedule
+that ever includes that source.
+
+Run the 5-year backfill manually once before relying on habit-aware classification
+downstream (`--days-back 1825`, see above): only `irbank_financials` needs a multi-year
+window, every other source_type is daily/monthly-scoped already.
+
+## China Market Signal (`china_market_signal` domain)
+
+Fetch-and-store only, same boundary as Taiwan/Japan/Korea - no ranking, translation, or
+LLM classification happens in this service. This is the only market domain where a positive
+local signal is usually a **negative** read for the US names attached to it; that direction
+is carried downstream in `signal-detection-agent`, not here.
+
+Company universe: `CHINA_TICKER_UNIVERSE` in `src/seed.py` - 20 companies, **hardcoded**,
+deliberately NOT read live from research-universe the way Japan is. research-universe files
+these companies under two different `country` values (`China` for Hygon, Loongson and Inspur;
+`China/Hong Kong` for Naura, SMIC, Cambricon and the rest) with no rule distinguishing them,
+and Alibaba and Tencent are filed as `United States` with ADR tickers. Since
+`get_tracked_company_universe()` matches `country` exactly, a live read today would return an
+arbitrary subset. `company` is the exact `company_name` already stored in research-universe
+for the 15 that exist there (hence `Amec`, `Lenovo`, `Inspur Electronic Information`), so a
+later migration needs no name reconciliation; 5 (ACM Research Shanghai, Piotech, Hwatsing,
+China Northern Rare Earth, JL MAG) are not in research-universe at all.
+
+`native_name` is the exchange's **own registered short name** (`zwjc` in cninfo's
+`szse_stock.json`), not the full legal name - confirmed live for all 16 mainland codes. This
+is the same finding Japan made the hard way: Chinese press writes 中芯国际, never
+中芯国际集成电路制造. `code` is `TEXT` throughout (002371, 000977, 000725, 00700 all lose
+leading zeros as integers).
+
+**Sourcing decisions (confirmed live 2026-10-05 before building):**
+- **GACC customs** (`customs.gov.cn`, `stats.customs.gov.cn`) - answers HTTP 412 with a
+  `__jsluid_h` cookie challenge and obfuscated JS. Reproducible across 5 consecutive requests
+  on a persistent `httpx.Client` that carries the minted cookie forward, with full browser
+  headers. (One isolated 70KB response was observed and chased down: a transient CDN cache
+  hit, not a working bypass.) It needs a JS-executing client, which this service has no
+  dependency for.
+- **NBS** (`stats.gov.cn`) - blocked at the **network layer from local dev machines** ("The URL
+  has been blocked as per the instructions of the Competent Government Authority" / HTTP 403),
+  but **works normally from ECS** - confirmed live 2026-10-05 against the staging task, 127KB
+  of real HTML. It is therefore built and wired (`nbs_ic_output`), and a developer running this
+  domain locally will see that one source fail while every other one works. That is expected,
+  not a bug. Its structured easyquery API (`data.stats.gov.cn/easyquery.htm`) is WAF-blocked
+  even from ECS (`reason:UrlACL`), so the figure is read from the monthly press release.
+
+### C6 (trade data): covered by two sources, import side and production side
+
+C6 is served by a pair that answer different halves of the same question:
+
+- **`comtrade_china_trade`** - what the world ships INTO China, in dollars (the import side)
+- **`nbs_ic_output`** - what China itself makes, in units (the production side)
+
+One without the other misreads the signal: a fall in imports looks like export controls biting
+when it may simply be domestic substitution. The August 2026 figures show exactly why both are
+needed - US equipment exports to China ran $82m while Chinese IC production grew **+20.6% YoY**.
+
+Seven routes were probed live on 2026-10-05 before settling on these:
+
+| Route | Result |
+|-------|--------|
+| GACC direct | HTTP 412 JS cookie challenge - reproducible from **ECS too**, so it is not a local-network artifact |
+| **NBS** | **Works from ECS** (403 locally). Built as `nbs_ic_output` |
+| UN Comtrade, **China-reported** | Monthly series stops at `202412`; `202501`-`202504` all return count=0. Annual is current but useless for a quarterly signal |
+| **UN Comtrade, partner-reported** | **This is what we use.** Free, keyless, current to ~2-3 months |
+| Eastmoney (`datacenter-web.eastmoney.com`) | Works and is current (Aug 2026), but country-level totals only - every HS-breakdown report name returns `报表配置不存在` |
+| OEC (`oec.world`) | Annual only, ends 2024 |
+| Trade press (DuckDuckGo news) | Returns stories but no reliable IC figure. Headlines carry *other* numbers - total trade surplus ($806bn), Nvidia quota percentages (13%) - that a naive extractor would silently record as IC trade data. Worse than no data |
+| TradingEconomics / WITS / Macromicro / SEMI / SIA | 403, 410, 400, or captcha |
+
+**Why the partner side is arguably the better measurement, not a consolation prize.** Export
+controls bite on the *exporter's* side: Washington restricts what American and allied firms
+may sell. So the US/Japan/Netherlands export series **is** the control measure, recorded by
+the governments doing the restricting rather than by the country being restricted. The live
+figures show it plainly - US semiconductor-equipment exports to China run $82-97m/month while
+Japan's run $700m-1.28bn.
+
+Reporters are the three equipment-export-control jurisdictions. **South Korea was tried and
+dropped**: its Comtrade series lags ~9 months (newest `202512` vs `202607` for the other
+three). Korea's own customs service publishes a current figure and is already fetched by this
+service under `korea_market_signal` (`kr_customs_export`) - that is where a Korea read should
+come from.
+
+`net_weight_kg` travels with `value_usd` because a value move alone cannot separate a price
+change from a volume change, which is exactly the distinction C6 needs to read export controls.
+
+Comtrade's public preview tier answers 429 "Rate limit is exceeded" on back-to-back calls;
+`_COMTRADE_MIN_INTERVAL` paces at 4s. With 3 reporters x 2 commodities x N months that pacing
+dominates the fetch, which is why this source is seeded `monthly` (`min_days_back` 30) - a
+daily `--days-back 1` run correctly skips it, the same gating `seaj_billings` uses.
+
+**`nbs_ic_output` specifics.** NBS publishes the previous month's figure around the 15th, as a
+table row inside the monthly industrial-output press release (集成电路（亿块） followed by the
+month's output and its YoY percent). Two things the parser had to get right, both caught in
+testing:
+
+- The figures are **not adjacent to the label** - each sits inside a `<span>` within its own
+  `<td>`, separated by ~250 characters of inline style attributes. Matching positionally
+  returns nothing.
+- `period` is read from the release **title**, not the URL date. NBS publishes August's figure
+  on 15 September, so keying off the publication date labelled every month as the following
+  one. `period` is the month measured; `published_date` records when it was released.
+
+Confirmed live from ECS: `period=2026-08`, `value=529.0` (亿块 = 100m units), `yoy_pct=20.6`,
+`published_date=2026-09-15`. The value is kept in the source's own unit with the unit named
+rather than silently converted - a converted figure cannot be checked against the release it
+came from.
+
+Still open: GACC remains uncovered. Its 412 challenge reproduces from ECS as well as locally,
+so it genuinely needs a JS-executing client (Playwright) rather than a different network path.
+That is the only remaining C6 gap, and with the import and production sides both covered it is
+now a nice-to-have rather than a blocker.
+- **SZSE** (`szse.cn`) - reachable only with TLS verification disabled. Dropped rather than
+  weakening TLS for one host: cninfo is the officially designated disclosure site and carries
+  the same filings.
+- **Yicai, STCN, semiinsights.com** - captcha challenge or connection refused. Excluded.
+- **GDELT** - not used for this domain. Taiwan's GDELT path is scoped `sourcelang:chinese
+  sourcecountry:TW` (traditional characters, Taiwanese press), not simplified mainland outlets.
+
+| Source | `source_type` | `source_category` (metadata) | What it fetches |
+|--------|---------------|-------------------------------|------------------|
+| MOFCOM | `mofcom_policy` | `cn_policy` | Ministry of Commerce policy releases and 公告 - export licensing, trade countermeasures, anti-dumping rulings. The highest-impact China source |
+| MIIT | `miit_policy` | `cn_policy` | Industrial policy, standards, encouraged/restricted technology catalogues |
+| SAMR | `samr_action` | `cn_policy` | Antitrust investigations and penalty decisions, including those naming foreign firms |
+| CAC | `cac_review` | `cn_policy` | Cybersecurity reviews of foreign technology products - the 2023 memory-procurement mechanism |
+| Xinhua English | `cn_state_press` | `cn_policy` | State news agency; often publishes policy before the issuing ministry's own site updates |
+| HKEX | `hkex_filing` | `cn_disclosure` | Filings for the 6 HK-listed names (SMIC, Hua Hong, Lenovo, Alibaba, Tencent, Baidu) - English by listing requirement, no translation needed |
+| CNINFO | `cninfo_filing` | `cn_disclosure` | Announcements + filing PDF links for the 16 mainland-listed names, via the officially designated disclosure site |
+| UN Comtrade | `comtrade_china_trade` | `cn_trade` | **C6, import side.** Monthly IC (HS 8542) and semiconductor-equipment (HS 8486) exports *to* China as reported by the US, Japan and the Netherlands - see the C6 section below for why the partner side rather than the Chinese side |
+| NBS | `nbs_ic_output` | `cn_trade` | **C6, production side.** China's own monthly IC production volume (集成电路, 亿块) and YoY change, from the National Bureau of Statistics' industrial-output release. **ECS-only** - see below |
+| China press | `press_cn` | `cn_press` | ITHome (RSS), Jiemian, EEFocus, ijiwei (集微网) - filtered client-side to the universe by `native_name`/alias, matched on **headline only** |
+| English check | `press_cn_english_check` | `cn_english_coverage_check` | Per-company English news search, measuring coverage lag - same shape as Japan's and Korea's |
+
+All five policy `source_type`s share one fetcher (`_fetch_china_policy`): they differ by which
+body issues the measure, not by how the page is parsed.
+
+**Every article carries `metadata.source_outlet_type`** ∈ `{official, state_press,
+commercial_press}`, set at fetch time because it is a property of the source the classifier
+cannot recover from article text. A state outlet is authoritative for *what policy is* but is
+**not** independent confirmation of a commercial fact - conflating the two would let policy
+signalling count as corroboration of a company claim.
+
+### Article bodies: which sources carry one, and why the others don't
+
+Every source whose body is actually obtainable now stores it. The split is not arbitrary:
+
+| Source | `body` | `summary` | How |
+|--------|--------|-----------|-----|
+| The five policy types | ✅ | — | Announcement page text, tag-stripped (`_china_strip_html`) |
+| `cninfo_filing` | ✅ | — | Filing PDF via `pdfplumber`, first 5 pages |
+| `hkex_filing` | ✅ | — | Filing PDF, same path - English, no translation needed |
+| `press_cn` via RSS (ITHome) | — | ✅ | The feed's own summary, ~456 real characters - no body fetch needed |
+| `press_cn` via HTML (Jiemian, EEFocus) | ✅ | — | `trafilatura`, with a per-outlet container fallback |
+| `press_cn` via HTML (ijiwei) | — | — | Headline only - its article pages are gated |
+| `comtrade_china_trade` | — | — | Numeric API - the figure IS the data; there is no document |
+| `nbs_ic_output` | — | — | A single table row, same reason |
+| `press_cn_english_check` | — | — | Headline-only by design, same as Japan's and Korea's |
+
+**`summary` is a real lead or it is NULL - never a slice of `body`.** An earlier version stored
+`body[:500]` as the summary on all four China sources, which duplicated a prefix of a field the
+consumer already has and cut mid-sentence. The rest of this service treats the two as different
+fields answering different questions (`ai_news`: 2,207 summaries averaging 211 chars against
+1,830 bodies averaging 6,455), and China now follows that. A government announcement and a
+filing have no editorial lead - they open straight into the measure, or into HKEX's standard
+liability disclaimer, which is identical across every filing and actively worse than NULL. The
+ITHome RSS path is the one China source with a genuine lead, and it stores it.
+
+Bodies are capped at 20,000 characters and PDFs at 5 pages: page 1 carries the issuer and the
+substance, later pages are signatures, appendices and audit boilerplate. Real samples ran
+2.2-8.2k characters, so the cap is not binding in practice - it exists so one 300-page annual
+report cannot bloat the table.
+
+An unreadable body returns `None`, never `""`. A null reads as "not extracted"; an empty string
+would read as "this filing says nothing", and the two must not be conflated - the same rule the
+Japan sources follow for image-only PDFs.
+
+**Three extraction traps, all found live:**
+
+- **`trafilatura` returns the site NAVIGATION on some Jiemian pages.** Where it cannot find an
+  article body it falls back to the longest text block, which on a newsflash page (whose body is
+  a single short `<p>`) is the nav menu - a real article came back as
+  "首页 科技 金融 证券 地产 汽车 健康 ...". Detected (many short labels, no sentence punctuation)
+  and replaced by a per-outlet container pattern, `_CHINA_ARTICLE_CONTAINERS`. The same article
+  now yields its actual 31 characters: a Tencent buyback.
+- **ijiwei's article pages are gated.** Its listing is free and carries real dated headlines, but
+  `/n/<id>` returns a 1.9KB stub reading 该文章未发布 (error 70002) to an anonymous reader. Those
+  URLs are never fetched (`_CHINA_GATED_ARTICLE_HOSTS`), and a general marker check
+  (`_CHINA_GATE_MARKERS`) catches the same shape from any other outlet. The headline is still
+  collected - 盛美上海在手订单突破170亿元 同比大增88.2% is a complete C2 signal on its own.
+- **Press bodies are fetched AFTER the company filter**, not before, so a listing of 50 headlines
+  costs one body fetch rather than fifty - the same ordering Japan's `monoist_capex` uses.
+
+All of this is scoped to this domain: `_fetch_china_filing_body` and
+`_fetch_china_article_body` are called only from the three China fetchers, and no other domain's
+extraction behaviour changes.
+
+### Press coverage: what is reachable, and what is not
+
+The four outlets yield ~170-250 items per run between them, of which typically 3-4 mention a
+universe company. That low hit rate is correct filtering, not a bug (see the headline-matching
+section below) - but the reachable surface is genuinely thin, so it was measured rather than
+assumed:
+
+- **ITHome is fetched via RSS, not its HTML listing.** Its feed carries 60 dated entries with
+  real editorial summaries against 50 undated headlines from the listing page - strictly more
+  data for one request, and the summary removes a per-article body fetch. The HTML listing was
+  dropped rather than kept alongside it.
+- **No other Chinese outlet publishes a usable feed.** Jiemian, EEFocus, Yicai, STCN, CLS, 36kr,
+  Sina, Huxiu, laoyaoba, eet-china and semiinsights all return 404, an empty feed, or are
+  unreachable; tmtpost's feed parses but carries zero universe coverage.
+- **No outlet offers usable pagination.** `ithome.com/list/2.htm`, `jiemian.com/lists/116_2.html`
+  and `eefocus.com/news/` all 404. Only page 1 of each listing exists as a server-rendered page.
+- **No outlet offers a working per-company search.** ITHome's search host does not resolve,
+  Jiemian's returns 404, EEFocus's returns an empty 3.7KB shell.
+- **ijiwei was added for coverage** - its `/kuaixun` newsflash carries 92 dated semiconductor
+  items on its own, the densest China-specific listing found. Note its homepage times out and its
+  `/news` and `/n` paths return a 1.8KB shell; only `/kuaixun` is server-rendered.
+- **Checked and rejected:** laoyaoba, eet-china, semiinsights (all connection timeouts), Yicai and
+  STCN (captcha), 36kr and jiqizhixin (no universe coverage), sina tech (TLS failure).
+
+**A per-company Chinese search does not exist for free.** The obvious next step - run
+`press_cn_english_check`'s per-company loop against Chinese query terms - was tested and does not
+work: `ddgs.news()` in Chinese returns nothing for 5 of 6 universe names across all three
+backends (DuckDuckGo, Bing, Yahoo), and the one that answers returns English articles.
+`ddgs.text()` returns only static reference pages - Wikipedia, Baidu Baike, Eastmoney quote
+pages. Going further costs money (a paid Chinese search API) or a headless browser for the
+captcha-gated outlets.
+
+### Why matching is on the HEADLINE only, and why that is not a limitation
+
+`_match_china_company` matches the headline, never the body. Both directions of that choice were
+measured rather than assumed:
+
+- **Widening to the body recovers nothing.** Of 167 headlines in one run, 4 matched a universe
+  company and 15 more carried sector vocabulary (半导体, 国产替代, 刻蚀, 存储…) without naming
+  one. Bodies were fetched for 14 of those 15: **zero** named a universe company. They are
+  genuinely about other firms - Qualcomm, Huawei, Longsys, STMicroelectronics, Rockchip, UNISOC.
+  The filter was right and a body-matching pass would have cost ~15 extra fetches per run to
+  recover nothing.
+- **Widening to the summary manufactures false positives.** Matching ITHome's RSS on
+  title+summary tripled the hit count from 1 to 3 - and 2 of the 3 were wrong: an Nvidia laptop
+  story matched Lenovo on a passing 联想, and an Honor OS story matched Tencent the same way.
+  Only the title match was actually about its company. A company "mentioned in passing" is
+  exactly what the China Signals spec's own press classifier (§9.2) calls WEAK, so widening here
+  would manufacture the noise the classifier then has to reject.
+
+So the ~3-4 matches per run is the filter working, not the filter leaking. The company-specific
+record is covered independently and cannot miss by name: `cninfo_filing` queries per company
+code and `hkex_filing` per issuer ID, returning an order of magnitude more rows than press.
+
+### Dedup, and why the two trade sources key on the VALUE as well as the period
+
+Dedup is **global on `url`** (`uq_articles_url`, a partial unique index over the whole
+`articles` table) combined with `ON CONFLICT DO NOTHING` - not per source_type, not per domain,
+not per run. So every China source_type needs a URL that is unique across the entire table:
+`cninfo-filing://{code}/{announcementId}`, `hkex-filing://{hk_code}/{news_id}`,
+`comtrade-china://{reporter}/{commodity}/{period}/{value}`, `nbs-ic-output://{period}/{value}`;
+policy and press rows use the real article URL. Confirmed live: 389 China rows, **0 duplicate
+URLs**, and a repeat run of the same window inserted 0 new rows.
+
+**The two trade sources originally keyed on the period alone, and that was a real bug.** Trade
+figures are revised: Comtrade serves a recent month as its own ESTIMATE and replaces it with the
+reporter's filed return weeks later. Confirmed live - the 2026-07 US equipment figure comes back
+`isReported: false` with `legacyEstimationFlag: 6`, i.e. Comtrade saying outright that this
+number will change. With a period-only key, the revision produced the same URL as the estimate,
+hit the global index and was **silently discarded** (verified by re-inserting a changed figure -
+it did not land). The estimate would have been stored forever as though it were final, with
+nothing marking it provisional.
+
+Including the value in the key makes a revised figure a NEW row, so the series carries both and
+a consumer can see the correction rather than having history quietly rewritten. A re-run that
+reads the SAME figure still dedups, which is the behaviour that mattered originally - verified:
+fetched 6, inserted 0.
+
+Both trade sources also carry `is_reported` and `estimation_flag` in metadata, and an estimated
+figure says so in its title ("... $0.082bn (estimate)"). A consumer comparing a month against its
+own trailing pattern must not treat an estimate as a confirmed move.
+
+Checked and found NOT to be a problem: whether two policy fetchers could reach the same
+announcement and dedup against each other, making `metadata.issuing_body` wrong. Each ministry
+publishes on its own host (mofcom.gov.cn, miit.gov.cn, samr.gov.cn, cac.gov.cn,
+english.news.cn), so no URL is reachable from two fetchers - 0 cross-source_type URL collisions
+across 389 rows.
+
+### Findings that cost real debugging time
+
+- **Government section pages are client-side shells.** MIIT's `/zwgk/zcwj/wjfb/index.html` and
+  SAMR's `/xw/mtjj/` return ~2-3KB with **zero** anchors; CAC's section indexes 404. In all
+  three cases the **home page** is the only server-rendered listing, and is what the seed
+  points at. MOFCOM is the exception - its section pages work.
+- **MIIT writes `art_<hash>.htm`, not `.html`.** One character, and the source returned zero
+  rows until the link pattern was loosened to `\.html?`.
+- **Xinhua uses single-quoted `href='...'`** where the government CMSs use double quotes. A
+  double-only regex matched nothing but its two footer links. The pattern now backreferences
+  the quote character.
+- **`english.news.cn/business/index.htm` is a dead page that still returns HTTP 200** - its
+  newest article is from 2021. A fetcher pointed at it would run clean forever and produce
+  nothing current. The home page is used instead.
+- **HKEX's `stockId` is an internal issuer id, NOT the stock code.** SMIC's code is 00981 but
+  its id is 7249; Lenovo's 00992 is 2325; Alibaba's 09988 is 1000015694. Passing the code
+  returns an **empty 200, not an error** - five of six companies silently returned nothing, and
+  Tencent only worked by coincidence (00700 → 700 is a valid unrelated id). Ids are resolved
+  per run from HKEX's own `search/prefix.do` autocomplete - see `src/china_code.py` below.
+- **cninfo's `stock` param must be `"CODE,ORGID"`.** A bare code returns zero rows with
+  `totalAnnouncement=0` - again no error, so it looks exactly like a company that filed
+  nothing. `column` must also be `szse` for 000/002/300 codes and `sse` for 600/603/688; the
+  wrong one likewise returns zero rows silently (derived from the code prefix, not stored).
+
+### `src/china_code.py` - the two exchange ids are resolved, not stored
+
+`org_id` and `hkex_stock_id` were hardcoded in `CHINA_TICKER_UNIVERSE` until 2026-10-06.
+They are now looked up at run time, the same pattern Japan (`edinet_code.py`), Korea
+(`dart_corp_code.py`) and the US (SEC `company_tickers.json`) already use:
+
+| Source | Endpoint | Shape |
+|--------|----------|-------|
+| cninfo `orgId` | `new/data/szse_stock.json` | one bulk fetch, 6,259 rows, both exchanges despite the name |
+| HKEX `stockId` | `search/prefix.do` | one request per code (no bulk list exists) |
+
+Both cached for the process lifetime, and both fail-open: a failure caches an empty map and
+the fetcher degrades to the seeded config rather than raising, the same trade-off
+`edinet_code.py` documents.
+
+**Why this matters as the universe grows:** adding a company now needs only its `code` (and
+`hk_code` if HK-listed). Verified live against codes that were never hardcoded - Xiaomi
+01810 → 190371, JD 09618 → 1000042149 - and against all 22 previously hardcoded values,
+which resolved identically (16/16 orgIds, 6/6 stockIds). A hand-copied id is one
+transcription error away from a source that silently returns nothing.
+
+Two traps the resolver encodes, both found live:
+- **`prefix.do` requires a `callback` parameter.** Without it the endpoint answers HTTP 200
+  with an empty body, not JSON.
+- **It is a PREFIX search.** Querying `00981` returns 5 entries (09810, 09812...). The
+  resolver matches on exact code, never first-hit - taking the first works today but is the
+  API's ordering choice, not a guarantee, and this domain has already been bitten once by an
+  identifier that looked right.
+
+`exchange` was removed from `CHINA_TICKER_UNIVERSE` at the same time: nothing read it.
+- **Beijing midnight converts to the previous day in UTC.** These sources give a date with no
+  time; stamping it at 00:00 CST and converting put a filing dated 2026-09-18 at
+  2026-09-17T16:00Z, outside a `days_back` window that should have included it. `_china_day()`
+  stamps midday instead, which survives the conversion in either direction.
+- **Short English names return the wrong company.** "Amec" returned a Spanish article about the
+  UK engineering firm; "Piotech" returned the German makers PVA TePla and SUSS MicroTec. Nine
+  companies carry a `search_query` override in `_CHINA_ENGLISH_CHECK_QUERY_OVERRIDES` - same
+  mechanism Japan uses for Disco and Towa.
+- **SAMR puts no date in its listing at all.** All 59 of its rows came back with a null
+  `published` on the first full run. An undated row can never be excluded by `days_back`, so it
+  would be re-fetched on every run forever. Its article bodies carry `发布时间：2026-07-27`,
+  now matched by `_CN_PUBLISH_TIME_RE`; SAMR went from 0/59 dated to 48/51. The document's own
+  【发文日期】 still wins where present, since a stated document date outranks a CMS timestamp.
+- **ITHome stamps rows with `data-ot` ISO timestamps; Jiemian and EEFocus carry none.** Those
+  two are left null rather than guessed - a wrong date is worse than an absent one, and
+  `expire-articles` never deletes a null-dated row, which is the safe direction.
+
+**Live run (2026-10-05, `days_back=35`):** 262 articles - `cninfo_filing` 119,
+`hkex_filing` 74, `press_cn_english_check` 36, `miit_policy` 18, `comtrade_china_trade` 6,
+`cn_state_press` 4, `mofcom_policy` 3, `cac_review` 2. All 9 source_types producing, all three
+`source_outlet_type` values present, zero rows missing required keys, zero duplicate URLs.
+Persistence verified separately: 284 rows written to `articles`, and a second run of the same
+window inserted 0 new rows - confirming the global `uq_articles_url` dedup covers the synthetic
+`cninfo-filing://`, `hkex-filing://` and `comtrade-china://` schemes. After the date fixes
+above, 100% of fetched rows carry a `published` date (was 211/299).
+
+**Trigger** the same way as any other domain - no domain-specific route or CLI command:
+```bash
+python __main__.py trigger --domain china_market_signal --days-back 14
+```
+
+### Schedules
+
+Three CloudWatch rules in `infra/modules/ecs_cluster/services.tf`. Each runs the whole domain -
+`trigger` is domain-scoped with no per-source_type flag - so the rules differ only in cadence
+and `--days-back`. The overlap is harmless (global URL dedup) and costs a few extra listing
+walks a day.
+
+| Rule | Schedule (UTC) | `--days-back` | Exists for |
+|------|----------------|---------------|------------|
+| `..._china_market_signal_policy` | `cron(0 0-12/4 ? * MON-FRI *)` | 2 | Policy + press. 08:00-20:00 Beijing, every 4h |
+| `..._china_market_signal_filings` | `cron(0 1,8 ? * MON-FRI *)` | 3 | Pre-open (01:00) and post-close (08:00) against the 01:30-07:00 UTC mainland session |
+| `..._china_market_signal_monthly` | `cron(0 5 20 * ? *)` | 35 | The **only** rule that satisfies the `monthly` gate, so the only one that ever runs `comtrade_china_trade` and `nbs_ic_output` |
+
+Two more rules in the same file belong to **signal-detection-agent**, not this service, and
+classify what these three fetch - without them the domain would fetch on all three schedules
+and classify on none, leaving articles to accumulate unjudged:
+
+| Rule | Schedule (UTC) | Covers |
+|------|----------------|--------|
+| `..._china_signals_filings` | `cron(0 10 ? * MON-FRI *)` | 2h after the 08:00 post-close filings fetch; also picks up that morning's policy run |
+| `..._china_signals_evening` | `cron(0 14 ? * MON-FRI *)` | 22:00 Beijing, after the 12:00 fetch that ends the 4-hourly policy series; also the pass that picks up the monthly trade rows |
+
+Both run `classify-china-signals`, which defaults to today (UTC) and skips already-classified
+`source_id`s, so the two passes are additive and idempotent rather than duplicative.
+
+Why these `--days-back` values are not all 1:
+
+- **2 for policy** - the government listings carry a date but no publication *time*, so a run
+  early in the UTC day looking back exactly one day can miss an announcement published late on
+  the Beijing day that straddles the UTC boundary.
+- **3 for filings** - covers a weekend of filings on the Monday run without a separate rule.
+  cninfo and HKEX are both date-RANGE queries, so a wider window costs one request per company,
+  not one per day. (This is the opposite of Japan, whose EDINET fetcher loops per day and is
+  why that domain deliberately keeps its daily window at 1.)
+- **35 for monthly** - `_fetch_comtrade_china_trade` derives how many months it walks back from
+  `days_back` (`max(4, days_back//30 + 3)`), and Comtrade's own 2-3 month publication lag means
+  a narrow window finds nothing at all.
+
+The 20th of the month is chosen for the monthly rule because NBS publishes the previous month's
+industrial-output release around the 15th (confirmed: the August 2026 figure landed 15
+September). Comtrade has no fixed release day and is indifferent to the date.
+
+Unlike Taiwan's TWSE/TPEx feeds, **no China source is an always-latest snapshot** - cninfo is
+date-scoped, HKEX takes a from/to range, Comtrade is keyed by period, and the government
+listings carry weeks of history on page 1. A missed window is recoverable on the next run
+rather than a permanent gap; these schedules exist for freshness, not for capture.
+
+**`nbs_ic_output` only produces data on these scheduled runs**, never on a local one -
+stats.gov.cn is network-blocked from dev machines but reachable from ECS. See the C6 section.
+
+No backfill is needed before enabling these, unlike Japan: Comtrade walks back months on its
+own and NBS publishes monthly.
 
 ### GDELT source scope: `geopolitical_news`
 

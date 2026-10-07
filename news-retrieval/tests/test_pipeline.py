@@ -856,3 +856,51 @@ class TestEdinetHoldingRatioPairs:
         monkeypatch.setattr(p.httpx, "get", _boom)
         monkeypatch.setattr(p, "_edinet_rate_sleep", lambda: None)
         assert p._fetch_edinet_holding_ratio("S1", "key") == (None, None)
+
+
+def test_english_check_published_is_a_datetime_not_a_raw_string() -> None:
+    """ddgs does not always return an ISO date.
+
+    Some results carry display text instead - "Opinion7 days ago" was
+    seen live. That value reached Postgres as a `published` timestamp
+    and raised InvalidDatetimeFormat, aborting the whole insert batch
+    for the run. The fetcher must store the PARSED datetime (or None),
+    never the raw string.
+
+    Covers Japan, Korea and China at once: all three English-coverage
+    checks call this one function.
+    """
+    results = [
+        {"url": "https://example.com/a", "title": "Real date",
+         "date": "2026-10-01T12:00:00+00:00"},
+        {"url": "https://example.com/b", "title": "Display text",
+         "date": "Opinion7 days ago"},
+        {"url": "https://example.com/c", "title": "No date", "date": None},
+    ]
+
+    class _FakeDDGS:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def news(self, *a, **kw):
+            return results
+
+    fake_module = types.ModuleType("ddgs")
+    fake_module.DDGS = lambda *a, **kw: _FakeDDGS()
+
+    with patch.dict("sys.modules", {"ddgs": fake_module}):
+        articles = pipeline_module._fetch_press_jp_english_check(
+            [{"code": "6857", "company": "Advantest"}], days_back=30,
+        )
+
+    assert articles, "expected the fetcher to return rows"
+    for article in articles:
+        published = article.get("published")
+        assert published is None or isinstance(published, datetime), (
+            f"published must be a datetime or None, got {published!r}"
+        )
+        # _pub_date is the field _fetch_articles renames; it must agree.
+        assert article.get("_pub_date") == published

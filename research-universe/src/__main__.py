@@ -279,9 +279,9 @@ def load_market_universe_cmd(json_file: str, dry_run: bool) -> None:
     calendar, aliases. So a company that is already here is updated in
     place rather than skipped.
 
-    Matched on (country, local_code), never on name: a name is editable,
+    Matched on (country, code), never on name: a name is editable,
     and keying on one creates a duplicate the first time someone fixes a
-    spelling. Rows that predate this loader have no local_code, so they
+    spelling. Rows that predate this loader have no code, so they
     are found by name ONCE and stamped with their code; every run after
     that matches on the code.
 
@@ -310,7 +310,7 @@ def load_market_universe_cmd(json_file: str, dry_run: bool) -> None:
     # is a deliberate statement that two names are one company; anything
     # not listed must match exactly or be created.
     name_overrides: dict[str, str] = {
-        o["local_code"]: o["stored_as"]
+        o["code"]: o["stored_as"]
         for o in payload.get("name_overrides", [])
     }
 
@@ -338,14 +338,14 @@ def load_market_universe_cmd(json_file: str, dry_run: bool) -> None:
     errors: list[str] = []
 
     for c in companies:
-        code, name = c["local_code"], c["company_name"]
+        code, name = c["code"], c["company_name"]
         match_name = name_overrides.get(code, name)
         try:
             with get_db() as conn:
                 row = conn.execute(
                     "SELECT id::text, company_name, ticker, country, market "
                     "FROM universe_companies "
-                    " WHERE (country = :country AND local_code = :code) "
+                    " WHERE (country = :country AND code = :code) "
                     "    OR LOWER(company_name) = LOWER(:match_name)",
                     {"country": country, "code": code,
                      "match_name": match_name},
@@ -428,8 +428,8 @@ def load_market_universe_cmd(json_file: str, dry_run: bool) -> None:
                 conn.execute(
                     """
                     UPDATE universe_companies SET
-                        local_code         = :code,
-                        local_name         = :local_name,
+                        code         = :code,
+                        native_name         = :native_name,
                         search_query       = :search_query,
                         aliases            = :aliases,
                         exclude_terms      = :exclude_terms,
@@ -445,8 +445,21 @@ def load_market_universe_cmd(json_file: str, dry_run: bool) -> None:
                         market_data_as_of  = :market_data_as_of
                       WHERE id = :id
                     """,
-                    {**{k: c[k] for k in (
-                        "local_name", "search_query", "aliases", "exclude_terms",
+                    # .get(), not [k]: only the identity fields (code,
+                    # native_name, aliases, fiscal_year_end) are required of a
+                    # universe file. The market-snapshot columns are optional
+                    # and a file that omits them means "unknown", which is a
+                    # NULL - not a reason to fail the row. Direct indexing
+                    # made every column mandatory and failed all 18 China
+                    # companies on a real load, silently leaving code
+                    # and native_name unwritten (so tracked=true, defined as
+                    # code IS NOT NULL, matched nothing) while still
+                    # reporting 5 CREATE / 13 ENRICH: each company's work
+                    # runs in one transaction with this UPDATE inside it, so
+                    # the KeyError rolled back the INSERT too, but the
+                    # counters had already been incremented.
+                    {**{k: c.get(k) for k in (
+                        "native_name", "search_query", "aliases", "exclude_terms",
                         "fiscal_year_end", "market_cap_usd_bn",
                         "market_cap_local", "local_currency", "index_name",
                         "index_weight_pct", "home_market_rank",

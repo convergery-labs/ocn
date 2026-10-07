@@ -182,6 +182,41 @@ def init_db() -> None:
         # local-language name was `native_name` in two of them and           #
         # `korean_name` in the third.                                         #
         # ------------------------------------------------------------------ #
+        # These two shipped as local_code/local_name and are renamed in
+        # place. `native_name` is the word every market's own pipeline
+        # already used before this table existed, and reading it back as
+        # something else cost a silent failure: the agent mapped
+        # local_name -> native_name by hand, and when that mapping was
+        # half-updated every row came back with a null name, the
+        # universe looked empty, and the service fell back to its
+        # built-in table with only a warning to show for it. One name
+        # end to end removes the mapping that failed.
+        #
+        # ADD COLUMN IF NOT EXISTS below cannot do this: it would leave
+        # the old column beside a new empty one. Guarded on the old
+        # name so a fresh database, which never had it, skips straight
+        # past.
+        for _old, _new in (("local_code", "code"),
+                           ("local_name", "native_name")):
+            conn.execute(f"""
+                DO $$
+                BEGIN
+                    IF EXISTS (SELECT 1 FROM information_schema.columns
+                                WHERE table_name = 'universe_companies'
+                                  AND column_name = '{_old}')
+                       AND NOT EXISTS (SELECT 1 FROM information_schema.columns
+                                        WHERE table_name = 'universe_companies'
+                                          AND column_name = '{_new}')
+                    THEN
+                        ALTER TABLE universe_companies
+                              RENAME COLUMN {_old} TO {_new};
+                    END IF;
+                END $$;
+            """)
+        # The partial unique index is named for the column it covers.
+        conn.execute("ALTER INDEX IF EXISTS uq_companies_country_local_code "
+                     "RENAME TO uq_companies_country_code")
+
         conn.execute("""
             ALTER TABLE universe_companies
             -- Identity ----------------------------------------------------
@@ -190,11 +225,11 @@ def init_db() -> None:
             -- this is the key filings are published under, and the only one
             -- EDINET/TDnet/IRBANK will answer to. TEXT because Kioxia's code
             -- is '285A' - never cast it to an integer.
-            ADD COLUMN IF NOT EXISTS local_code          TEXT,
+            ADD COLUMN IF NOT EXISTS code          TEXT,
             -- The company's name in its home language, full legal form.
-            ADD COLUMN IF NOT EXISTS local_name          TEXT,
+            ADD COLUMN IF NOT EXISTS native_name          TEXT,
             -- Other written forms of THIS company, used to match it in
-            -- local-language articles. Distinct from local_name: Resonac
+            -- local-language articles. Distinct from native_name: Resonac
             -- files as レゾナック・ホールディングス but the press writes
             -- レゾナック, and matching on the legal name alone found zero
             -- articles for Resonac and Renesas where the short form found
@@ -257,11 +292,11 @@ def init_db() -> None:
         # The real identity of a non-US row. `company_name` is already
         # UNIQUE, but a name is editable and a loader keyed on one creates
         # a duplicate the first time someone fixes a spelling. Partial so
-        # the ~1,400 existing rows, which have no local_code, are untouched.
+        # the ~1,400 existing rows, which have no code, are untouched.
         conn.execute("""
-            CREATE UNIQUE INDEX IF NOT EXISTS uq_companies_country_local_code
-                ON universe_companies (country, local_code)
-             WHERE local_code IS NOT NULL
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_companies_country_code
+                ON universe_companies (country, code)
+             WHERE code IS NOT NULL
         """)
 
         # ------------------------------------------------------------------ #

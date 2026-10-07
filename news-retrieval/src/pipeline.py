@@ -17,6 +17,7 @@ import trafilatura
 from openai import OpenAI
 from trafilatura.settings import use_config
 
+from china_code import resolve_cninfo_org_ids, resolve_hkex_stock_ids
 from dart_corp_code import resolve_corp_codes
 from models.articles import (
     append_also_reported_by,
@@ -633,6 +634,16 @@ def get_tracked_ticker_universe(
     return list(dict.fromkeys(_fetch_universe_tickers(universe_url, universe_api_key)))
 
 
+class UniverseUnavailable(RuntimeError):
+    """A tracked company universe could not be loaded.
+
+    Raised rather than falling back to anything local. A fetch run
+    that quietly stores zero articles looks exactly like a quiet news
+    day and goes unnoticed for as long as the market stays calm; a run
+    that exits non-zero is visible the same hour.
+    """
+
+
 def get_tracked_company_universe(
     country: str,
     universe_url: str | None,
@@ -647,7 +658,7 @@ def get_tracked_company_universe(
     alone would have this service fetching filings for Keyence and Daikin.
 
     Field names are translated to the ones the fetchers already use -
-    research-universe calls them local_code/local_name because it holds
+    research-universe calls them code/native_name because it holds
     Taiwan and Korea too, while the fetchers here have always said
     code/native_name. Translating in one place keeps that rename out of
     six call sites.
@@ -660,15 +671,15 @@ def get_tracked_company_universe(
     and Renesas silently kept matching 62 articles instead of 74 until
     the stored config was updated by hand.
 
-    Returns an empty list if the URL is unset or the service cannot be
-    reached; the caller falls back to its seeded config rather than
-    fetching nothing.
+    Raises UniverseUnavailable if the URL is unset or the service
+    cannot be reached. There is no local copy to fall back to, by
+    design: the one that existed had already drifted from the live
+    data it was standing in for.
     """
     if not universe_url:
-        logger.warning(
-            "[UNIVERSE] RESEARCH_UNIVERSE_URL unset; %s falls back to "
-            "seeded config", country)
-        return []
+        raise UniverseUnavailable(
+            f"RESEARCH_UNIVERSE_URL is not set; the {country} company "
+            f"universe has no other source")
     try:
         headers = ({"Authorization": f"Bearer {universe_api_key}"}
                    if universe_api_key else {})
@@ -681,26 +692,32 @@ def get_tracked_company_universe(
         resp.raise_for_status()
         rows = resp.json()
     except Exception as exc:
-        logger.warning(
-            "[UNIVERSE] research-universe unreachable for %s, falling back "
-            "to seeded config: %s", country, exc)
-        return []
+        raise UniverseUnavailable(
+            f"research-universe unreachable for {country}: {exc}") from exc
 
     companies: list[dict[str, Any]] = []
     for r in rows:
-        code = (r.get("local_code") or "").strip()
+        code = (r.get("code") or "").strip()
         if not code:
             continue
         company = (r.get("company_name") or "").strip()
         entry: dict[str, Any] = {"code": code, "company": company}
-        if r.get("local_name"):
-            entry["native_name"] = r["local_name"]
+        if r.get("native_name"):
+            entry["native_name"] = r["native_name"]
         # Every other written form, carried as the list it is rather
         # than collapsed to one `short_name`. Japan has at most one per
         # company today, so the two would look alike - but Korea needs
         # several (a group prefix plus variants), and picking aliases[0]
         # would quietly make array order decide which form gets matched.
         entry["aliases"] = [a for a in (r.get("aliases") or []) if a]
+        # Names that must NOT count as a mention of this company -
+        # Inspur's 浪潮软件 and 浪潮数字 are separate listed entities
+        # sharing its 浪潮 prefix. Carried through because the China
+        # press matcher reads it; absent upstream means "no exclusions",
+        # which is the common case.
+        excludes = [t for t in (r.get("exclude_terms") or []) if t]
+        if excludes:
+            entry["exclude_terms"] = excludes
         if r.get("fiscal_year_end"):
             entry["fiscal_year_end"] = r["fiscal_year_end"]
         # Only two of the nineteen Japanese companies carry one: "Disco"
@@ -712,10 +729,8 @@ def get_tracked_company_universe(
         companies.append(entry)
 
     if not companies:
-        logger.warning(
-            "[UNIVERSE] research-universe returned no tracked companies for "
-            "%s; falling back to seeded config", country)
-        return []
+        raise UniverseUnavailable(
+            f"research-universe returned no tracked companies for {country}")
     logger.info("[UNIVERSE] %s: %d tracked companies from research-universe",
                 country, len(companies))
     return companies
@@ -731,26 +746,22 @@ _JAPAN_UNIVERSE: list[dict[str, Any]] | None = None
 def _japan_companies(sources: list[dict]) -> list[dict[str, Any]]:
     """The tracked Japanese companies for one fetcher.
 
-    Prefers the universe resolved live from research-universe, and falls
-    back to the ``config.companies`` seeded into each source row when
-    that service could not be reached. Both carry the same keys, so no
-    caller needs to know which one it got.
-
-    The fallback is a real fallback, not a substitute: a seeded config
-    cannot be corrected without a manual UPDATE (sources seed
-    ON CONFLICT DO NOTHING), so it will drift from the live universe the
-    first time a company is added or renamed.
+    Resolved once per run from research-universe, which owns this data,
+    and raised on rather than approximated when that fails. ``sources``
+    is taken for signature compatibility with the fetchers that call
+    this and is no longer read: the per-source ``config.companies``
+    these rows used to carry is dead weight, because `sources` seeds
+    ON CONFLICT DO NOTHING and so a company added or corrected in code
+    never reaches an already-seeded database. That is not a fallback,
+    it is a second copy guaranteed to go stale - confirmed when an
+    alias added for Resonac and Renesas silently kept matching 62
+    articles instead of 74 until the stored config was updated by hand.
     """
-    if _JAPAN_UNIVERSE:
-        return _JAPAN_UNIVERSE
-    companies: list[dict[str, Any]] = []
-    for s in sources:
-        companies.extend((s.get("config") or {}).get("companies", []))
-    if companies:
-        logger.warning(
-            "[UNIVERSE] using %d companies from seeded config "
-            "(research-universe unavailable)", len(companies))
-    return companies
+    if not _JAPAN_UNIVERSE:
+        raise UniverseUnavailable(
+            "the Japan company universe could not be loaded from "
+            "research-universe; see the earlier [UNIVERSE] log line")
+    return _JAPAN_UNIVERSE
 
 
 def _fetch_alpha_vantage(
@@ -6309,9 +6320,33 @@ def _fetch_press_jp_english_check(companies: list[dict[str, str]], days_back: in
             articles.append({
                 "title": f"{c['company']} ({c['code']}) [English coverage check]: {r.get('title', '')}",
                 "url": url,
-                "published": date_str,
+                # The PARSED datetime, not the raw string. ddgs does not
+                # always return ISO: some results carry display text
+                # ("Opinion7 days ago"), which reached Postgres as a
+                # timestamp and raised InvalidDatetimeFormat, aborting
+                # the whole insert batch. _pub_date below was already
+                # parsed-or-None and is the value that survives into
+                # `published` via _fetch_articles anyway, so the raw
+                # string was only ever a second, unvalidated path to the
+                # same column.
+                "published": pub_date,
                 "source": r.get("url", "").split("/")[2] if url else "Unknown",
-                "summary": None,
+                # The search result's own snippet. Previously discarded,
+                # which left this source_type headline-only and made it
+                # useless to any downstream rule needing a figure or a
+                # named customer - confirmed against China's C4
+                # (accelerator milestones), which found no usable input
+                # anywhere until this was kept. The snippets carry real
+                # substance: "Chinese chipmaker Cambricon Technologies,
+                # which is seen as a potential domestic alternative..."
+                #
+                # Stored as `summary`, not `body`: it IS a lead, one or
+                # two sentences written by the publisher, which is what
+                # summary means everywhere else in this service. The
+                # article page itself is still not fetched, so `body`
+                # stays None and the source remains a coverage CHECK
+                # rather than a press fetcher.
+                "summary": (r.get("body") or "").strip() or None,
                 "body": None,
                 "_pub_date": pub_date,
                 "metadata": {
@@ -6329,6 +6364,1500 @@ def _fetch_press_jp_english_check_source(sources: list[dict], days_back: int) ->
     if not companies:
         return []
     return _fetch_press_jp_english_check(companies, days_back)
+
+
+# ---------------------------------------------------------------------------
+# China market signal
+# ---------------------------------------------------------------------------
+#
+# Eight source_types. Two more were scoped and dropped after the access
+# probe (2026-10-05), rather than built and left failing:
+#   gacc_trade  - customs.gov.cn answers 412 with a JSluid cookie challenge
+#                 and obfuscated JS. Full browser headers do not help; it
+#                 needs a JS-executing client, which this service has no
+#                 dependency for. C6 (trade data) is therefore not covered.
+#   nbs_output  - stats.gov.cn is blocked at the NETWORK layer from here
+#                 ("The URL has been blocked as per the instructions of the
+#                 Competent Government Authority"), not by the site itself.
+#                 May work from ECS; untested there.
+#
+# China time. Every source here timestamps in Beijing time (UTC+8) with no
+# offset in the markup, the same trap EDINET and MONOist set for Japan -
+# stamping them UTC directly would put every article 8 hours early.
+_CST = timezone(timedelta(hours=8))
+
+# Government and press sites here are slow and occasionally intermittent
+# from outside the mainland (MOFCOM's own index took 19.5s on a cold first
+# hit during the probe, then under 1s). Generous timeout plus a retry,
+# rather than treating one slow response as an outage.
+_CHINA_TIMEOUT = 40.0
+_CHINA_MAX_ATTEMPTS = 3
+_CHINA_RETRY_BACKOFF_SECS = 2.0
+
+# english.mofcom.gov.cn refuses a bare httpx request outright
+# (RemoteProtocolError, server disconnects without responding) but serves
+# normally with a full browser header set. The Chinese site does not need
+# this. Sent on every China request since it costs nothing and removes a
+# whole class of intermittent failure.
+_CHINA_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+    ),
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    ),
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+}
+
+
+# Filing bodies are capped before storage. A Chinese annual report runs to
+# hundreds of pages; the classifier needs the announcement's substance, not
+# its appendices, and an unbounded body would bloat every row that carries
+# one. 20k characters covers a full announcement comfortably - the real
+# samples checked ran 2.5-6k.
+_CHINA_BODY_MAX_CHARS = 20000
+# Only the first pages are read. Page 1 carries the title, the issuer and
+# the substance of an announcement; later pages are signatures, appendices
+# and audit boilerplate.
+_CHINA_PDF_MAX_PAGES = 5
+
+# RESULTS announcements are the exception, and the exception is measured.
+# Tencent's "ANNOUNCEMENT OF THE RESULTS FOR THE THREE AND SIX MONTHS
+# ENDED..." is 50 pages / 82,418 characters, and its capital-expenditure
+# line sits at character 19,113 - inside page ~12, far past the 5-page
+# cut that stored only 7,153 characters of it. Downstream this made
+# Tencent and Baidu look as though they never report capex at all
+# (0 mentions across 54 stored bodies), when in fact the figure was
+# simply never fetched.
+#
+# Raised only for this filing type, not globally: a results announcement
+# front-loads its financial tables, while a prospectus or bond programme
+# of the same length is appendix the whole way down. The character cap
+# above still applies, so this buys depth, not unbounded size.
+_CHINA_PDF_MAX_PAGES_RESULTS = 25
+# The \b applies to the ENGLISH alternatives only. Python's \b sits
+# between a word and a non-word character, and a CJK character counts
+# as a word character - so "\b半年度报告" never matches inside
+# "中芯国际2026年半年度报告", because the preceding 年 is also a word
+# character. Confirmed live; the Chinese terms are matched without an
+# anchor, which is correct since they are already specific phrases.
+_CHINA_RESULTS_TITLE_RE = re.compile(
+    r"(?i)(?:\b(?:results|interim report|annual report)\b"
+    r"|业绩|中期报告|年度报告|季度报告|半年度报告)")
+
+
+def _fetch_china_filing_body(url: str, title: str = "") -> str | None:
+    """Body text of one filing document, PDF or HTML.
+
+    Returns None on any failure - a filing without a readable body is
+    still a real filing, and its title, date and company are already
+    stored. Fail-open, same convention as every other fetcher here.
+
+    Image-only PDFs return None rather than an empty string: a null body
+    reads as "not extracted", while an empty one would read as "this
+    filing says nothing", and the two must not be conflated.
+
+    ``title`` decides how deep into the PDF to read - a results
+    announcement gets a larger page budget than an ordinary filing. See
+    _CHINA_PDF_MAX_PAGES_RESULTS for the measurement behind that.
+    """
+    try:
+        resp = httpx.get(url, headers=_CHINA_HEADERS,
+                         timeout=_CHINA_TIMEOUT, follow_redirects=True)
+        resp.raise_for_status()
+    except Exception as exc:
+        logger.info("[CHINA] filing body fetch failed url=%s: %s", url, exc)
+        return None
+
+    ctype = (resp.headers.get("content-type") or "").lower()
+    if "pdf" in ctype or url.lower().endswith(".pdf"):
+        max_pages = (_CHINA_PDF_MAX_PAGES_RESULTS
+                     if _CHINA_RESULTS_TITLE_RE.search(title or "")
+                     else _CHINA_PDF_MAX_PAGES)
+        try:
+            from io import BytesIO
+
+            import pdfplumber
+            with pdfplumber.open(BytesIO(resp.content)) as pdf:
+                parts = [
+                    (page.extract_text() or "")
+                    for page in pdf.pages[:max_pages]
+                ]
+            text = re.sub(r"\s+", " ", " ".join(parts)).strip()
+        except Exception as exc:
+            logger.info("[CHINA] pdf parse failed url=%s: %s", url, exc)
+            return None
+    else:
+        text = _china_strip_html(resp.text)
+
+    if not text:
+        return None
+    return text[:_CHINA_BODY_MAX_CHARS]
+
+
+# Per-outlet article containers, used when trafilatura cannot find the
+# body on its own. Confirmed live 2026-10-05: trafilatura returns a real
+# article for ITHome and EEFocus but falls back to the site navigation
+# menu on Jiemian's newsflash pages, whose body is a single short <p>
+# inside class="article-content" - too short for trafilatura's own
+# heuristics to prefer it over the much longer nav block.
+_CHINA_ARTICLE_CONTAINERS: list[tuple[str, re.Pattern[str]]] = [
+    ("jiemian.com", re.compile(
+        r'class="article-content"[^>]*>(.*?)</div>', re.S)),
+]
+
+# Outlets whose article pages are gated: the LISTING is free and carries
+# a real dated headline, but the article body behind it is not served to
+# an anonymous reader. Confirmed live for ijiwei, whose /n/<id> pages
+# return a 1.9KB stub reading 该文章未发布 ("this article is not
+# published", error 70002) regardless of the item.
+#
+# Their headlines are still worth collecting - 盛美上海在手订单突破170亿元
+# 同比大增88.2% is a complete C2 signal on its own - but the stub must
+# never be stored as a body, or a classifier would read an error page as
+# the article's content.
+_CHINA_GATED_ARTICLE_HOSTS = ("ijiwei.com",)
+_CHINA_GATE_MARKERS = ("该文章未发布", "错误码", "请登录", "登录后查看")
+
+
+def _fetch_china_article_body(url: str) -> str | None:
+    """Body text of one Chinese press article.
+
+    Uses trafilatura rather than _china_strip_html: a news page is mostly
+    navigation, related-article lists and comment furniture, and tag
+    stripping would return all of it. Government announcement pages are
+    the opposite case - short, mostly the notice itself - which is why
+    they keep the simpler path.
+
+    Where trafilatura fails, a per-outlet container pattern takes over
+    rather than the article being dropped - see
+    _CHINA_ARTICLE_CONTAINERS.
+    """
+    # Not even requested for an outlet known to gate its articles - the
+    # fetch would only ever return the "not published" stub.
+    if any(host in url for host in _CHINA_GATED_ARTICLE_HOSTS):
+        return None
+    try:
+        resp = httpx.get(url, headers=_CHINA_HEADERS,
+                         timeout=_CHINA_TIMEOUT, follow_redirects=True)
+        resp.raise_for_status()
+    except Exception as exc:
+        logger.info("[CHINA] article body fetch failed url=%s: %s", url, exc)
+        return None
+    try:
+        text = trafilatura.extract(
+            resp.text, config=_get_trafilatura_config()) or ""
+    except Exception as exc:
+        logger.info("[CHINA] article extract failed url=%s: %s", url, exc)
+        return None
+    text = re.sub(r"\s+", " ", text).strip()
+
+    # A login wall or "not published" stub from any outlet, not just the
+    # known-gated ones above - checked on the extracted text because the
+    # stub is short enough that trafilatura returns it as the article.
+    if text and any(m in text[:200] for m in _CHINA_GATE_MARKERS):
+        logger.info("[CHINA] article body is a gate stub, dropping url=%s",
+                    url)
+        return None
+
+    # Where trafilatura cannot find the article body it falls back to
+    # whatever block of text it judges longest, which on these sites is
+    # the site-wide navigation menu - confirmed live on one real Jiemian
+    # article, which returned "首页 科技 金融 证券 地产 汽车 健康 ..." as its
+    # body. A nav menu is many short space-separated labels with no
+    # sentence punctuation, so it is recognisable.
+    head = text[:120]
+    looks_like_nav = bool(
+        text and "首页" in head and not re.search(r"[。！？，]", head))
+
+    if not text or looks_like_nav:
+        for host, pattern in _CHINA_ARTICLE_CONTAINERS:
+            if host not in url:
+                continue
+            m = pattern.search(resp.text)
+            if not m:
+                continue
+            fallback = _china_strip_html(m.group(1))
+            if fallback:
+                logger.info("[CHINA] used %s container fallback url=%s",
+                            host, url)
+                return fallback[:_CHINA_BODY_MAX_CHARS]
+        if looks_like_nav:
+            logger.info("[CHINA] article body looks like navigation and no "
+                        "container matched, dropping url=%s", url)
+        return None
+    return text[:_CHINA_BODY_MAX_CHARS]
+
+
+def _china_companies(sources: list[dict]) -> list[dict[str, Any]]:
+    """The tracked Chinese companies for one fetcher, from seeded config.
+
+    Deliberately NOT read live from research-universe, unlike Japan.
+    The catalogue cannot yet express two facts this domain needs:
+
+      - Alibaba and Tencent are Chinese companies filed under
+        `country='United States'`, because that is what the SEC EDGAR
+        and Alpha Vantage pollers select on and moving them would drop
+        real data (38 stored Alibaba 6-K filings, and both tickers'
+        market data). A `country='China'` read cannot see them, and
+        they are two of the three C5 names.
+      - A dual-listed issuer has two codes (SMIC: 688981 and 00981)
+        and the catalogue holds one, so an HK code currently survives
+        only as an alias.
+
+    Both are schema questions - a `listing_country`, or a listings
+    table - deferred rather than worked around here. Until then this
+    reads the seeded config, which carries all 20 companies with the
+    fields each fetcher needs.
+
+    The exchange-internal identifiers those fetchers also need
+    (cninfo's org_id, HKEX's stockId) are NOT part of this config: they
+    are resolved per run by china_code.py, so a company added here
+    needs only its code.
+    """
+    companies: list[dict[str, Any]] = []
+    for s_ in sources:
+        companies.extend((s_.get("config") or {}).get("companies", []))
+    return companies
+
+
+def _china_get(url: str) -> str | None:
+    """GET one China URL, retrying transient failures.
+
+    Returns the decoded body, or None after ``_CHINA_MAX_ATTEMPTS`` -
+    fail-open, the same convention every other fetcher in this module
+    uses. A failed source never fails the run.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(1, _CHINA_MAX_ATTEMPTS + 1):
+        try:
+            resp = httpx.get(url, headers=_CHINA_HEADERS,
+                             timeout=_CHINA_TIMEOUT, follow_redirects=True)
+            resp.raise_for_status()
+            return resp.text
+        except Exception as exc:
+            last_exc = exc
+            if attempt < _CHINA_MAX_ATTEMPTS:
+                time.sleep(_CHINA_RETRY_BACKOFF_SECS * attempt)
+    logger.warning("[CHINA] fetch failed url=%s after %d attempts: %s",
+                   url, _CHINA_MAX_ATTEMPTS, last_exc)
+    return None
+
+
+def _china_day(year: int, month: int, day: int) -> datetime:
+    """A date-only Chinese publication date, as UTC.
+
+    Stamped at 12:00 Beijing rather than 00:00. A date with no time is
+    all these sources give, and converting a bare midnight to UTC moves
+    it back 8 hours into the PREVIOUS day - confirmed in testing, where
+    a filing dated 2026-09-18 came back as 2026-09-17T16:00Z. Midday is
+    the only choice that survives the conversion in either direction.
+    """
+    return datetime(year, month, day, 12, 0,
+                    tzinfo=_CST).astimezone(timezone.utc)
+
+
+# _HTML_TAG_RE is defined at module top and reused here.
+_SCRIPT_STYLE_RE = re.compile(
+    r"<(script|style)\b.*?</\1>", re.S | re.I)
+
+
+def _china_strip_html(raw: str) -> str:
+    """Plain text from a China government article page.
+
+    trafilatura is used elsewhere in this module for press articles, but
+    these CMS pages are simple enough (confirmed live against a real
+    MOFCOM announcement: 989 characters of clean text) that stripping
+    tags directly avoids trafilatura's own failure mode of discarding a
+    short official notice as boilerplate.
+    """
+    text = _SCRIPT_STYLE_RE.sub(" ", raw)
+    text = _HTML_TAG_RE.sub(" ", text)
+    text = html.unescape(text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+# A government announcement's own metadata, printed in the article body
+# rather than the listing. Confirmed live against a real MOFCOM 公告:
+# "【发布单位】安全与管制局 【发布文号】商务部公告2026年第40号
+#  【发文日期】2026年09月22日". The document number is what makes an
+# announcement citable and is how a later amendment refers back to it, so
+# it is extracted rather than left in the prose.
+_CN_DOC_NO_RE = re.compile(r"【发布文号】\s*([^\s【]{4,60})")
+_CN_ISSUER_RE = re.compile(r"【发布单位】\s*([^\s【]{2,40})")
+_CN_DOC_DATE_RE = re.compile(r"【发文日期】\s*(\d{4})年(\d{1,2})月(\d{1,2})日")
+# SAMR (and the same CMS family) prints the publication date in the
+# article body as 发布时间：2026-07-27, and puts NO date in the listing at
+# all - confirmed live, where all 59 SAMR rows came back with a null
+# published date. An undated row can never be excluded by days_back, so
+# it would be re-fetched on every run forever.
+_CN_PUBLISH_TIME_RE = re.compile(
+    r"发布(?:时间|日期)[：:]\s*(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})")
+# MOFCOM's 政策解读 pages carry no labelled date at all - the header runs
+# "来源：商务部新闻办公室 类型：原创 分类：新闻 2026-09-28 09:00" with the
+# date bare. Confirmed live: 9 of 48 rows in a clean fetch had a null
+# published for exactly this reason, which would have excluded them
+# from every days_back window forever. Anchored to the masthead fields
+# so a date appearing later in prose is not mistaken for the
+# publication date.
+_CN_HEADER_DATE_RE = re.compile(
+    r"(?:来源|类型|分类)[：:][^0-9]{0,40}?"
+    r"(20\d{2})-(\d{1,2})-(\d{1,2})")
+# The listing's own date, next to each row.
+_CN_LISTING_DATE_RE = re.compile(r"(20\d{2})-(\d{1,2})-(\d{1,2})")
+# Article links on a government listing. Three distinct shapes, all
+# confirmed live 2026-10-05 - these are different CMSs, not one:
+#   MOFCOM, SAMR   .../art/2026/art_<32 hex>.html
+#   CAC            .../2026-09/30/c_<digits>.htm
+#   Xinhua English .../20261005/<32 hex>/c.html
+# Quotes are matched as a backreference, not hardcoded to ": Xinhua
+# writes href='...' with SINGLE quotes while the government CMSs use
+# double, and a double-only pattern silently matched nothing on Xinhua
+# but its two footer links.
+_CN_ARTICLE_HREF_RE = re.compile(
+    r'<a\s[^>]*href=(?P<q>["\'])(?P<href>(?:(?!(?P=q))[^#])*?(?:'
+    r'art_[0-9a-f]{32}\.html?'
+    r'|/20\d{2}-\d{2}/\d{2}/c_\d+\.html?'
+    r'|/20\d{6}/[0-9a-f]{16,40}/c\.html'
+    r'))(?P=q)[^>]*>\s*(?P<title>[^<]{6,160}?)\s*</a>',
+    re.I)
+# A date in the URL itself, which all three shapes above carry. More
+# reliable than the markup around the anchor: CAC and Xinhua place no
+# date next to the link at all, and MOFCOM's is only sometimes within
+# reach. Groups: (YYYY, MM, DD) for CAC, (YYYYMMDD) for Xinhua.
+_CN_HREF_DATE_RE = re.compile(
+    r"/(20\d{2})-(\d{2})/(\d{2})/|/(20\d{2})(\d{2})(\d{2})/")
+
+
+def _china_policy_rows(listing_html: str, base_url: str) -> list[dict]:
+    """Announcement rows from one government listing page.
+
+    Each row is {href, title, listing_date or None}. The date is taken
+    from the markup FOLLOWING the anchor, which is where these CMS
+    templates put it - confirmed live on MOFCOM (8 of 16 article anchors
+    carried a date within 220 characters). A row whose date cannot be
+    found is still returned: the article page carries its own 【发文日期】,
+    which is more authoritative anyway.
+    """
+    rows: list[dict] = []
+    seen: set[str] = set()
+    for m in _CN_ARTICLE_HREF_RE.finditer(listing_html):
+        href, title = m.group("href"), html.unescape(m.group("title").strip())
+        # Policy-interpretation stubs ([政策解读]) link to a commentary
+        # page about an announcement, not the announcement - they carry no
+        # measure of their own and would double-count the real notice.
+        if not title or title.startswith("[") or href in seen:
+            continue
+        seen.add(href)
+        # The URL's own date first - CAC and Xinhua carry no date beside
+        # the anchor at all, and a date in the path cannot drift the way
+        # a nearby-markup match can.
+        listing_date = None
+        hm = _CN_HREF_DATE_RE.search(href)
+        if hm:
+            parts = [g for g in hm.groups() if g]
+            try:
+                listing_date = _china_day(
+                    int(parts[0]), int(parts[1]), int(parts[2]))
+            except (ValueError, IndexError):
+                listing_date = None
+        if listing_date is None:
+            tail = listing_html[m.end():m.end() + 260]
+            dm = _CN_LISTING_DATE_RE.search(tail)
+            if dm:
+                try:
+                    listing_date = _china_day(
+                        int(dm.group(1)), int(dm.group(2)), int(dm.group(3)))
+                except ValueError:
+                    listing_date = None
+        if href.startswith("//"):
+            url = "https:" + href
+        elif href.startswith("http"):
+            url = href
+        else:
+            url = base_url.rsplit("/", 1)[0] + "/" + href.lstrip("/") \
+                if not href.startswith("/") \
+                else re.match(r"https?://[^/]+", base_url).group(0) + href
+        rows.append({"url": url, "title": title,
+                     "listing_date": listing_date})
+    return rows
+
+
+def _fetch_one_china_policy(source: dict, days_back: int) -> list[dict]:
+    """One policy source_type (one ministry/regulator), all its listings."""
+    config = source.get("config") or {}
+    outlet_type = config.get("source_outlet_type", "official")
+    issuing_body = config.get("issuing_body")
+    source_type = source.get("source_type", "")
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
+
+    articles: list[dict] = []
+    # Across listings, not just within one: MOFCOM's section pages repeat
+    # the same announcement on its own index (confirmed - 5 duplicate
+    # URLs in a real run), and the same title also reaches the listing
+    # under both an http:// and an https:// href, which the URL-keyed
+    # dedup below would otherwise treat as two articles.
+    seen_urls: set[str] = set()
+    for listing_url in config.get("listing_urls", []):
+        listing = _china_get(listing_url)
+        if not listing:
+            continue
+        rows = _china_policy_rows(listing, listing_url)
+        logger.info("[CHINA] %s listing=%s rows=%d",
+                    source_type, listing_url, len(rows))
+        for row in rows:
+            # Scheme-insensitive: the same announcement is linked as both
+            # http:// and https:// from different sections of the site.
+            dedup_key = re.sub(r"^https?://", "", row["url"])
+            if dedup_key in seen_urls:
+                continue
+            seen_urls.add(dedup_key)
+            # Cheap cutoff first, on the listing's own date, so an old
+            # announcement is skipped without fetching its body at all.
+            if row["listing_date"] and row["listing_date"] < cutoff:
+                continue
+            body_html = _china_get(row["url"])
+            if not body_html:
+                continue
+            body = _china_strip_html(body_html)
+
+            published = row["listing_date"]
+            # The document's own stated date wins over the listing's,
+            # then the CMS publication timestamp. Both are more
+            # authoritative than where a link happened to sit on a page.
+            # Most specific first: a stated document date beats a CMS
+            # publication timestamp, which beats a bare masthead date.
+            for pattern in (_CN_DOC_DATE_RE, _CN_PUBLISH_TIME_RE,
+                            _CN_HEADER_DATE_RE):
+                dm = pattern.search(body)
+                if not dm:
+                    continue
+                try:
+                    published = _china_day(
+                        int(dm.group(1)), int(dm.group(2)), int(dm.group(3)))
+                    break
+                except ValueError:
+                    continue
+            if published and published < cutoff:
+                continue
+            # A page with no date at all after all three patterns is not
+            # an announcement. Confirmed live: the three that survive on
+            # SAMR are data-download catalogue entries
+            # (计量标准器具核准数据, 标准物质定级鉴定数据) describing a dataset's
+            # update cadence, not a measure. An undated row can never be
+            # excluded by days_back either, so it would be re-fetched
+            # every run forever - the same failure SAMR's listing had
+            # before its article-body date was read.
+            if published is None:
+                logger.info("[CHINA] %s: no date found, skipping url=%s",
+                            source_type, row["url"][:90])
+                continue
+
+            doc_no = _CN_DOC_NO_RE.search(body)
+            issuer = _CN_ISSUER_RE.search(body)
+            metadata = {
+                "source_category": "cn_policy",
+                "source_outlet_type": outlet_type,
+                "source_type": source_type,
+                "issuing_body": issuing_body,
+            }
+            # Only ever set when the document actually states it. An
+            # absent document number means "not stated", and must never
+            # be inferred - a measure's citation is the thing a later
+            # amendment refers back to.
+            if doc_no:
+                metadata["document_number"] = doc_no.group(1)
+            if issuer:
+                metadata["issuing_department"] = issuer.group(1)
+
+            articles.append({
+                "url": row["url"],
+                "title": row["title"],
+                # No separate lead exists in a government announcement -
+                # it opens straight into the measure. Left NULL rather
+                # than storing body[:500], which would duplicate a
+                # prefix of `body` and cut mid-sentence. Every other
+                # domain treats summary as a real lead, not a slice.
+                "summary": None,
+                "body": body or None,
+                "source": source.get("name", source_type),
+                "_pub_date": published,
+                "metadata": metadata,
+            })
+    return articles
+
+
+def _fetch_china_policy(sources: list[dict], days_back: int) -> list[dict]:
+    articles: list[dict] = []
+    for source in sources:
+        try:
+            articles.extend(_fetch_one_china_policy(source, days_back))
+        except Exception as exc:
+            logger.warning("[CHINA] policy source failed name=%s error=%s",
+                           source.get("name"), exc)
+    logger.info("[CHINA] policy total articles=%d", len(articles))
+    return articles
+
+
+_CNINFO_QUERY_URL = "http://www.cninfo.com.cn/new/hisAnnouncement/query"
+_CNINFO_PDF_BASE = "http://static.cninfo.com.cn/"
+_CNINFO_PAGE_SIZE = 30
+# cninfo rejects an unreferred POST, and needs the XHR marker its own
+# front-end sends - confirmed live, a request without them returns a 500
+# rather than an auth error.
+_CNINFO_HEADERS = {
+    **_CHINA_HEADERS,
+    "Content-Type": "application/x-www-form-urlencoded",
+    "X-Requested-With": "XMLHttpRequest",
+    "Referer": ("http://www.cninfo.com.cn/new/commonUrl?url="
+                "disclosure/list/notice"),
+}
+
+
+def _cninfo_column(code: str) -> str:
+    """Which exchange a mainland code belongs to.
+
+    Confirmed live: sending the wrong column returns zero rows with
+    totalAnnouncement=0 rather than an error, so this is worth getting
+    right explicitly rather than trying both.
+    """
+    return "szse" if code.startswith(("0", "3")) else "sse"
+
+
+def _fetch_one_cninfo_company(
+    company: dict, days_back: int, source_name: str, outlet_type: str,
+) -> list[dict]:
+    code, org_id = company.get("code"), company.get("org_id")
+    if not code or not org_id:
+        return []
+    today = datetime.now(_CST).date()
+    start = today - timedelta(days=days_back)
+    payload = {
+        "pageNum": "1",
+        "pageSize": str(_CNINFO_PAGE_SIZE),
+        "column": _cninfo_column(code),
+        "tabName": "fulltext",
+        "plate": "",
+        # Both halves are required. A bare code returns zero rows and
+        # totalAnnouncement=0 - it does NOT error, which is what makes
+        # this failure mode worth naming: it looks exactly like a company
+        # that filed nothing.
+        "stock": f"{code},{org_id}",
+        "searchkey": "",
+        "secid": "",
+        "category": "",
+        "trade": "",
+        "seDate": f"{start:%Y-%m-%d}~{today:%Y-%m-%d}",
+        "sortName": "",
+        "sortType": "",
+        "isHLtitle": "true",
+    }
+    try:
+        resp = httpx.post(_CNINFO_QUERY_URL, data=payload,
+                          headers=_CNINFO_HEADERS, timeout=_CHINA_TIMEOUT)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        logger.warning("[CHINA] cninfo query failed code=%s error=%s",
+                       code, exc)
+        return []
+
+    articles: list[dict] = []
+    for ann in (data.get("announcements") or []):
+        ann_id = ann.get("announcementId")
+        if not ann_id:
+            continue
+        ts = ann.get("announcementTime")
+        published = None
+        if ts:
+            # Epoch milliseconds at Beijing MIDNIGHT - cninfo carries the
+            # announcement's date, never its time of day. Re-stamped at
+            # midday so the UTC conversion keeps the date it was filed
+            # on; see _china_day.
+            local = datetime.fromtimestamp(ts / 1000, tz=_CST)
+            published = _china_day(local.year, local.month, local.day)
+        adjunct = ann.get("adjunctUrl") or ""
+        filing_url = (_CNINFO_PDF_BASE + adjunct) if adjunct else None
+        # The announcement's own text. Without it a downstream classifier
+        # sees only a title - and a title like "关于在手订单情况的自愿性披露
+        # 公告" (voluntary disclosure of orders on hand) names the subject
+        # but carries none of the figures that make it a signal.
+        body = (_fetch_china_filing_body(
+            filing_url, html.unescape(ann.get("announcementTitle") or ""))
+            if filing_url else None)
+        articles.append({
+            # Synthetic, and globally unique: announcementId is cninfo's
+            # own permanent key, so the existing uq_articles_url index
+            # does all dedup, same convention as irbank-financials:// and
+            # twse-revenue://.
+            "url": f"cninfo-filing://{code}/{ann_id}",
+            "title": html.unescape(ann.get("announcementTitle") or ""),
+            # A filing has no editorial lead - it opens with its own
+            # issuer/document header, which is already captured as
+            # structured metadata below. NULL rather than a truncated
+            # copy of `body`.
+            "summary": None,
+            "body": body,
+            "source": source_name,
+            "_pub_date": published,
+            "metadata": {
+                "source_category": "cn_disclosure",
+                "source_outlet_type": outlet_type,
+                "source_type": "cninfo_filing",
+                "code": code,
+                "company": company.get("company"),
+                "translated_company_name": company.get("company"),
+                "native_name": company.get("native_name"),
+                # The exchange's own name on the filing. Kept because it
+                # differs from the stored one often enough to matter
+                # (京东方A vs BOE Technology) and is the string a reader
+                # would see on the document itself.
+                "sec_name": ann.get("secName"),
+                "announcement_id": str(ann_id),
+                "filing_url": filing_url,
+                "adjunct_type": ann.get("adjunctType"),
+            },
+        })
+    return articles
+
+
+def _fetch_cninfo_filing(sources: list[dict], days_back: int) -> list[dict]:
+    companies = _china_companies(sources)
+    if not companies:
+        logger.warning("[CHINA] cninfo_filing: no companies configured")
+        return []
+    source_name = sources[0].get("name", "CNINFO Filings (China)")
+    outlet_type = (sources[0].get("config") or {}).get(
+        "source_outlet_type", "official")
+    # One bulk request covers the whole universe. Resolved live rather
+    # than read from the seeded config for the same reason Japan's
+    # EDINET codes and Korea's DART corp_codes are: a stored identifier
+    # goes stale silently here, because a wrong orgId returns
+    # totalAnnouncement=0 rather than an error. A company whose orgId
+    # cannot be resolved keeps whatever the config carried, so a
+    # cninfo outage degrades to the old behaviour instead of dropping
+    # the whole source.
+    #
+    # Asked for every code, NOT only the ones lacking an hk_code: SMIC
+    # and Hua Hong are dual-listed and file on BOTH venues, so they
+    # carry a mainland code, an hk_code and a real orgId at once.
+    # Filtering on hk_code would have silently dropped the two largest
+    # foundries from cninfo - the same shape of bug as the stockId
+    # confusion this module exists to prevent. HK-only names (Lenovo,
+    # Alibaba, Tencent, Baidu) have no mainland listing, so they simply
+    # miss the map and are logged.
+    codes = [c["code"] for c in companies if c.get("code")]
+    org_ids = resolve_cninfo_org_ids(codes) if codes else {}
+    articles: list[dict] = []
+    for company in companies:
+        resolved = org_ids.get(company.get("code") or "")
+        if resolved:
+            company = {**company, "org_id": resolved}
+        articles.extend(_fetch_one_cninfo_company(
+            company, days_back, source_name, outlet_type))
+    logger.info("[CHINA] cninfo_filing companies=%d articles=%d",
+                len(companies), len(articles))
+    return articles
+
+
+# HKEX's own disclosure search is a JSF form carrying a server-side
+# ViewState, which an automated client would have to replay. Its
+# "Latest Listed Company Information" JSON endpoint answers the same
+# question without that handshake, keyed by the 5-digit stock code.
+_HKEX_SEARCH_URL = (
+    "https://www1.hkexnews.hk/ncms/script/eds/"
+    "newsearchresult_c.json"
+)
+_HKEX_TITLE_SEARCH = "https://www1.hkexnews.hk/search/titleSearchServlet.do"
+
+
+def _fetch_one_hkex_company(
+    company: dict, days_back: int, source_name: str, outlet_type: str,
+) -> list[dict]:
+    hk_code = company.get("hk_code")
+    stock_id = company.get("hkex_stock_id")
+    if not hk_code or not stock_id:
+        return []
+    today = datetime.now(_CST).date()
+    start = today - timedelta(days=days_back)
+    params = {
+        "sortDir": "0",
+        "sortByOptions": "DateTime",
+        "category": "0",
+        "market": "SEHK",
+        # HKEX's internal issuer id, NOT the stock code - see seed.py's
+        # own note. Passing the code returns an empty 200, not an error.
+        "stockId": str(stock_id),
+        "documentType": "-1",
+        "fromDate": f"{start:%Y%m%d}",
+        "toDate": f"{today:%Y%m%d}",
+        "title": "",
+        "searchType": "1",
+        "t1code": "-2",
+        "t2Gcode": "-2",
+        "t2code": "-2",
+        "rowRange": "100",
+        "lang": "EN",
+    }
+    try:
+        resp = httpx.get(_HKEX_TITLE_SEARCH, params=params,
+                         headers=_CHINA_HEADERS, timeout=_CHINA_TIMEOUT,
+                         follow_redirects=True)
+        resp.raise_for_status()
+        payload = resp.json()
+    except Exception as exc:
+        logger.warning("[CHINA] hkex query failed code=%s error=%s",
+                       hk_code, exc)
+        return []
+
+    rows = payload if isinstance(payload, list) else (
+        payload.get("result") or payload.get("results") or [])
+    if isinstance(rows, str):
+        try:
+            rows = json.loads(rows)
+        except Exception:
+            logger.warning("[CHINA] hkex unparseable result code=%s", hk_code)
+            return []
+
+    articles: list[dict] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        file_link = row.get("FILE_LINK") or row.get("fileLink") or ""
+        news_id = row.get("NEWS_ID") or row.get("newsId")
+        title = html.unescape(
+            row.get("TITLE") or row.get("title") or "").strip()
+        if not title or not (news_id or file_link):
+            continue
+        published = None
+        raw_dt = row.get("DATE_TIME") or row.get("dateTime") or ""
+        for fmt in ("%d/%m/%Y %H:%M", "%Y-%m-%d %H:%M:%S", "%d/%m/%Y"):
+            try:
+                published = datetime.strptime(raw_dt, fmt).replace(
+                    tzinfo=_CST).astimezone(timezone.utc)
+                break
+            except (ValueError, TypeError):
+                continue
+        doc_url = (file_link if file_link.startswith("http")
+                   else f"https://www1.hkexnews.hk{file_link}")
+        # English filing text, no translation needed - the one company
+        # source in this domain where the body is directly readable.
+        body = _fetch_china_filing_body(doc_url, title) if file_link else None
+        articles.append({
+            "url": f"hkex-filing://{hk_code}/{news_id or file_link}",
+            "title": title,
+            # HKEX filings open with the exchange's standard liability
+            # disclaimer, so the first 500 characters are boilerplate
+            # identical across every filing - actively worse than NULL.
+            "summary": None,
+            "body": body,
+            "source": source_name,
+            "_pub_date": published,
+            "metadata": {
+                "source_category": "cn_disclosure",
+                "source_outlet_type": outlet_type,
+                "source_type": "hkex_filing",
+                "code": company.get("code"),
+                "hk_code": hk_code,
+                "company": company.get("company"),
+                "translated_company_name": company.get("company"),
+                "native_name": company.get("native_name"),
+                "filing_url": doc_url,
+                # English by Hong Kong listing requirement - recorded so a
+                # downstream consumer never sends this to a translator.
+                "filing_language": "en",
+            },
+        })
+    return articles
+
+
+def _fetch_hkex_filing(sources: list[dict], days_back: int) -> list[dict]:
+    companies = _china_companies(sources)
+    if not companies:
+        logger.warning("[CHINA] hkex_filing: no companies configured")
+        return []
+    source_name = sources[0].get("name", "HKEX Filings (China)")
+    outlet_type = (sources[0].get("config") or {}).get(
+        "source_outlet_type", "official")
+    # One request per HK code (HKEX publishes no bulk list), cached for
+    # the process lifetime - 6 companies, so the cost is trivial next to
+    # the filing fetches themselves. Same degrade-to-config rule as
+    # cninfo above: an unresolved code keeps whatever the seed carried.
+    hk_codes = [c["hk_code"] for c in companies if c.get("hk_code")]
+    stock_ids = resolve_hkex_stock_ids(hk_codes) if hk_codes else {}
+    articles: list[dict] = []
+    for company in companies:
+        resolved = stock_ids.get(company.get("hk_code") or "")
+        if resolved:
+            company = {**company, "hkex_stock_id": resolved}
+        articles.extend(_fetch_one_hkex_company(
+            company, days_back, source_name, outlet_type))
+    logger.info("[CHINA] hkex_filing companies=%d articles=%d",
+                len(companies), len(articles))
+    return articles
+
+
+def _match_china_company(
+    companies: list[dict[str, Any]], text: str,
+) -> dict[str, Any] | None:
+    """First company whose native_name or any alias appears in text.
+
+    Same approach as _match_japan_company, with one addition China needs:
+    `exclude_terms`. Several of these names are substrings of a DIFFERENT
+    listed company - 浪潮 (Inspur Electronic Information) also matches
+    浪潮软件 and 浪潮数字, which are separate issuers - so a term that
+    marks a known false match suppresses the row rather than attributing
+    one company's news to another.
+    """
+    for c in companies:
+        excludes = c.get("exclude_terms") or []
+        if any(x and x in text for x in excludes):
+            continue
+        native = c.get("native_name")
+        if native and native in text:
+            return c
+        if any(a and a in text for a in (c.get("aliases") or [])):
+            return c
+    return None
+
+
+# ITHome stamps each listing row with an ISO timestamp in Beijing time.
+_ITHOME_ROW_TS_RE = re.compile(r'data-ot="(20\d{2}-\d{2}-\d{2}T[\d:.]+)')
+
+_IJIWEI_ABSOLUTE_RE = re.compile(r"^(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{2})$")
+_IJIWEI_RELATIVE_RE = re.compile(r"^(\d{1,3})\s*(分钟|小时|天)前$")
+_IJIWEI_RELATIVE_UNIT = {"分钟": "minutes", "小时": "hours", "天": "days"}
+
+
+def _parse_ijiwei_time(raw: str) -> datetime | None:
+    """ijiwei's listing timestamp, in either form it publishes.
+
+    Recent rows carry a RELATIVE time ("14小时前", "3天前") and older ones
+    an absolute "10-04 18:33" with no year. Confirmed live that both
+    appear on the same page, which is why this handles both rather than
+    the absolute form alone - a first version matched only the absolute
+    shape and silently dropped every recent item, which is most of the
+    feed.
+
+    The absolute form assumes the current Beijing year, rolling back one
+    year if that would place the item in the future - the same
+    convention Japan's Jiji fetcher uses for its year-less timestamps.
+    """
+    raw = (raw or "").strip()
+    now_cst = datetime.now(_CST)
+
+    if m := _IJIWEI_RELATIVE_RE.match(raw):
+        unit = _IJIWEI_RELATIVE_UNIT.get(m.group(2))
+        if not unit:
+            return None
+        delta = timedelta(**{unit: int(m.group(1))})
+        return (now_cst - delta).astimezone(timezone.utc)
+
+    if m := _IJIWEI_ABSOLUTE_RE.match(raw):
+        try:
+            stamp = datetime(now_cst.year, int(m.group(1)), int(m.group(2)),
+                             int(m.group(3)), int(m.group(4)), tzinfo=_CST)
+        except ValueError:
+            return None
+        if stamp > now_cst + timedelta(days=1):
+            stamp = stamp.replace(year=now_cst.year - 1)
+        return stamp.astimezone(timezone.utc)
+
+    return None
+
+# Each press outlet needs its own row pattern - these are three unrelated
+# sites, not one CMS. Confirmed live 2026-10-05 against each listing.
+_PRESS_CN_PATTERNS = [
+    # ITHome: dated rows, the timestamp in a data-ot attribute.
+    (re.compile(
+        r'<a[^>]+href="(?P<url>(?://|https?://)[^"]*ithome\.com/[^"]*\d+\.htm)"'
+        r'[^>]*>(?P<title>[^<]{6,160}?)</a>', re.I), "ithome"),
+    # Jiemian: article links with the headline as anchor text.
+    (re.compile(
+        r'<a\s+href="(?P<url>https://www\.jiemian\.com/article/\d+\.html)"'
+        r'[^>]*>(?P<title>[^<]{6,160}?)</a>', re.I), "jiemian"),
+    # EEFocus: semiconductor trade coverage.
+    (re.compile(
+        r'<a[^>]+href="(?P<url>(?://|https?://)[^"]*eefocus\.com/[^"]+)"'
+        r'[^>]*>(?P<title>[^<]{6,160}?)</a>', re.I), "eefocus"),
+    # ijiwei (集微网): semiconductor trade newsflash. Its headline sits in
+    # a nested <p> rather than as the anchor's own text, so the title is
+    # matched inside the tag rather than between > and <.
+    #
+    # The anchor contains TWO <p> elements and the first is the
+    # timestamp: <p class="time">10-04 18:33</p> then
+    # <p class="text-hover ell_two">headline</p>. A naive "first <p>"
+    # match captured "10-04 18:33" AS the title - confirmed live, every
+    # ijiwei row stored its own timestamp as its headline. The time is
+    # now captured deliberately (it is the only per-row date any of
+    # these outlets expose) and the headline taken from the <p> that
+    # follows it.
+    # The time cell carries TWO forms: an absolute "10-04 18:33" for
+    # older items and a relative "14小时前" / "3天前" for recent ones.
+    # Both are captured raw and resolved in the fetcher.
+    (re.compile(
+        r'<a[^>]+href="(?P<path>/n/\d+)"[^>]*>\s*'
+        r'<p[^>]*class="time"[^>]*>\s*(?P<time>[^<]{1,24}?)'
+        r'\s*</p>\s*<p[^>]*>\s*(?P<title>[^<]{6,160}?)\s*</p>', re.I),
+     "ijiwei"),
+]
+# Outlets whose links are site-relative and need a host prefix.
+_PRESS_CN_HOSTS = {"ijiwei": "https://www.ijiwei.com"}
+
+
+def _fetch_press_cn_rss(
+    feed_url: str, outlet: str, companies: list[dict[str, Any]],
+    seen: set[str], source_name: str, outlet_type: str,
+) -> list[dict]:
+    """One Chinese press RSS feed, filtered to the universe.
+
+    Matching is on the TITLE ONLY, deliberately - not title+summary.
+    Measured live on ITHome's feed: title-only matched 1 article and all
+    of it was about that company; title+summary matched 3, of which 2
+    were false positives (an Nvidia laptop story matched Lenovo on a
+    passing 联想 in the body; an Honor OS story matched Tencent the same
+    way). A company named in passing is exactly what the China Signals
+    spec's own press classifier calls WEAK, so widening the match here
+    would manufacture the noise the classifier then has to reject.
+
+    The feed's own summary IS stored - as `summary`, where a consumer
+    can weigh it in context - just not used to decide whether the
+    article is about the company.
+    """
+    raw = _china_get(feed_url)
+    if not raw:
+        return []
+    parsed = feedparser.parse(raw)
+    if not parsed.entries:
+        logger.info("[CHINA] press_cn rss empty feed=%s", feed_url)
+        return []
+
+    articles: list[dict] = []
+    for entry in parsed.entries:
+        title = html.unescape(entry.get("title") or "").strip()
+        url = (entry.get("link") or "").strip()
+        if not title or not url or url in seen:
+            continue
+        company = _match_china_company(companies, title)
+        if not company:
+            continue
+        seen.add(url)
+
+        pub = None
+        if entry.get("published_parsed"):
+            try:
+                pub = datetime(*entry.published_parsed[:6],
+                               tzinfo=timezone.utc)
+            except (TypeError, ValueError):
+                pub = None
+        # The feed's summary is HTML, not plain text.
+        summary = _china_strip_html(entry.get("summary") or "") or None
+        articles.append({
+            "url": url,
+            "title": title,
+            "summary": summary[:_CHINA_BODY_MAX_CHARS] if summary else None,
+            # No body fetch: the feed's summary already carries the
+            # article's substance (~1,200 characters on ITHome), so
+            # fetching the page again would spend a request to restate
+            # it.
+            "body": None,
+            "source": source_name,
+            "_pub_date": pub,
+            "metadata": {
+                "source_category": "cn_press",
+                "source_outlet_type": outlet_type,
+                "source_type": "press_cn",
+                "outlet": outlet,
+                "via": "rss",
+                "code": company.get("code"),
+                "company": company.get("company"),
+                "translated_company_name": company.get("company"),
+                "native_name": company.get("native_name"),
+            },
+        })
+    logger.info("[CHINA] press_cn rss feed=%s entries=%d matched=%d",
+                feed_url, len(parsed.entries), len(articles))
+    return articles
+
+
+def _fetch_press_cn(sources: list[dict], days_back: int) -> list[dict]:
+    """Chinese commercial trade press, filtered to the China universe.
+
+    None of these outlets offers a per-company query, so the whole
+    listing is fetched once and filtered client-side by native_name or
+    alias - the same approach Japan's monoist_capex and press_jp take,
+    and Taiwan's GDELT title filter before them.
+
+    ITHome stamps each row with a real ISO timestamp in a `data-ot`
+    attribute, which is used where present. Jiemian and EEFocus carry no
+    per-row timestamp, and those rows are left with `_pub_date` None
+    rather than guessed - a wrong date is worse than an absent one, and
+    the articles table accepts a null published (news-retrieval's own
+    expiry rule never deletes a null-dated row, which is the safe
+    direction).
+    """
+    companies = _china_companies(sources)
+    if not companies:
+        logger.warning("[CHINA] press_cn: no companies configured")
+        return []
+    source = sources[0]
+    config = source.get("config") or {}
+    outlet_type = config.get("source_outlet_type", "commercial_press")
+    source_name = source.get("name", "China Trade and Financial Press")
+
+    articles: list[dict] = []
+    seen: set[str] = set()
+
+    # RSS first, where an outlet publishes one. Confirmed live
+    # 2026-10-05: ITHome's feed carries 60 dated entries with real
+    # editorial summaries, against 50 undated headlines from its HTML
+    # listing - strictly more, and the summary removes a per-article
+    # body fetch. Every other Chinese outlet tried (Jiemian, EEFocus,
+    # Yicai, STCN, CLS, 36kr, Sina, Huxiu, laoyaoba, eet-china,
+    # semiinsights) returns 404, an empty feed, or is unreachable.
+    for feed_url, outlet in config.get("rss_urls", {}).items():
+        articles.extend(_fetch_press_cn_rss(
+            feed_url, outlet, companies, seen,
+            source_name, outlet_type))
+
+    for listing_url in config.get("listing_urls", []):
+        listing = _china_get(listing_url)
+        if not listing:
+            continue
+        matched_here = 0
+        for pattern, outlet in _PRESS_CN_PATTERNS:
+            for m in pattern.finditer(listing):
+                title = html.unescape(m.group("title")).strip()
+                groups = m.groupdict()
+                url = groups.get("url") or (
+                    _PRESS_CN_HOSTS.get(outlet, "") + groups.get("path", ""))
+                if url.startswith("//"):
+                    url = "https:" + url
+                if not title or url in seen:
+                    continue
+                company = _match_china_company(companies, title)
+                if not company:
+                    continue
+                seen.add(url)
+                matched_here += 1
+                # ITHome carries a real timestamp per row
+                # (data-ot="2026-10-05T17:22:46.9100000+08:00"); the
+                # other two outlets carry none. Looked for just behind
+                # the anchor, which is where the attribute sits.
+                pub = None
+                ot = _ITHOME_ROW_TS_RE.search(
+                    listing[max(0, m.start() - 200):m.end() + 200])
+                if ot:
+                    try:
+                        pub = datetime.fromisoformat(
+                            ot.group(1)[:19]).replace(
+                                tzinfo=_CST).astimezone(timezone.utc)
+                    except ValueError:
+                        pub = None
+                # ijiwei prints MM-DD HH:MM with no year - the feed only
+                # ever carries recent items, so the current Beijing year
+                # is assumed, and a January row read in December is
+                # rolled back rather than dated eleven months ahead.
+                # Same convention Japan's Jiji fetcher already uses.
+                if pub is None and groups.get("time"):
+                    pub = _parse_ijiwei_time(groups["time"])
+                # The article's own page text. Fetched per surviving
+                # article, after the company filter - the same order
+                # Japan's monoist_capex uses, so a listing of 50
+                # headlines costs one body fetch rather than fifty.
+                body = _fetch_china_article_body(url)
+                articles.append({
+                    "url": url,
+                    "title": title,
+                    # These three outlets' listings carry a headline
+                    # only - no lead, no standfirst. NULL rather than a
+                    # truncated copy of `body`; the RSS path above does
+                    # have a real summary and stores it.
+                    "summary": None,
+                    "body": body,
+                    "source": source_name,
+                    "_pub_date": pub,
+                    "metadata": {
+                        "source_category": "cn_press",
+                        "source_outlet_type": outlet_type,
+                        "source_type": "press_cn",
+                        "outlet": outlet,
+                        "code": company.get("code"),
+                        "company": company.get("company"),
+                        "translated_company_name": company.get("company"),
+                        "native_name": company.get("native_name"),
+                    },
+                })
+        logger.info("[CHINA] press_cn listing=%s matched=%d",
+                    listing_url, matched_here)
+    logger.info("[CHINA] press_cn total articles=%d", len(articles))
+    return articles
+
+
+_COMTRADE_URL = "https://comtradeapi.un.org/public/v1/preview/C/M/HS"
+# The public preview tier answers 429 "Rate limit is exceeded. Try again
+# in 3 seconds." when called back-to-back - observed live. 4s between
+# calls clears it; with 4 reporters x 2 commodities x N months this is
+# the dominant cost of the fetch, which is why it is seeded monthly.
+_COMTRADE_MIN_INTERVAL = 4.0
+_comtrade_last_call = [0.0]
+
+
+def _comtrade_rate_sleep() -> None:
+    elapsed = time.monotonic() - _comtrade_last_call[0]
+    if elapsed < _COMTRADE_MIN_INTERVAL:
+        time.sleep(_COMTRADE_MIN_INTERVAL - elapsed)
+    _comtrade_last_call[0] = time.monotonic()
+
+
+def _fetch_one_comtrade_period(
+    reporter: dict, commodity: dict, period: str, partner_code: str,
+    source_name: str, outlet_type: str,
+) -> dict | None:
+    """One reporter's exports of one commodity to China, for one month.
+
+    Returns None when the period is not yet published - which is the
+    normal case for the most recent months and must not be logged as a
+    failure. Comtrade answers 200 with count=0 for an unpublished
+    period, not an error.
+    """
+    _comtrade_rate_sleep()
+    try:
+        resp = httpx.get(_COMTRADE_URL, params={
+            "reporterCode": reporter["code"],
+            "period": period,
+            "cmdCode": commodity["code"],
+            "flowCode": "X",
+        }, headers={"Accept": "application/json"},
+            timeout=_CHINA_TIMEOUT)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        logger.warning("[CHINA] comtrade failed reporter=%s cmd=%s "
+                       "period=%s: %s",
+                       reporter["name"], commodity["code"], period, exc)
+        return None
+
+    rows = [r for r in (data.get("data") or [])
+            if str(r.get("partnerCode")) == partner_code]
+    if not rows:
+        return None
+    row = rows[0]
+    value = row.get("primaryValue")
+    if value is None:
+        return None
+
+    year, month = int(period[:4]), int(period[4:])
+    label = commodity["label"]
+    # Whether the figure is the reporter's own filed number or Comtrade's
+    # estimate standing in for one not yet filed. Confirmed live: the
+    # 2026-07 US equipment figure comes back isReported=False with
+    # legacyEstimationFlag=6, i.e. an estimate that WILL be revised once
+    # the real return lands.
+    is_reported = bool(row.get("isReported"))
+    est_flag = row.get("legacyEstimationFlag")
+    title = (f"{reporter['name']} {label} exports to China, "
+             f"{year}-{month:02d}: ${value / 1e9:.3f}bn"
+             f"{'' if is_reported else ' (estimate)'}")
+    return {
+        # Unique per (reporter, commodity, period, value) - NOT per
+        # period alone. Comtrade back-revises: an early month is served
+        # as an estimate and replaced by the reporter's filed figure
+        # weeks later. Keying on the period alone meant the revision hit
+        # the global uq_articles_url index and was silently dropped,
+        # leaving the estimate stored forever as if it were final
+        # (confirmed by re-inserting a changed row - it did not land).
+        # Including the value in the key makes a revised figure a NEW
+        # row, so the series carries both and a consumer can see the
+        # correction. A re-run that fetches the SAME figure still
+        # dedups, which is the behaviour that mattered originally.
+        "url": (f"comtrade-china://{reporter['code']}/"
+                f"{commodity['code']}/{period}/{int(value)}"),
+        "title": title,
+        "summary": None,
+        "body": None,
+        "source": source_name,
+        # Dated to the period it measures, not when it was published.
+        # A trailing-pattern comparison downstream keys on which MONTH
+        # the figure describes.
+        "_pub_date": _china_day(year, month, 15),
+        "metadata": {
+            "source_category": "cn_trade",
+            "source_outlet_type": outlet_type,
+            "source_type": "comtrade_china_trade",
+            "reporter": reporter["name"],
+            "reporter_code": reporter["code"],
+            "partner": "China",
+            "commodity_code": commodity["code"],
+            "commodity_label": label,
+            "flow": "export",
+            "period": f"{year}-{month:02d}",
+            "value_usd": value,
+            # Weight travels with value because a value move alone
+            # cannot separate a price change from a volume change -
+            # the distinction C6 needs to read export controls.
+            "net_weight_kg": row.get("netWgt"),
+            # False means Comtrade estimated this figure because the
+            # reporter has not filed yet; it will be revised. A
+            # consumer comparing a month against its own trailing
+            # pattern must not treat an estimate as a confirmed move.
+            "is_reported": is_reported,
+            "estimation_flag": est_flag,
+        },
+    }
+
+
+def _fetch_comtrade_china_trade(sources: list[dict], days_back: int) -> list[dict]:
+    """IC and equipment exports TO China, as reported by the exporters.
+
+    China's own customs data is unreachable (see seed.py), and
+    Comtrade's China-reported monthly series stops at 2024-12. The
+    partner side is current to within ~2-3 months and measures export
+    controls from the side that imposes them.
+
+    Walks back month by month from the current one. The newest months
+    are usually unpublished and return nothing, which is expected - the
+    walk continues rather than stopping at the first gap, since
+    reporters publish on different schedules.
+    """
+    if not sources:
+        return []
+    source = sources[0]
+    config = source.get("config") or {}
+    reporters = config.get("reporters") or []
+    commodities = config.get("commodities") or []
+    partner_code = config.get("partner_code", "156")
+    outlet_type = config.get("source_outlet_type", "official")
+    source_name = source.get("name", "China Semiconductor Trade")
+    if not reporters or not commodities:
+        logger.warning("[CHINA] comtrade: no reporters/commodities configured")
+        return []
+
+    # Months to attempt, newest first. days_back is a window over the
+    # DATA's own period, so a 30-day run still has to reach back past
+    # the publication lag to find anything at all - hence the floor of
+    # four months rather than days_back/30.
+    months = max(4, (days_back // 30) + 3)
+    now = datetime.now(_CST)
+    periods: list[str] = []
+    year, month = now.year, now.month
+    for _ in range(months):
+        periods.append(f"{year}{month:02d}")
+        month -= 1
+        if month == 0:
+            year, month = year - 1, 12
+
+    articles: list[dict] = []
+    for reporter in reporters:
+        for commodity in commodities:
+            for period in periods:
+                row = _fetch_one_comtrade_period(
+                    reporter, commodity, period, partner_code,
+                    source_name, outlet_type)
+                if row:
+                    articles.append(row)
+    logger.info("[CHINA] comtrade_china_trade reporters=%d periods=%d "
+                "articles=%d", len(reporters), len(periods), len(articles))
+    return articles
+
+
+_NBS_RELEASE_INDEX = "http://www.stats.gov.cn/sj/zxfb/"
+# Article links on the NBS release index: ./202609/t20260915_1965308.html
+_NBS_ARTICLE_RE = re.compile(
+    r'href="(?P<href>\.?/?(?P<ym>20\d{4})/t(?P<date>20\d{6})_\d+\.html)"'
+    r'[^>]*>\s*(?P<title>[^<]{8,80}?)\s*</a>', re.I)
+# The monthly industrial-output release is the one carrying IC production.
+_NBS_OUTPUT_TITLE_RE = re.compile(r"工业增加值")
+# The DATA's own month, from the release title ("2026年8月份规模以上工业
+# 增加值增长5.2%"). Distinct from the publication date: NBS publishes the
+# August figure on 15 September, so keying the period off the URL date
+# would label August's output as September's and shift every month by one.
+_NBS_PERIOD_RE = re.compile(r"(20\d{2})年\s*(\d{1,2})月")
+# 集成电路（亿块） followed by its two table cells: absolute output for the
+# month, then year-on-year percent change. Confirmed live 2026-10-05
+# against the August 2026 release: 529 亿块, +20.6%.
+#
+# The figures are not adjacent to the label - each sits inside a <span>
+# within its own <td>, separated by ~250 characters of inline style
+# attributes. So the row is captured greedily to a fixed width and the
+# numbers pulled from the spans within it, rather than matched
+# positionally.
+_NBS_IC_ROW_RE = re.compile(
+    r"集成电路[（(]亿块[)）](?P<row>.{0,1200})", re.S)
+# A table cell's value: the text inside a <span>, which is where this
+# CMS puts every number.
+_NBS_CELL_RE = re.compile(r"<span[^>]*>([^<>]{1,18})</span>")
+
+
+def _fetch_nbs_ic_output(sources: list[dict], days_back: int) -> list[dict]:
+    """China's own monthly integrated-circuit PRODUCTION volume, from the
+    National Bureau of Statistics.
+
+    The other half of C6. Comtrade's partner-reported series measures what
+    the world ships INTO China; this measures what China itself makes -
+    the substitution read, in units rather than dollars. Together they
+    answer "are controls biting, and is domestic output replacing what
+    was restricted".
+
+    NBS is unreachable from a local dev machine (a network-level block
+    returns "The URL has been blocked as per the instructions of the
+    Competent Government Authority") but answers normally from ECS -
+    confirmed live 2026-10-05, 127KB of real HTML. Its structured
+    easyquery API is WAF-blocked even there (`reason:UrlACL`), so the
+    figure is read from the monthly industrial-output press release,
+    which carries it as a table row.
+    """
+    if not sources:
+        return []
+    source = sources[0]
+    config = source.get("config") or {}
+    outlet_type = config.get("source_outlet_type", "official")
+    source_name = source.get("name", "NBS IC Production (China)")
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
+
+    index = _china_get(config.get("index_url") or _NBS_RELEASE_INDEX)
+    if not index:
+        return []
+
+    articles: list[dict] = []
+    seen: set[str] = set()
+    for m in _NBS_ARTICLE_RE.finditer(index):
+        title = html.unescape(m.group("title")).strip()
+        if not _NBS_OUTPUT_TITLE_RE.search(title):
+            continue
+        href = m.group("href").lstrip(".")
+        url = _NBS_RELEASE_INDEX.rstrip("/") + "/" + href.lstrip("/")
+        if url in seen:
+            continue
+        seen.add(url)
+
+        raw = m.group("date")
+        try:
+            published = _china_day(
+                int(raw[:4]), int(raw[4:6]), int(raw[6:8]))
+        except ValueError:
+            continue
+        if published < cutoff:
+            continue
+
+        page = _china_get(url)
+        if not page:
+            continue
+        ic = _NBS_IC_ROW_RE.search(page)
+        if not ic:
+            logger.info("[CHINA] nbs_ic_output: no IC row in %s", url)
+            continue
+        cells = [c.strip() for c in _NBS_CELL_RE.findall(ic.group("row"))
+                 if c.strip() and c.strip() != "&nbsp;"]
+        # First two numeric cells are the month's output and its
+        # year-on-year percent change, in that order.
+        nums: list[float] = []
+        for c in cells:
+            try:
+                nums.append(float(c.replace(",", "")))
+            except ValueError:
+                continue
+            if len(nums) == 2:
+                break
+        if len(nums) < 2:
+            logger.info("[CHINA] nbs_ic_output: no figures in %s", url)
+            continue
+        output, yoy = nums[0], nums[1]
+
+        # The month the FIGURE describes, read from the release title -
+        # not the publication date. NBS publishes August's output on 15
+        # September, so using the URL date would label every month as
+        # the following one.
+        pm = _NBS_PERIOD_RE.search(title)
+        if pm:
+            period = f"{pm.group(1)}-{int(pm.group(2)):02d}"
+        else:
+            logger.info("[CHINA] nbs_ic_output: no period in title %r", title)
+            continue
+
+        articles.append({
+            # Keyed on the period AND the figure, for the same reason
+            # comtrade-china:// is - NBS revises its monthly series, and
+            # a period-only key would send the revision into the global
+            # uq_articles_url index and silently drop it, leaving the
+            # first-published number stored as if it were final. Both
+            # now land, so a consumer can see the correction; a re-run
+            # that reads the same figure still dedups.
+            "url": f"nbs-ic-output://{period}/{output:g}",
+            "title": (f"China integrated circuit production, "
+                      f"{period}: {output:g} 亿块 ({yoy:+g}% YoY)"),
+            "summary": title,
+            "body": None,
+            "source": source_name,
+            "_pub_date": published,
+            "metadata": {
+                "source_category": "cn_trade",
+                "source_outlet_type": outlet_type,
+                "source_type": "nbs_ic_output",
+                "issuing_body": "NBS",
+                "indicator": "integrated_circuit_production",
+                # 亿块 = 100 million units. Kept in the source's own unit
+                # with the unit named, rather than silently converted -
+                # a converted figure cannot be checked against the
+                # release it came from.
+                "value": output,
+                "unit": "100m_units",
+                "yoy_pct": yoy,
+                # The month measured, not the month published.
+                "period": period,
+                "published_date": f"{raw[:4]}-{raw[4:6]}-{raw[6:8]}",
+                "release_url": url,
+            },
+        })
+    logger.info("[CHINA] nbs_ic_output articles=%d", len(articles))
+    return articles
+
+
+def _fetch_press_cn_english_check(sources: list[dict], days_back: int) -> list[dict]:
+    """Per-company English-coverage check for the China universe.
+
+    Reuses _fetch_press_jp_english_check, which is not Japan-specific
+    despite its name: it takes {code, company, search_query} and runs a
+    DuckDuckGo News search per company. Duplicating it for China would
+    mean two copies of the same rate-limited search loop.
+    """
+    companies = _china_companies(sources)
+    if not companies:
+        logger.warning("[CHINA] press_cn_english_check: no companies")
+        return []
+    config = (sources[0].get("config") or {})
+    body_codes = set(config.get("fetch_body_for_codes") or [])
+
+    articles = _fetch_press_jp_english_check(companies, days_back)
+    fetched = 0
+    for a in articles:
+        meta = a.setdefault("metadata", {})
+        meta["source_type"] = "press_cn_english_check"
+        meta["source_category"] = "cn_english_coverage_check"
+        meta["source_outlet_type"] = "commercial_press"
+        # Article bodies, for the companies that need them. The search
+        # snippet is one truncated sentence ("... according to"), which
+        # is enough to know an article EXISTS but not to read a
+        # production volume or a named customer out of it - the two
+        # things signal-detection-agent's C4 rule requires before an
+        # accelerator announcement counts as displacement.
+        #
+        # Scoped to specific codes rather than applied to every company,
+        # because this costs one page fetch per surviving article and
+        # the coverage check's own job - measuring how fast English
+        # coverage appears - never needed a body. Confirmed live that
+        # the bodies are reachable and substantial (627-6,096
+        # characters across Yahoo Finance, SCMP, Zacks and others).
+        if meta.get("code") in body_codes and a.get("url"):
+            body = _fetch_china_article_body(a["url"])
+            if body:
+                a["body"] = body
+                fetched += 1
+    if body_codes:
+        logger.info("[CHINA] press_cn_english_check bodies fetched=%d "
+                    "for %d scoped codes", fetched, len(body_codes))
+    return articles
 
 
 def _fetch_articles(
@@ -6392,6 +7921,18 @@ def _fetch_articles(
     monoist_capex_sources = [s for s in sources if s.get("source_type") == "monoist_capex"]
     press_jp_sources = [s for s in sources if s.get("source_type") == "press_jp"]
     press_jp_english_check_sources = [s for s in sources if s.get("source_type") == "press_jp_english_check"]
+    # China. The four policy source_types share one fetcher - they differ
+    # by which body issues the measure, not by how the page is parsed -
+    # so they are collected into one list rather than four.
+    china_policy_sources = [s for s in sources if s.get("source_type") in (
+        "mofcom_policy", "miit_policy", "samr_action", "cac_review",
+        "cn_state_press")]
+    cninfo_filing_sources = [s for s in sources if s.get("source_type") == "cninfo_filing"]
+    hkex_filing_sources = [s for s in sources if s.get("source_type") == "hkex_filing"]
+    comtrade_china_sources = [s for s in sources if s.get("source_type") == "comtrade_china_trade"]
+    nbs_ic_output_sources = [s for s in sources if s.get("source_type") == "nbs_ic_output"]
+    press_cn_sources = [s for s in sources if s.get("source_type") == "press_cn"]
+    press_cn_english_check_sources = [s for s in sources if s.get("source_type") == "press_cn_english_check"]
 
     # Resolve the Japanese universe once for the whole run, before any
     # Japan fetcher dispatches - six source_types share it, and each
@@ -6518,6 +8059,27 @@ def _fetch_articles(
 
     if press_jp_english_check_sources:
         articles.extend(_fetch_press_jp_english_check_source(press_jp_english_check_sources, days_back))
+
+    if china_policy_sources:
+        articles.extend(_fetch_china_policy(china_policy_sources, days_back))
+
+    if cninfo_filing_sources:
+        articles.extend(_fetch_cninfo_filing(cninfo_filing_sources, days_back))
+
+    if hkex_filing_sources:
+        articles.extend(_fetch_hkex_filing(hkex_filing_sources, days_back))
+
+    if comtrade_china_sources:
+        articles.extend(_fetch_comtrade_china_trade(comtrade_china_sources, days_back))
+
+    if nbs_ic_output_sources:
+        articles.extend(_fetch_nbs_ic_output(nbs_ic_output_sources, days_back))
+
+    if press_cn_sources:
+        articles.extend(_fetch_press_cn(press_cn_sources, days_back))
+
+    if press_cn_english_check_sources:
+        articles.extend(_fetch_press_cn_english_check(press_cn_english_check_sources, days_back))
 
     articles.sort(
         key=lambda a: (

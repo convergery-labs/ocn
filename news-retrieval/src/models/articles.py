@@ -318,6 +318,16 @@ def create_articles(articles: list[dict]) -> None:
     """
     if not articles:
         return
+    # `_pub_date` is the fetchers' internal field name; pipeline.run()
+    # renames it to `published` at the end of _fetch_articles. A caller
+    # that invokes a fetcher directly - a backfill script, a test - skips
+    # that rename and every row lands with a NULL published, which no
+    # days_back window can ever match again. That happened twice during
+    # the China build and cost 444 rows before it was noticed, so the
+    # rename is enforced here rather than left to the caller.
+    for a in articles:
+        if a.get("published") is None and a.get("_pub_date") is not None:
+            a["published"] = a["_pub_date"]
     with get_db() as conn:
         conn.execute_values(
             "INSERT INTO articles"

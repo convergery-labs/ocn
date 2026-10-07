@@ -3,31 +3,31 @@
   "country": "Japan",
   "name_overrides": [
     {
-      "local_code": "285A",
+      "code": "285A",
       "stored_as": "Kioxia Holdings"
     },
     {
-      "local_code": "6981",
+      "code": "6981",
       "stored_as": "Murata"
     },
     {
-      "local_code": "5803",
+      "code": "5803",
       "stored_as": "Fujikura Ltd"
     },
     {
-      "local_code": "7735",
+      "code": "7735",
       "stored_as": "SCREEN Holdings"
     }
   ],
   "companies": [
     {
-      "local_code": "9984",
+      "code": "9984",
       "company_name": "SoftBank Group",
       "ticker": "9984.T",
       "market": "International",
       "country": "Japan",
       "website": "https://group.softbank",
-      "local_name": "ソフトバンクグループ",
+      "native_name": "ソフトバンクグループ",
       "aliases": [],
       "exclude_terms": [],
       "fiscal_year_end": "03-31",
@@ -161,13 +161,13 @@
       "search_query": "SoftBank Group"
     },
     {
-      "local_code": "285A",
+      "code": "285A",
       "company_name": "Kioxia Holdings",
       "ticker": "285A.T",
       "market": "International",
       "country": "Japan",
       "website": "https://www.kioxia.com",
-      "local_name": "キオクシア",
+      "native_name": "キオクシア",
       "aliases": [],
       "exclude_terms": [],
       "fiscal_year_end": "03-31",
@@ -256,13 +256,13 @@
       "search_query": "Kioxia Holdings"
     },
     {
-      "local_code": "8035",
+      "code": "8035",
       "company_name": "Tokyo Electron",
       "ticker": "8035.T",
       "market": "International",
       "country": "Japan",
       "website": "https://www.tel.com",
-      "local_name": "東京エレクトロン",
+      "native_name": "東京エレクトロン",
       "aliases": [],
       "exclude_terms": [],
       "fiscal_year_end": "03-31",
@@ -352,13 +352,13 @@
       "search_query": "Tokyo Electron"
     },
     {
-      "local_code": "6857",
+      "code": "6857",
       "company_name": "Advantest",
       "ticker": "6857.T",
       "market": "International",
       "country": "Japan",
       "website": "https://www.advantest.com",
-      "local_name": "アドバンテスト",
+      "native_name": "アドバンテスト",
       "aliases": [],
       "exclude_terms": [],
       "fiscal_year_end": "03-31",
@@ -439,13 +439,13 @@
       "search_query": "Advantest"
     },
     {
-      "local_code": "6501",
+      "code": "6501",
       "company_name": "Hitachi",
       "ticker": "6501.T",
       "market": "International",
       "country": "Japan",
       "website": "https://www.hitachi.com",
-      "local_name": "日立製作所",
+      "native_name": "日立製作所",
       "aliases": [],
       "exclude_terms": [],
       "fiscal_year_end": "03-31",
@@ -536,13 +536,13 @@
       "search_query": "Hitachi"
     },
     {
-      "local_code": "6981",
+      "code": "6981",
       "company_name": "Murata Manufacturing",
       "ticker": "6981.T",
       "market": "International",
       "country": "Japan",
       "website": "https://www.murata.com",
-      "local_name": "村田製作所",
+      "native_name": "村田製作所",
       "aliases": [],
       "exclude_terms": [],
       "fiscal_year_end": "03-31",
@@ -623,13 +623,13 @@
       "search_query": "Murata Manufacturing"
     },
     {
-      "local_code": "4063",
+      "code": "4063",
       "company_name": "Shin-Etsu Chemical",
       "ticker": "4063.T",
       "market": "International",
       "country": "Japan",
       "website": "https://www.shinetsu.co.jp",
-      "local_name": "信越化学工業",
+      "native_name": "信越化学工業",
       "aliases": [
         "信越化学"
       ],
@@ -745,13 +745,13 @@
       "search_query": "Shin-Etsu Chemical"
     },
     {
-      "local_code": "5803",
+      "code": "5803",
       "company_name": "Fujikura",
       "ticker": "5803.T",
       "market": "International",
       "country": "Japan",
       "website": "https://www.fujikura.co.jp",
-      "local_name": "フジクラ",
+      "native_name": "フジクラ",
       "aliases": [],
       "exclude_terms": [],
       "fiscal_year_end": "03-31",
@@ -804,13 +804,13 @@
       "search_query": "Fujikura"
     },
     {
-      "local_code": "4062",
+      "code": "4062",
       "company_name": "Ibiden",
       "ticker": "4062.T",
       "market": "International",
       "country": "Japan",
       "website": "https://www.ibiden.com",
-      "local_name": "イビデン",
+      "native_name": "イビデン",
       "aliases": [],
       "exclude_terms": [],
       "fiscal_year_end": "03-31",
@@ -901,13 +901,13 @@
       "search_query": "Ibiden"
     },
     {
-      "local_code": "6723",
+      "code": "6723",
       "company_name": "Renesas Electronics",
       "ticker": "6723.T",
       "market": "International",
       "country": "Japan",
       "website": "https://www.renesas.com",
-      "local_name": "ルネサスエレクトロニクス",
+      "native_name": "ルネサスエレクトロニクス",
       "aliases": [
         "ルネサス"
       ],
@@ -1035,13 +1035,13 @@
       "search_query": "Renesas Electronics"
     },
     {
-      "local_code": "6146",
+      "code": "6146",
       "company_name": "Disco",
       "ticker": "6146.T",
       "market": "International",
       "country": "Japan",
       "website": "https://www.disco.co.jp",
-      "local_name": "ディスコ",
+      "native_name": "ディスコ",
       "aliases": [],
       "exclude_terms": [],
       "fiscal_year_end": "03-31",
@@ -1121,13 +1121,13 @@
       "search_query": "Disco Corporation semiconductor"
     },
     {
-      "local_code": "6762",
+      "code": "6762",
       "company_name": "TDK",
       "ticker": "6762.T",
       "market": "International",
       "country": "Japan",
       "website": "https://www.tdk.com",
-      "local_name": "TDK",
+      "native_name": "TDK",
       "aliases": [],
       "exclude_terms": [],
       "fiscal_year_end": "03-31",
@@ -1205,13 +1205,13 @@
       "search_query": "TDK"
     },
     {
-      "local_code": "6920",
+      "code": "6920",
       "company_name": "Lasertec",
       "ticker": "6920.T",
       "market": "International",
       "country": "Japan",
       "website": "https://www.lasertec.co.jp",
-      "local_name": "レーザーテック",
+      "native_name": "レーザーテック",
       "aliases": [],
       "exclude_terms": [],
       "fiscal_year_end": "06-30",
@@ -1267,13 +1267,13 @@
       "search_query": "Lasertec"
     },
     {
-      "local_code": "4004",
+      "code": "4004",
       "company_name": "Resonac Holdings",
       "ticker": "4004.T",
       "market": "International",
       "country": "Japan",
       "website": "https://www.resonac.com",
-      "local_name": "レゾナック・ホールディングス",
+      "native_name": "レゾナック・ホールディングス",
       "aliases": [
         "レゾナック"
       ],
@@ -1353,13 +1353,13 @@
       "search_query": "Resonac Holdings"
     },
     {
-      "local_code": "7735",
+      "code": "7735",
       "company_name": "SCREEN Holdings",
       "ticker": "7735.T",
       "market": "International",
       "country": "Japan",
       "website": "https://www.screen.co.jp",
-      "local_name": "SCREENホールディングス",
+      "native_name": "SCREENホールディングス",
       "aliases": [
         "SCREEN"
       ],
@@ -1454,13 +1454,13 @@
       "search_query": "SCREEN Holdings"
     },
     {
-      "local_code": "6525",
+      "code": "6525",
       "company_name": "Kokusai Electric",
       "ticker": "6525.T",
       "market": "International",
       "country": "Japan",
       "website": "https://www.kokusai-electric.com",
-      "local_name": "KOKUSAI ELECTRIC",
+      "native_name": "KOKUSAI ELECTRIC",
       "aliases": [],
       "exclude_terms": [],
       "fiscal_year_end": "03-31",
@@ -1564,13 +1564,13 @@
       "search_query": "Kokusai Electric"
     },
     {
-      "local_code": "3436",
+      "code": "3436",
       "company_name": "SUMCO",
       "ticker": "3436.T",
       "market": "International",
       "country": "Japan",
       "website": "https://www.sumcosi.com",
-      "local_name": "SUMCO",
+      "native_name": "SUMCO",
       "aliases": [],
       "exclude_terms": [],
       "fiscal_year_end": "12-31",
@@ -1651,13 +1651,13 @@
       "search_query": "SUMCO"
     },
     {
-      "local_code": "4186",
+      "code": "4186",
       "company_name": "Tokyo Ohka Kogyo",
       "ticker": "4186.T",
       "market": "International",
       "country": "Japan",
       "website": "https://www.tok.co.jp",
-      "local_name": "東京応化工業",
+      "native_name": "東京応化工業",
       "aliases": [
         "東京応化"
       ],
@@ -1727,13 +1727,13 @@
       "search_query": "Tokyo Ohka Kogyo"
     },
     {
-      "local_code": "6315",
+      "code": "6315",
       "company_name": "Towa",
       "ticker": "6315.T",
       "market": "International",
       "country": "Japan",
       "website": "https://www.towajapan.co.jp",
-      "local_name": "TOWA",
+      "native_name": "TOWA",
       "aliases": [],
       "exclude_terms": [],
       "fiscal_year_end": "03-31",

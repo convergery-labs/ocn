@@ -24,15 +24,27 @@
 | `src/routes/` | FastAPI `APIRouter` definitions, one file per resource |
 | `src/routes/market.py` | Market data read endpoints: 6 `GET` routes reading from DynamoDB, served at `/market/*` |
 
-## Taiwan Market Signal (`taiwan_market_signal` domain)
+## Market Signal domains
 
-Fetch/dedup only - see `CLAUDE.md`'s "Taiwan Market Signal" section for the full source
-table, schedule, and the fetch/classify boundary with `signal-detection-agent` (which owns
-all ranking, clause-code lookup, translation, and LLM classification for this domain).
-Ticker universe (`TAIWAN_TICKER_UNIVERSE`, `src/seed.py`) and its four source configs
-(TWSE/TPEx revenue, TWSE/TPEx material announcements, GDELT) are defined in `src/seed.py`;
-fetchers (`source_type`: `twse_revenue`, `tpex_revenue`, `twse_material`, `tpex_material`,
-`gdelt`) live in `src/pipeline.py`.
+Four market domains - Taiwan, Korea, Japan, China - all **fetch/dedup only**. Ranking,
+translation, and LLM classification belong to `signal-detection-agent`, not here. Each has its
+own company universe and source configs in `src/seed.py` and its own fetchers in
+`src/pipeline.py`, partitioned by `source_type` in `_fetch_articles`. They share no code
+paths with each other beyond the generic plumbing (`articles` table, the global
+`uq_articles_url` dedup index, trafilatura, pdfplumber).
+
+See `CLAUDE.md` for each domain's full source table, sourcing decisions, and schedule.
+
+| Domain | Universe constant | `source_type`s |
+|--------|-------------------|----------------|
+| `taiwan_market_signal` | `TAIWAN_TICKER_UNIVERSE` | `twse_revenue`, `tpex_revenue`, `twse_material`, `tpex_material`, `gdelt` |
+| `korea_market_signal` | `KOREA_TICKER_UNIVERSE` | `dart_filing`, `kr_customs_export`, `gdelt` (+ RSS sources) |
+| `japan_market_signal` | `JAPAN_TICKER_UNIVERSE` | `irbank_financials`, `irbank_buyback`, `irbank_company_reference`, `kabutan_tdnet_mirror`, `kabutan_buyback`, `edinet_filing`, `edinet_buyback_status`, `edinet_extraordinary_report`, `seaj_billings`, `monoist_capex`, `press_jp`, `press_jp_english_check` |
+| `china_market_signal` | `CHINA_TICKER_UNIVERSE` | `mofcom_policy`, `miit_policy`, `samr_action`, `cac_review`, `cn_state_press`, `hkex_filing`, `cninfo_filing`, `press_cn`, `press_cn_english_check` |
+
+Japan reads its universe live from research-universe (`get_tracked_company_universe`) with
+seeded `config.companies` as fallback. China is hardcoded - research-universe's `country`
+column is inconsistent for Chinese companies; see `CLAUDE.md`.
 
 ## App layers
 

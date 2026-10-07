@@ -55,7 +55,9 @@ signal-detection-agent/
 │   │   ├── taiwan_signal_classifier.py   (taiwan_market_signal: rank/clause-lookup/translate/classify)
 │   │   ├── japan_companies.py        (japan_market_signal: the one static company/customer table)
 │   │   ├── japan_signal_classifier.py   (japan_market_signal: J1-J7 + WATCHING)
-│   │   └── japan_signal_view.py      (japan_market_signal: row -> card shaping)
+│   │   ├── japan_signal_view.py      (japan_market_signal: row -> card shaping)
+│   │   ├── china_companies.py        (china_market_signal: the one static company table - signal_roles + read-through)
+│   │   └── china_signal_classifier.py   (china_market_signal: Gate 1 + C1-C7, read-through, confirmation, translate)
 │   └── adapters/
 │       ├── news_client.py
 │       └── web_search.py
@@ -171,6 +173,79 @@ fetches this domain fetch/dedup-only, same boundary as Taiwan/Korea. Results per
 same `agent_classifications` table, `source_type = 'japan_market_signal'`, distinguished by
 `metadata.source_category` per signal type (`jp_forecast`, `jp_industry`, `jp_capex`,
 `jp_ownership`, `jp_buyback`, `jp_watching`, etc.).
+
+## China Signal Pipeline
+
+`china_market_signal` (MOFCOM/MIIT/SAMR/CAC policy, cninfo + HKEX filings, UN Comtrade and
+NBS trade data, Chinese press) is classified by `pipeline/china_signal_classifier.py`. Same
+fetch/classify boundary as Taiwan/Japan/Korea: news-retrieval fetches and dedups, everything
+else happens here.
+
+**This is the only domain where a positive local signal is usually a NEGATIVE read for the
+US name attached to it.** Naura winning a tool slot is revenue leaving Applied Materials.
+That inversion is carried explicitly as `direction` on every read-through link, and it is
+why this domain needs a direction field where the others do not.
+
+All seven of the spec's signal types are implemented, plus a triage gate:
+
+| | What it reads |
+|---|---|
+| Gate 1 | Filing-type triage - 4 tiers, discards ~93% of filings before anything expensive runs |
+| C1 | Policy binding verdict (BINDING/NON-BINDING/UNCLEAR) - the one judgment call, 2 confirmation calls, disagreement → UNCLEAR |
+| C2 | Substitution progress - YoY change the filing states about itself, sector MAD baseline |
+| C3 | Capacity commitment - with restatement collapsing (Hua Hong filed 13 announcements tracking one acquisition over 10 months) |
+| C4 | Accelerator milestone - 4 filters, accelerator-role companies only |
+| C5 | Platform capex - platform-role companies only |
+| C6 | Trade deviation - per-series MAD over the import side (Comtrade partner-reported) and production side (NBS) |
+| C7 | Named US-company action |
+
+Thresholds are derived from the stored distribution (MAD, not standard deviation - outlier
+resistant), never lifted from the spec. Trust floors (`_C2_MIN_OBSERVATIONS = 8`,
+`_C6_MIN_PERIODS = 6`) make the classifier refuse to judge rather than fabricate a baseline.
+
+**One static table: `pipeline/china_companies.py`.** `CHINA_COMPANIES`, keyed by exchange
+code, holding each company's `signal_roles` (which classifiers apply) and `read_through`
+(which US tickers the signal reaches, with direction and the signal categories it applies
+to). Three separate code-keyed structures used to hold this and a missed edit failed
+silently - a new platform absent from the C5 code set makes C5 never fire for it, with no
+error. `codes_with_role()` and `read_through_for()` are now derived views over the one
+table, the same consolidation `japan_companies.py` made for the same reason. Same intended
+migration unit into research-universe, and the same caveat: the links are analyst judgments,
+not filed facts.
+
+Direction is per `(company, counterparty, signal type)`, not per pair - Baidu reads `same`
+toward Nvidia under C5 (it buys GPUs) and `opposite` under C4 (its own accelerator
+programme displaces them).
+
+**WOULD CONFIRM / WOULD CONTRADICT** (spec Section 8) is attached to every signal after
+read-through: one `CHINA_SIGNAL_MODEL` call stating what future observation would support
+or undermine the reading, falling back to a per-`(signal type, direction)` template. Two
+guards, both enforced rather than merely prompted - the model is passed the US tickers
+rather than inferring them, and any number, date or calendar period the signal's own
+metadata does not already contain is rejected. A specific-sounding fabricated threshold
+reads as analysis and nothing downstream can catch it.
+
+Every LLM call in this domain (C1's verdict, the confirmation pass, translation) routes
+through `CHINA_SIGNAL_MODEL`, which falls back to `SEC_FILING_MODEL`.
+
+Entry point: `python -m src classify-china-signals` (CLI only, same as every other
+non-`ai_news` domain), scheduled twice daily - 10:00 UTC after the post-close filings fetch
+and 14:00 UTC after the policy series ends - via
+`signal_detection_agent_china_signals_filings`/`_evening` in
+`infra/modules/ecs_cluster/services.tf`. Both default to today (UTC) and skip
+already-classified `source_id`s, so the passes are additive, not duplicative.
+
+Results persist to `agent_classifications`, `source_type = 'china_market_signal'`,
+distinguished by `metadata.source_category` (`cn_policy`, `cn_disclosure`, `cn_trade`,
+`cn_press`) and `metadata.signal_type` (`C1`..`C7`, `gate1`).
+
+**No China-specific read route exists, and none is needed.** The generic `GET /results`
+returns the whole `metadata` JSONB, so `read_through`, `direction`, `would_confirm` and
+every extracted figure come back as stored. `GET /results?source_type=china_market_signal&code=688981`
+filters to one company - `code` is a generic filter on `metadata.code`, serving Japan and
+China alike. A card-shaping view (Japan's `japan_signal_view.py` equivalent) is deliberately
+not built while the classifier is still being tuned: raw metadata shows the fields a view
+would hide.
 
 ## Classification Retention (Postgres)
 

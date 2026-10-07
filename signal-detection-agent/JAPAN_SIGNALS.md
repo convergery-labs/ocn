@@ -31,7 +31,7 @@ AI-universe `POST /run` pipeline, which this domain does not use.
 
 ## 1. Overview
 
-`japan_market_signal` tracks 20 Japanese AI-supply-chain companies — semiconductor equipment,
+`japan_market_signal` tracks 19 Japanese AI-supply-chain companies — semiconductor equipment,
 materials, and electronics — and classifies disclosure events as **signal**, **weak_signal**,
 or **noise**.
 
@@ -43,13 +43,13 @@ cannot express that distinction; a per-company habit can.
 | Property | Value |
 |---|---|
 | Domain slug | `japan_market_signal` |
-| Tracked companies | 20 (static list) |
+| Tracked companies | 19, read from research-universe |
 | Fetch source types | 12 |
 | Signal types | 8 — J1, J1b, J2, J3, J4, J5, J6, J7, plus WATCHING |
 | LLM usage | J7 relevance, field translation, COMPANY LEVEL summary synthesis |
 | Deterministic types | J1–J6 — arithmetic and lookup only |
 | Storage | `agent_classifications` plus 3 cache tables |
-| HTTP surface | 3 read-only routes; all commands are CLI-only |
+| HTTP surface | 2 read-only routes; all commands are CLI-only |
 
 Five of the seven spec signal types are arithmetic or a lookup. A model is used only to judge
 whether a news headline states a fact or an opinion, which is the spec's explicit design intent.
@@ -71,6 +71,13 @@ Data flows one direction. A rule change requires no re-fetch; a fetcher failure 
 classification logic. This matches the boundary Taiwan and Korea use.
 
 ```
+                    research-universe
+                    ─────────────────
+                    the 19 tracked companies + 112 disclosed customers
+                              │
+              ┌───────────────┴───────────────┐
+              │ ?tracked=true                 │ &include_customers=true
+              ▼                               ▼
 news-retrieval                       signal-detection-agent
 ──────────────                       ──────────────────────
 IRBANK     ┐                         ┌─ japan_company_habits
@@ -89,6 +96,10 @@ DuckDuckGo ┘                         │      ├─ J2  classify_results_agai
                                      └─→ agent_classifications
                                             source_type = 'japan_market_signal'
 ```
+
+research-universe supplies the company universe to both services and is read once per run on
+each side (Section 3). It holds no signals and no classification state; a company is defined
+there once for every market rather than once per service.
 
 ### Layering
 
@@ -119,36 +130,129 @@ a one-day window.
 
 ## 3. The Tracked Universe
 
-**Defined in:** news-retrieval's `seed.py` as `JAPAN_TICKER_UNIVERSE`; mirrored in this service
-at `pipeline/japan_companies.py` as `JAPAN_COMPANIES` (keyed by code), with
-`JAPAN_TICKER_UNIVERSE` kept as a list view over the same objects.
+Every fetcher and classifier is scoped against one list of **19 companies**. Both services read
+it from **research-universe**, which owns this data.
 
-Every fetcher and classifier is scoped against this static, hand-maintained list of 20
-companies.
+```
+GET {RESEARCH_UNIVERSE_URL}/companies?country=Japan&tracked=true
+GET {RESEARCH_UNIVERSE_URL}/companies?country=Japan&tracked=true&include_customers=true
+```
+
+news-retrieval makes the first call; this service makes the second, because its classifiers
+also need each company's disclosed customers. Both resolve the universe **once per run** —
+news-retrieval before any fetcher dispatches, this service on first access — so six Japan
+fetchers in one run make one HTTP call between them, not six.
+
+`tracked=true` is what narrows the catalogue to this pipeline's own universe, and it is not the
+same question as country: research-universe holds 62 Japanese companies, of which 19 are
+tracked. Filtering on country alone would have the fetchers pulling filings for Keyence and
+Daikin.
+
+### Fields
 
 | Field | Type | Example | Notes |
 |---|---|---|---|
-| `code` | TEXT | `"6857"` | Handled as text throughout — Kioxia's code is `"285A"` |
-| `company` | TEXT | `"Advantest"` | English name |
-| `native_name` | TEXT | `"アドバンテスト"` | Official Japanese name |
-| `short_name` | TEXT \| None | `"レゾナック"` | Populated where press coverage uses an abbreviated form |
-| `exchange` | TEXT | `"TSE"` | |
+| `code` | TEXT | `"6857"` | Text throughout — Kioxia's code is `"285A"`. The key filings are published under, and the only one EDINET/TDnet/IRBANK answer to |
+| `company_name` | TEXT | `"Advantest"` | English name |
+| `native_name` | TEXT | `"アドバンテスト"` | Full legal Japanese name |
+| `aliases` | TEXT[] | `["レゾナック"]` | Other written forms — see below |
+| `search_query` | TEXT | `"Disco Corporation semiconductor"` | What to type into an English web search. Set for 2 of 19 |
 | `fiscal_year_end` | TEXT (MM-DD) | `"03-31"` | A recurring year-end, not a full date |
+| `ticker` | TEXT | `"6857.T"` | Exchange-suffixed. The pipeline joins on `code`, not this |
 
-`fiscal_year_end` is load-bearing: most tracked companies close their fiscal year on 31 March
-rather than 31 December, and every date and progress calculation reads it per company.
+Field names are the same on both sides — research-universe serves `code` and `native_name`,
+and both pipelines read them under those names. They were briefly different, and the
+translation layer that bridged them is what failed silently when it went stale; see
+Availability below.
+
+The API also carries a market profile — `market_cap_usd_bn`, `market_cap_local` with
+`local_currency`, `index_name` with `index_weight_pct`, `home_market_rank`,
+`domestic_sales_pct` with `financials_period`, and `market_data_as_of`. These are surfaced by
+`GET /japan-signals/universe` (Section 10) and feed no classification rule.
+
+`fiscal_year_end` is load-bearing: most tracked companies close on 31 March rather than
+31 December, and every date and progress calculation reads it per company.
+
+`market_data_as_of` dates the market snapshot alone. `domestic_sales_pct` comes from the annual
+report and is dated by `financials_period` instead — one date cannot honestly stamp both,
+because they go stale at completely different rates.
 
 ### Name matching
 
-Japanese press coverage frequently uses an abbreviated company name — Resonac Holdings appears
-without the "Holdings" element, for example. Every name-matching function checks `native_name`
-first and falls back to `short_name`, which is populated for the companies whose press coverage
-requires it (Resonac Holdings, Renesas Electronics).
+Japanese press routinely uses an abbreviated company name. Matching on the full legal name
+alone finds **zero** articles for Resonac Holdings (レゾナック・ホールディングス) and Renesas
+Electronics (ルネサスエレクトロニクス), where the abbreviated forms find 5 and 7 respectively
+over the same sample.
+
+Every name-matching function therefore checks `native_name` first, then **every** entry in
+`aliases`. Five companies carry one today:
+
+| Code | Company | Alias |
+|---|---|---|
+| 4063 | Shin-Etsu Chemical | 信越化学 |
+| 7735 | SCREEN Holdings | SCREEN |
+| 4186 | Tokyo Ohka Kogyo | 東京応化 |
+| 4004 | Resonac Holdings | レゾナック |
+| 6723 | Renesas Electronics | ルネサス |
+
+`aliases` is a list rather than a single short-name field because Korea needs several forms per
+company — a group prefix plus variants — and matching reads all of them rather than the first,
+so array order never decides which form is tried.
+
+### `search_query`
+
+`press_jp_english_check` runs a general English web search per company. Two company names are
+ordinary English words, and searching them bare returns unrelated results: **Disco** and
+**Towa** each carry `"<name> Corporation semiconductor"`. The other seventeen search on their
+own name.
+
+### Availability
+
+There is no local copy of the universe in either service. A failure to load raises
+`UniverseUnavailable` and the run exits non-zero.
+
+That is deliberate. A hardcoded table of the same 19 companies used to sit in
+`pipeline/japan_companies.py` as a fallback, with a seeded `config.companies` doing the same
+job in news-retrieval. Both were deleted, because by the time either was a fallback it had
+already stopped being the same data: the database said Kioxia Holdings, Fujikura and Murata
+Manufacturing where the table still said Kioxia, Fujikura Ltd and Murata. Falling back meant
+serving names corrected months earlier, and saying nothing about it.
+
+A Japan job is a one-off scheduled task. One that exits non-zero is noticed within the hour;
+one that quietly classifies against stale companies is not noticed at all.
+
+The loader also checks the response is **usable**, not merely present. A field rename once
+returned HTTP 200 with every row intact and every name null — structurally fine, and empty
+where it counted — so a response carrying no `company` or `native_name` on any row is
+rejected rather than accepted as an empty universe.
+
+### Approaches considered
+
+**A static table in each service.** Unworkable, and removed. It puts the same company in
+several places at once — a ticker universe in news-retrieval, a company profile and a
+read-through table here — which lets them disagree, and names the same idea `code` in one and
+`ticker` in another. A single owner means a company is defined once for every market rather
+than once per service.
+
+**Keeping the static table as a fallback.** Tried, and removed for the reason under
+Availability above: a second copy of reference data drifts, and a fallback that serves drifted
+data silently is worse than a run that fails.
+
+**Country filter alone.** Rejected: returns 62 Japanese companies, only 19 of them tracked.
+
+**A dedicated bulk endpoint.** Rejected: `GET /companies` already filters and paginates, so a
+second route would duplicate that logic and leave two listings to keep in step. The tracked
+filter and optional customer nesting were added to the existing endpoint instead.
+
+**Customers nested by default.** Rejected: only this service's classifiers read them, and
+every other caller of a ~1,470-row catalogue would pay for a join that no other row has data
+for. `include_customers=true` is opt-in.
 
 ### Delisted company
 
-Shinko Electric (6967) is delisted. Its row remains in the universe so historical filings tied
-to its code stay findable; no fetcher pulls new data for it.
+Shinko Electric (6967) is delisted and is **not** in the universe. Filings already stored
+against its code remain in `articles`; no fetcher pulls new data for it and no classifier
+scopes against it.
 
 ---
 
@@ -457,7 +561,7 @@ its own.
 **Dedup URL:** the article's own URL
 
 MONOist's 工場ニュース (Factory News) series. The listing offers no per-company query, so the
-whole listing is fetched and filtered client-side against `native_name`/`short_name`.
+whole listing is fetched and filtered client-side against `native_name` and `aliases`.
 
 For each article surviving the company filter, the article's full page is fetched separately and
 its body extracted — one extra request per matched article, not per listing row. A one-month
@@ -490,7 +594,7 @@ Two sub-sources fetched independently and combined into one source type.
 | Per-article date fetch | No — the listing carries the timestamp | Yes — the listing carries no date |
 
 Neither listing offers a per-company query; each is fetched once and filtered client-side
-against `native_name`/`short_name`.
+against `native_name` and `aliases`.
 
 Jiji's listing carries a date/time with no year (`"09/28 19:02"`); the current UTC year is
 applied, since the listing is always current. Newswitch's listing carries no publish date, so
@@ -1134,6 +1238,12 @@ J3 and WATCHING use synthetic keys because neither describes a specific article.
 | `JAPAN_SIGNAL_DOMAIN` | `japan_market_signal` | news-retrieval domain slug |
 | `JAPAN_SIGNAL_MODEL` | falls back to `SEC_FILING_MODEL` | Model for J7 relevance, field translation, and COMPANY LEVEL summary synthesis |
 | `EDINET_API_KEY` | — | Required by news-retrieval for all three EDINET source types |
+| `RESEARCH_UNIVERSE_URL` | — | research-universe base URL, e.g. `http://research-universe.staging.ocn.internal:8007`. **Required.** Unset or unreachable raises `UniverseUnavailable` and the run exits non-zero — there is no local copy (Section 3) |
+| `RESEARCH_UNIVERSE_API_KEY` | — | Service key (`ru_` prefix). The companies listing is readable without it; the key is sent when present |
+
+Both variables are set on this service and on news-retrieval, and both point at the internal
+service-discovery address rather than the load balancer — the ALB serves research-universe
+under a `/universe` path prefix that the internal address does not use.
 
 `JAPAN_SIGNAL_MODEL` falls back to `SEC_FILING_MODEL`, this codebase's structured-extraction
 tier, rather than the cheaper `OPENAI_MODEL_V2` tier used for forced one-word calls. The
@@ -1183,7 +1293,38 @@ batch.
 Results backed by a real article pass through `translate_japan_articles()` in one batched pass;
 J3's results are appended afterward and bypass translation.
 
-### 9.2 Habit computation
+### 9.2 The tracked universe — `pipeline/japan_companies.py`
+
+| Function | Returns |
+|---|---|
+| `japan_ticker_universe()` | Every tracked company |
+| `company_for(code)` | One company, or `None` |
+| `valuation_for(code, as_of=None)` | That company's market figures with `asOf` and `isStale` attached |
+| `is_stale(as_of=None, code=None)` | Whether a company's market figures need a caveat |
+| `mentioned_customers(code, text)` | Which of that company's disclosed customers `text` actually names, as `{name, type}` |
+| `reset_universe_cache()` | Drops the fetched universe so the next read re-fetches. Tests only |
+
+Every one of these raises `UniverseUnavailable` on first use if research-universe cannot be
+reached, and no caller catches it. Each answers a question about which companies are tracked,
+and there is nothing truthful to return when that is unknown.
+
+These are functions, not module-level constants, because the universe is fetched at runtime: a
+constant would be bound at import time in each consuming module, and a universe fetched
+afterwards could never reach it. Nothing fetches at import — a module can be imported without
+network access, and the first *call* is what loads. Later calls reuse the result for the life
+of the process.
+
+Tests inject a fixture universe directly into the cache (`tests/conftest.py`, autouse) rather
+than reaching the service.
+
+`mentioned_customers` matches against the company's own disclosed customer list rather than
+extracting freely, so the candidate set is known and no model call is needed. That also bounds
+the failure mode: a missed alias loses a link, where free extraction could invent one. Latin
+aliases match on a word boundary — "ASE" sits inside "PHASE" — while Japanese forms match as
+plain substrings, since Japanese has no word breaks. Customers with no ticker are skipped:
+nothing a reader can look up means nothing actionable.
+
+### 9.3 Habit computation
 
 | Function | Returns |
 |---|---|
@@ -1195,7 +1336,7 @@ J3's results are appended afterward and bypass translation.
 
 All are pure functions without database access.
 
-### 9.3 Classifiers
+### 9.4 Classifiers
 
 | Function | Reads | Emits |
 |---|---|---|
@@ -1208,14 +1349,14 @@ All are pure functions without database access.
 | `classify_press(articles, stored_habits, latest_progress_by_code)` | `jp_press` | J7 |
 | `classify_stale_revision_pattern(articles, stored_habits)` | `jp_forecast` history | WATCHING |
 
-### 9.4 Controller layer — `controllers/run.py`
+### 9.5 Controller layer — `controllers/run.py`
 
 | Function | Purpose |
 |---|---|
 | `run_japan_signal_classification(job_id, from_date, to_date)` | Pool runs, load caches, classify, dedup, insert |
 | `refresh_japan_habits(from_date, to_date, computed_from_years)` | Recompute all three caches; run WATCHING |
 
-### 9.5 Model layer
+### 9.6 Model layer
 
 | Module | Table |
 |---|---|
@@ -1233,19 +1374,20 @@ under the `/agent/*` prefix.
 
 ### `GET /japan-signals/universe`
 
-Returns the 19-company tracked list from `JAPAN_COMPANIES` in memory, rather than from
+Returns the 19-company tracked list from the in-memory universe (Section 3), rather than from
 `agent_classifications`, where the same 19 companies would repeat across every row.
 
 Each entry is built field by field rather than spread from the record: spreading leaked the
 market figures twice (once snake_case at the top level, again camelCase inside
-`marketWeight`) and carried internal fields like `fiscal_year_end` along unasked.
+`marketWeight`) and carried internal fields like `fiscal_year_end` along unasked. Building the
+response explicitly also means the shape is fixed by this route, not by the universe's storage
+format — the field names here are this service's own, and do not change with research-universe's.
 
 | Field | Notes |
 |---|---|
 | `code`, `company`, `native_name` | Identity |
-| `marketWeight` | `marketCapJpyTn`, `marketCapUsdBn`, `tsePrimePct`, `japanRank`, `japanSalesPct`, plus `asOf` and `isStale` so a consumer cannot show a months-old market cap as current |
-| `customers[]` | `name`, `ticker`, `pct_of_sales`, `period`, `aliases`, `relationship`, `is_distributor` |
-| `japanSalesNote` | Only where a company's Japan sales share needs a caveat (SoftBank) |
+| `marketWeight` | `marketCapJpyTn`, `marketCapUsdBn`, `tsePrimePct`, `japanRank`, `japanSalesPct`, plus `asOf` and `isStale` so a consumer cannot show a months-old market cap as current. `asOf` is that company's own `market_data_as_of` |
+| `customers[]` | `name`, `ticker`, `pct_of_sales`, `period`, `aliases`, `relationship`, `is_distributor`. Ordered by disclosed share, largest first, with undisclosed last |
 
 `pct_of_sales: null` means the company does not disclose that customer at Japan's 10%
 threshold — which is itself information, not a missing value. `relationship` defaults to
@@ -1324,6 +1466,9 @@ runs the WATCHING check against that pool. It defaults to `--from-date = today �
 ```bash
 # IRBANK/Kabutan/EDINET history — matches refresh-japan-habits' 10-year window
 python -m src trigger --domain japan_market_signal --days-back 3650
+# news-retrieval's own docs cite 1825 (5 years) for this same flag: that is the
+# minimum the spec requires for a usable habit, not a ceiling. 3650 is used here
+# so the fetch window and the habit window below cover the same span.
 
 # SEAJ history from the Excel archive (news-retrieval)
 python -m src backfill-japan-seaj
@@ -1410,7 +1555,7 @@ at the database level, so a re-run neither re-classifies nor duplicates prior wo
 ### Cache reads
 
 `get_all_habits()`, `get_all_progress_habits()` and `get_all_company_reference()` are each called
-once per classification run. With 20 companies these are small reads, and every per-article
+once per classification run. With 19 companies these are small reads, and every per-article
 lookup resolves against an in-memory dict.
 
 ### Incremental fetching
@@ -1510,7 +1655,7 @@ rules as every other row.
 | Path | Contents |
 |---|---|
 | `src/pipeline/japan_signal_classifier.py` | All eight classifiers and habit computation |
-| `src/pipeline/japan_companies.py` | The one static table: 19 companies, their market weight and disclosed customers |
+| `src/pipeline/japan_companies.py` | Reads the 19-company universe from research-universe. No local copy |
 | `src/pipeline/japan_signal_view.py` | Row -> card shaping for `GET /japan-signals/results` |
 | `src/models/japan_company_habits.py` | J1 habit storage |
 | `src/models/japan_progress_habits.py` | J2 habit storage |

@@ -30,6 +30,7 @@ from models.jobs import (
     get_completed_job_for_run,
     get_existing_geopolitical_signal_article_ids,
     get_existing_japan_signal_source_ids,
+    get_existing_china_signal_source_ids,
     get_existing_korea_signal_source_ids,
     get_existing_macro_signal_source_ids,
     get_existing_taiwan_source_ids,
@@ -39,6 +40,7 @@ from models.jobs import (
     get_waiting_geopolitical_signal_articles,
     insert_geopolitical_signal_classification,
     insert_japan_signal_classification,
+    insert_china_signal_classification,
     insert_korea_signal_classification,
     insert_macro_signal_event,
     insert_taiwan_signal_classification,
@@ -73,6 +75,7 @@ from pipeline.japan_signal_classifier import (
     compute_all_japan_progress_habits,
 )
 from pipeline.japan_companies import japan_ticker_universe
+from pipeline.china_signal_classifier import classify_china_signal_batch
 from pipeline.korea_signal_classifier import classify_korea_signal_batch
 from pipeline.korea_signal_summary import generate_korea_signal_summary
 from pipeline.korea_ticker_universe import KOREA_TICKER_UNIVERSE
@@ -976,6 +979,79 @@ async def run_korea_signal_classification(job_id: int, from_date: str, to_date: 
 
     logger.info(
         "[KOREA_SIGNAL] job=%d runs=%d pooled_articles=%d classified=%d"
+        " already_done=%d inserted=%d",
+        job_id, len(run_ids), len(all_articles), len(classified),
+        len(already_done), inserted,
+    )
+    update_job_status(job_id, "completed", article_count=inserted, set_completed_at=True)
+
+
+async def run_china_signal_classification(job_id: int, from_date: str, to_date: str) -> None:
+    """Classify china_market_signal items across ALL of news-retrieval's
+    completed runs in [from_date, to_date] - same pooling reasoning as
+    run_korea_signal_classification: news-retrieval polls this domain's
+    policy sources every 4 hours, so a single day legitimately spans
+    several completed runs and reading only the latest would silently
+    drop earlier ones.
+
+    Pool -> classify -> dedup -> insert, no re-ranking step: no China
+    classifier judges an item against a field of peers the way Taiwan's
+    YoY ranking does.
+
+    Dedup is on the article's own url, which news-retrieval already
+    guarantees globally unique - see insert_china_signal_classification.
+    """
+    update_job_status(job_id, "running")
+    try:
+        run_ids = await list_completed_runs(
+            config.CHINA_SIGNAL_DOMAIN, from_date, to_date,
+        )
+        all_articles: list[dict[str, Any]] = []
+        seen_urls: set[str] = set()
+        for run_id in run_ids:
+            for article in await get_run_articles(run_id):
+                url = article.get("url")
+                if url and url not in seen_urls:
+                    seen_urls.add(url)
+                    all_articles.append(article)
+    except NewsRetrievalError:
+        logger.exception(
+            "Failed to fetch china_market_signal articles for job %d", job_id,
+        )
+        update_job_status(job_id, "failed", set_completed_at=True)
+        return
+
+    if not all_articles:
+        update_job_status(job_id, "completed", article_count=0, set_completed_at=True)
+        return
+
+    classified = classify_china_signal_batch(all_articles)
+
+    candidate_source_ids = [
+        c["article"]["url"] for c in classified if c["article"].get("url")
+    ]
+    already_done = get_existing_china_signal_source_ids(candidate_source_ids)
+    to_insert = [
+        c for c in classified
+        if c["article"].get("url") not in already_done
+    ]
+
+    update_job_status(job_id, "running", article_count=len(to_insert))
+
+    inserted = 0
+    for c in to_insert:
+        try:
+            insert_china_signal_classification(job_id, c["article"], c["result"])
+            inserted += 1
+        except Exception:
+            logger.exception(
+                "Failed to insert china_market_signal classification for"
+                " url=%s (job %d)",
+                c["article"].get("url"), job_id,
+            )
+
+    logger.info(
+        "[CHINA_SIGNAL] job=%d runs=%d pooled_articles=%d classified=%d"
         " already_done=%d inserted=%d",
         job_id, len(run_ids), len(all_articles), len(classified),
         len(already_done), inserted,
