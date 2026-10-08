@@ -289,6 +289,59 @@ def classify_korea_signals(from_date: str | None, to_date: str | None) -> None:
     logger.info("korea_market_signal job_id=%s finished", job_id)
 
 
+@cli.command("refresh-china-baselines")
+@click.option(
+    "--years",
+    default=5,
+    show_default=True,
+    help="How many years of stored history to pool. Five, matching the "
+    "window classify-china-signals rebuilds from, so a manual refresh "
+    "and a scheduled one produce the same baselines. Asking for more "
+    "than exists is free - the window selects completed runs, and a "
+    "year with none contributes nothing and costs nothing. Most of "
+    "this universe cannot fill it either way: five of the twenty "
+    "companies listed in 2022 or later, so their entire filing history "
+    "is four years or less (an eight-year Hygon fetch returned exactly "
+    "what a four-year fetch already had).",
+)
+@click.option(
+    "--refetch",
+    is_flag=True,
+    default=False,
+    help="Re-fetch revenue figures from cninfo and Alpha Vantage before "
+    "recomputing, instead of using what news-retrieval has stored. Slow "
+    "(one request per company) and only worth doing when companies have "
+    "filed since the last fetch - monthly is more than enough.",
+)
+def refresh_china_baselines_cmd(years: int, refetch: bool) -> None:
+    """Recompute every company's C2 baseline from the full stored
+    history and overwrite the cache.
+
+    Occasional, not per-classification-pass. The daily
+    classify-china-signals run pools a single day of filings, which
+    cannot rebuild a company's own trailing distribution - without this
+    cache it issues no C2 verdict at all, while the same code over a
+    multi-year backfill produces signals. Same split Japan already uses
+    between refresh-japan-habits and classify-japan-signals.
+    """
+    import asyncio
+    from datetime import datetime, timedelta, timezone
+
+    from controllers.run import refresh_china_baselines
+
+    logger.info("Initialising database...")
+    init_db()
+    seed()
+
+    today = datetime.now(timezone.utc)
+    from_date = (today - timedelta(days=365 * years)).strftime("%Y-%m-%d")
+    to_date = today.strftime("%Y-%m-%d")
+    logger.info("Refreshing china baselines from %s to %s", from_date, to_date)
+    written = asyncio.run(
+        refresh_china_baselines(from_date, to_date, refetch=refetch))
+    logger.info("china baselines refreshed: %d series written", written)
+
+
 @cli.command("classify-china-signals")
 @click.option(
     "--from-date",
@@ -320,12 +373,30 @@ def classify_china_signals(from_date: str | None, to_date: str | None) -> None:
     Scheduled twice daily (10:00 and 14:00 UTC, MON-FRI). Defaults to
     today (UTC) and skips already-classified source_ids, so the two
     passes are additive rather than duplicative.
+
+    REBUILDS THE BASELINES FIRST, in the same process, immediately
+    before classifying. A company filing its annual report on 1 March
+    must be judged against a baseline that includes everything it had
+    filed up to that morning - not against one last rebuilt weeks
+    earlier. The two halves cannot be separate scheduled rules: a
+    verdict is written once and the next pass skips that source_id, so
+    a filing judged while the cache was stale keeps that verdict
+    permanently, and nothing revisits it when the cache catches up.
+    Ordering them in one process is what makes that impossible.
+
+    Cheap enough to do every pass - measured at ~5 seconds over the
+    9,176 articles currently stored, writing 83 series. The expensive
+    half is the upstream revenue re-fetch (~90s, one request per
+    company), which is why that stays on its own monthly rule and this
+    reads the figures news-retrieval has already stored.
     """
     import asyncio
-    from datetime import datetime, timezone
+    from datetime import datetime, timedelta, timezone
 
     import config
-    from controllers.run import run_china_signal_classification
+    from controllers.run import (
+        refresh_china_baselines, run_china_signal_classification,
+    )
     from models.jobs import create_job
 
     logger.info("Initialising database...")
@@ -335,6 +406,52 @@ def classify_china_signals(from_date: str | None, to_date: str | None) -> None:
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     from_date = from_date or today
     to_date = to_date or today
+
+    # The baseline window is deliberately NOT the classify window. C2
+    # and C3 judge a figure against that company's own past figures, so
+    # the baseline needs years of history where the classify pass wants
+    # only today's unjudged filings.
+    #
+    # FIVE years, matching the Japan spec's own Section 9 Step 1
+    # history requirement. The binding constraint on these baselines is
+    # sample size, not the band: 63 of 65 C2 baselines have n <= 6 and
+    # most have n = 4, which is why a single dropped observation moves
+    # Hygon's own threshold between +87% and +176%. A wider window is
+    # the only thing that genuinely improves that, so it is set as wide
+    # as the stored runs allow rather than trimmed to what is currently
+    # populated.
+    #
+    # It costs nothing to ask for more than exists. The window selects
+    # completed news-retrieval runs, so a year with no stored runs
+    # contributes no articles and no time - the measured ~5s is over
+    # everything currently stored, and widening the request does not
+    # re-fetch anything.
+    _BASELINE_HISTORY_YEARS = 5
+    baseline_from = (
+        datetime.now(timezone.utc)
+        - timedelta(days=365 * _BASELINE_HISTORY_YEARS)
+    ).strftime("%Y-%m-%d")
+    try:
+        written = asyncio.run(refresh_china_baselines(
+            baseline_from, to_date, refetch=False,
+            # Re-pull upstream revenue only for companies that filed a
+            # periodic report inside the CLASSIFY window. The baseline
+            # window is five years, in which everyone has filed
+            # something; what makes a company's stored figures stale is
+            # having filed since they were last pulled. On a normal day
+            # this is nobody and nothing is fetched.
+            refetch_filed_since=from_date))
+        logger.info("china baselines refreshed: %d series written", written)
+    except Exception:
+        # A failed refresh must not stop the classify pass. The cache
+        # from the previous run is still there and still better than
+        # nothing - load_baselines reads whatever is stored, and C2
+        # falls back to its own trust floor where a company has no row
+        # at all. Classifying against a slightly stale baseline beats
+        # not classifying the day's filings.
+        logger.exception(
+            "china baseline refresh failed - classifying against the "
+            "previously cached baselines instead")
 
     job_id = create_job(domain=config.CHINA_SIGNAL_DOMAIN)
     logger.info(

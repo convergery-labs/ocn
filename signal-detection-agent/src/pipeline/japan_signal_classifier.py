@@ -1222,6 +1222,15 @@ _TRANSLATION_FIELDS: dict[str, dict[str, str]] = {
     },
     "jp_extraordinary": {
         "title": "translated_title",
+        # A 第19条第2項第4号 filing names its major shareholder in
+        # Japanese and nowhere else on the row - "キャピタル・リサーチ・
+        # アンド・マネージメント・カンパニー", which is Capital Research
+        # and Management Company written in katakana. The signal
+        # sentence is built around that name, so without this the one
+        # English card carrying real ownership figures states them
+        # about a party the reader cannot identify. Same treatment
+        # jp_ownership already gives its own filer_name.
+        "metadata.major_shareholder_name": "translated_major_shareholder_name",
     },
     "jp_ownership": {
         # title itself is structural/numeric (ticker, doc_id, docDescription
@@ -3573,8 +3582,23 @@ A compensation filing from a large company is still ROUTINE.
 If unsure, answer WEAK.
 
 Answer with the tier, then a slash, then the action the title names,
-using the shortest noun phrase that appears in or follows directly
-from the title. Do not add detail the title does not state.
+as a noun phrase taken from the title. Do not add detail the title
+does not state.
+
+Keep any qualifier the title gives that changes what the action
+means - which business, which subsidiary, which tranche, whether it
+is planned or completed. Drop only words that carry nothing:
+"Announcement Concerning", "Notice Regarding", "Execution of".
+
+"Execution of Follow-on Investment (Third Tranche) in OpenAI"
+  -> follow-on investment in OpenAI, third tranche
+"Completion of Execution of Partial Spin-off of Crasus Chemical
+ (Petrochemical Business)"
+  -> completed partial spin-off of Crasus Chemical's petrochemical business
+"Announcement Concerning Absorption-type Merger with a Wholly Owned
+ Subsidiary and Closure of its Business Site"
+  -> absorption-type merger with a wholly owned subsidiary, and closure
+     of its business site
 
 HIGH/spin-off of its display-materials business
 WEAK/change of representative director
@@ -3651,17 +3675,41 @@ def _japanese_form_name(title: str | None) -> str | None:
     return None
 
 
-_EDINET_EXTRAORDINARY_REASONS: dict[str, str] = {
-    # Shin-Etsu S100Z2DU: ストックオプションとして新株予約権を発行
-    "2号の2": "a grant of share options",
-    # Resonac S100Z2WW: 当社の主要株主に異動がありました
-    "4号": "a change in major shareholders",
-    # Lasertec S100Z4BX: 定時株主総会において決議事項が決議されました
-    "9号の2": "a resolution passed at a shareholder meeting",
+# An extraordinary report's whole title is its form name - 臨時報告書,
+# nothing to read - so the model that grades Kabutan disclosures has
+# no input here and answers ROUTINE for all of them. The clause the
+# filing cites is the only thing that names the event, so it carries
+# the tier as well as the phrase.
+#
+# Grading by clause rather than by title is not a workaround: the
+# ordinance defines each clause as a specific triggering event, which
+# is a firmer basis than a model reading prose. What it cannot give
+# is magnitude - the clause says a major shareholder changed, not by
+# how much - so no clause maps to SIGNAL on its own.
+# A move this large is material whether or not the holder's status
+# changed. Matches the point at which J6 treats an ownership change
+# as a build or sell-down rather than drift, so the two signal types
+# grade the same movement the same way.
+_MAJOR_SHAREHOLDER_LARGE_MOVE_PTS = 1.0
+
+_EDINET_EXTRAORDINARY_REASONS: dict[str, tuple[str, str]] = {
+    # Shin-Etsu S100Z2DU: ストックオプションとして新株予約権を発行.
+    # Employee and director compensation, filed on a schedule.
+    "2号の2": ("a grant of share options", "ROUTINE"),
+    # Resonac S100Z2WW: 当社の主要株主に異動がありました. Who owns a
+    # large block of the company changed. Not routine: it is the same
+    # class of event J6 reads from a large-shareholding filing, and
+    # the clause is only triggered above a threshold.
+    "4号": ("a change in major shareholders", "WEAK"),
+    # Lasertec S100Z4BX: 定時株主総会において決議事項が決議されました.
+    # An AGM passing its resolutions is the expected outcome; the
+    # clause does not say which resolutions, so there is nothing here
+    # to grade above routine.
+    "9号の2": ("a resolution passed at a shareholder meeting", "ROUTINE"),
 }
 
 
-def _extraordinary_reason(meta: dict[str, Any]) -> str | None:
+def _extraordinary_reason(meta: dict[str, Any]) -> tuple[str, str] | None:
     """The event an extraordinary report was filed for, if known.
 
     Reads EDINET's clause code; returns None for a clause not in the
@@ -3683,6 +3731,12 @@ def _extraordinary_reason(meta: dict[str, Any]) -> str | None:
     number, sub = found[-1]
     key = f"{number}号の{sub}" if sub else f"{number}号"
     return _EDINET_EXTRAORDINARY_REASONS.get(key)
+
+
+def _extraordinary_tier(meta: dict[str, Any]) -> str | None:
+    """The tier the cited clause implies, if the clause is known."""
+    entry = _extraordinary_reason(meta)
+    return entry[1] if entry else None
 
 
 def _is_english_disclosure(title: str) -> bool:
@@ -3920,7 +3974,58 @@ def classify_corporate_disclosure(
             # The ordinance clause first - it names the actual event
             # ("a change in major shareholders"), where the form name
             # only says which document was filed.
-            action = _extraordinary_reason(meta) or _japanese_form_name(title)
+            # A major-shareholder change whose figures news-retrieval
+            # parsed out of the filing. The clause alone could only
+            # say THAT one changed, which is why these were graded no
+            # higher than WEAK; with the before/after share in hand
+            # the event is gradeable on the same basis an ownership
+            # filing is.
+            msh_now = meta.get("major_shareholder_pct")
+            msh_was = meta.get("major_shareholder_pct_previous")
+            if msh_now is not None and msh_was is not None:
+                holder = meta.get("major_shareholder_name")
+                delta = round(msh_now - msh_was, 2)
+                meta["major_shareholder_pct_change"] = delta
+                # Whether the holder gained or lost 主要株主 status,
+                # taken from the filing's own wording - 主要株主と
+                # なるもの ("the party becoming a major shareholder")
+                # or 主要株主でなくなるもの. That is a filed fact.
+                #
+                # Not computed from a percentage threshold: the filing
+                # cites the statute and never prints the number, so
+                # comparing against a hardcoded 10% would grade on an
+                # assumption the document does not support. What the
+                # document does support is that this holder was not a
+                # major shareholder at 9.59% and is one at 11.06%.
+                status = meta.get("major_shareholder_status_change")
+                major_shareholder_override = (
+                    "SIGNAL"
+                    if status in ("became", "ceased")
+                    or abs(delta) >= _MAJOR_SHAREHOLDER_LARGE_MOVE_PTS
+                    else "WEAK")
+                # The name is left out of the action phrase entirely.
+                # Translation runs AFTER classification, so `holder` is
+                # still katakana here and would be baked into a stored
+                # string the later swap cannot reach - the card would
+                # carry Japanese in the one field a reader scans. The
+                # card composes the name itself from the translated
+                # field; this phrase carries only the figures.
+                action = (f"a major shareholder's holding to {msh_now:.2f}% "
+                          f"of voting rights, from {msh_was:.2f}%")
+            else:
+                major_shareholder_override = None
+
+            clause = _extraordinary_reason(meta)
+            if clause:
+                # The clause grades the filing too. The model saw only
+                # "Extraordinary Report" and answered ROUTINE for every
+                # one of these, which read a major-shareholder change
+                # the same as an AGM passing its agenda. Applied only
+                # where the model had nothing to go on, so a filing
+                # with a real title keeps the tier its title earned.
+                action, signal = clause[0], _JAPAN_DISCLOSURE_MAP[clause[1]]
+            else:
+                action = _japanese_form_name(title)
 
         meta["disclosure_action"] = action
 
@@ -3949,12 +4054,33 @@ def classify_corporate_disclosure(
         # filing, so it is gone: the sentence states the fact and
         # stops. Only the no-action fallbacks still differ, because
         # there the tier is the only thing left to say.
-        reason_code = {
-            "SIGNAL": "material_corporate_action",
-            "WEAK": "corporate_disclosure_unclear",
-        }.get(signal, "routine_corporate_filing")
+        # A parsed major-shareholder change outranks whatever the
+        # model made of a title reading only "Extraordinary Report".
+        if major_shareholder_override:
+            signal = major_shareholder_override
+            reason_code = "major_shareholder_change"
+        else:
+            reason_code = {
+                "SIGNAL": "material_corporate_action",
+                "WEAK": "corporate_disclosure_unclear",
+            }.get(signal, "routine_corporate_filing")
 
-        if action:
+        if reason_code == "major_shareholder_change":
+            # Stated as a movement, not as a filing that happened. The
+            # figures are the point - every other disclosure sentence
+            # has none to give.
+            verb = "raised" if (meta.get("major_shareholder_pct_change") or 0) > 0 else "cut"
+            status = meta.get("major_shareholder_status_change")
+            crossing = (" - becoming a major shareholder" if status == "became"
+                        else " - ceasing to be a major shareholder"
+                        if status == "ceased" else "")
+            reason_text = (
+                f"{company_name} reported that "
+                f"{meta.get('major_shareholder_name') or 'a major shareholder'} "
+                f"{verb} its holding to "
+                f"{meta['major_shareholder_pct']:.2f}% of voting rights, from "
+                f"{meta['major_shareholder_pct_previous']:.2f}%{crossing}.")
+        elif action:
             reason_text = (
                 f"{company_name} filed a routine administrative disclosure - {action}."
                 if signal == "NOISE" else
@@ -4467,6 +4593,13 @@ def classify_japan_signal_batch(
         japanese = meta.get("filer_name")
         if english and japanese and r["result"].get("reason"):
             r["result"]["reason"] = r["result"]["reason"].replace(japanese, english)
+
+        # The same swap for an extraordinary report's major
+        # shareholder, whose name reaches the sentence in katakana.
+        msh_en = meta.get("translated_major_shareholder_name")
+        msh_ja = meta.get("major_shareholder_name")
+        if msh_en and msh_ja and r["result"].get("reason"):
+            r["result"]["reason"] = r["result"]["reason"].replace(msh_ja, msh_en)
 
         # Same ordering problem for a press row: its reason quotes the
         # story straight from the article's own title, which is still

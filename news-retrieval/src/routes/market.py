@@ -1,4 +1,5 @@
 """Routes for /market — read market data from DynamoDB."""
+import logging
 import os
 from decimal import Decimal
 from typing import Any
@@ -10,6 +11,7 @@ from fastapi import APIRouter, HTTPException
 from pipeline import _normalize_av_ticker
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 _AWS_REGION = os.environ.get("AWS_REGION", "eu-north-1")
 _INDEX_TICKERS = ["SPY", "QQQ", "SOXX"]
@@ -184,3 +186,79 @@ def get_tracked_tickers() -> dict:
     tickers = get_tracked_ticker_universe(universe_url, universe_api_key)
 
     return {"tickers": tickers}
+
+
+@router.get("/market/china/revenue-history")
+def china_revenue_history(
+    refresh: bool = False, codes: str | None = None,
+) -> dict:
+    """Revenue year-on-year history for the China universe, per company
+    and reporting period.
+
+    Served from storage by default. `refresh=true` re-fetches from the
+    upstream sources and replaces what is stored - that is the expensive
+    path (one request per company, ~90s for the whole universe).
+
+    `codes` narrows that refresh to a comma-separated subset, which is
+    what makes a daily refresh affordable. A company's revenue figures
+    change only when it files, so re-fetching twenty companies to pick
+    up the one that filed this morning is twenty requests to learn one
+    fact. The daily classify pass passes the codes that actually filed
+    in its window - usually none, occasionally two or three - and the
+    monthly job still refreshes everything as a backstop against a
+    filing whose code was missed or a figure restated without a new
+    filing.
+
+    Ignored unless `refresh` is set: it narrows what is FETCHED, never
+    what is returned. The response is always the full stored history,
+    because a classifier building per-company baselines needs every
+    company's series regardless of who filed today.
+
+    Every row carries the same seven fields whichever source produced
+    it - code, period_type, year, revenue, prior_revenue, yoy_pct,
+    source - so a consumer cannot accidentally depend on one, and a
+    stored row is indistinguishable from a freshly fetched one.
+    """
+    from models.company_financials import get_financials, upsert_financials
+
+    if refresh:
+        from china_financials import fetch_revenue_history
+        from seed import CHINA_TICKER_UNIVERSE
+
+        wanted = {c.strip() for c in (codes or "").split(",") if c.strip()}
+        universe = [c for c in CHINA_TICKER_UNIVERSE
+                    if not wanted or c["code"] in wanted]
+        # An explicit `codes` list matching nothing in the universe is a
+        # caller error - a typo'd or renamed code - and refreshing all
+        # twenty in response would hide it behind a slow but successful
+        # run. Fetch nothing and say so; the stored history is still
+        # returned below.
+        if wanted and not universe:
+            logger.warning(
+                "[CHINA_FIN] refresh requested for %s, none of which are in "
+                "the China universe - nothing fetched", ", ".join(sorted(wanted)))
+
+        api_key = os.environ.get("ALPHA_VANTAGE_API_KEY")
+        fetched: list[dict[str, Any]] = []
+        missing: list[str] = []
+        for company in universe:
+            series = fetch_revenue_history(company["code"], api_key)
+            if not series:
+                missing.append(company["code"])
+                continue
+            fetched.extend(
+                {**row, "company": company["company"], "metric": "revenue"}
+                for row in series
+            )
+        written = upsert_financials("china_market_signal", fetched)
+        if missing:
+            logger.info(
+                "[CHINA_FIN] no structured revenue for %s - these have no "
+                "mainland listing and no SEC filing, so their figures exist "
+                "only in filing text", ", ".join(missing))
+        logger.info(
+            "[CHINA_FIN] refreshed %d revenue observations over %d of %d "
+            "companies", written, len(universe), len(CHINA_TICKER_UNIVERSE))
+
+    rows = get_financials("china_market_signal", "revenue")
+    return {"rows": rows, "total": len(rows)}

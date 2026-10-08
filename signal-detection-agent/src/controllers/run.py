@@ -18,6 +18,7 @@ from adapters.news_client import (
     poll_run_until_done,
     trigger_macro_fetch,
     trigger_run,
+    fetch_china_revenue_history,
 )
 from models.geopolitical_signal_companies import (
     get_companies_for_name_matching,
@@ -75,7 +76,10 @@ from pipeline.japan_signal_classifier import (
     compute_all_japan_progress_habits,
 )
 from pipeline.japan_companies import japan_ticker_universe
-from pipeline.china_signal_classifier import classify_china_signal_batch
+from pipeline.china_signal_classifier import (
+    FILING_RANK_PERIODIC, classify_china_signal_batch, compute_c2_baselines,
+    compute_c3_baselines, filing_authority, filing_period)
+from models.market_baselines import load_baselines, upsert_baselines
 from pipeline.korea_signal_classifier import classify_korea_signal_batch
 from pipeline.korea_signal_summary import generate_korea_signal_summary
 from pipeline.korea_ticker_universe import KOREA_TICKER_UNIVERSE
@@ -986,6 +990,117 @@ async def run_korea_signal_classification(job_id: int, from_date: str, to_date: 
     update_job_status(job_id, "completed", article_count=inserted, set_completed_at=True)
 
 
+async def refresh_china_baselines(
+    from_date: str, to_date: str, refetch: bool = False,
+    refetch_filed_since: str | None = None,
+) -> int:
+    """Recompute every company's C2 baseline from the FULL stored
+    history and overwrite the market_signal_baselines cache.
+
+    The refresh half of the split described in
+    models/market_baselines.py. Pools a WIDE window - years, not the
+    single day run_china_signal_classification pools - because a
+    company's own trailing distribution cannot be rebuilt from one
+    day's filings. Confirmed on real data: Hygon's FY2022 annual report
+    produces no verdict at all when classified alone, and the correct
+    one (121.83%, 3.39 MADs above its own annual median of 54.66%) when
+    the cached baseline is present.
+
+    Three ways to handle the underlying revenue figures:
+
+      refetch=True            re-pull every company from cninfo and
+                              Alpha Vantage (~90s). The monthly job.
+      refetch_filed_since=D   re-pull only companies that filed a
+                              periodic report on or after D (~1s each,
+                              usually none). The daily classify pass.
+      neither                 read what is stored, pull nothing.
+
+    The middle one is what lets the daily pass stay honest without
+    paying the whole-universe cost: a company's figures go stale only
+    when it files, so the filings already in the pool say exactly whose
+    to re-pull.
+
+    Returns the number of baseline rows written, trusted and untrusted
+    alike - an untrusted row records that a company was measured and
+    found to have too little history, which is worth storing.
+    """
+    run_ids = await list_completed_runs(
+        config.CHINA_SIGNAL_DOMAIN, from_date, to_date,
+    )
+    all_articles: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
+    for run_id in run_ids:
+        for article in await get_run_articles(run_id):
+            url = article.get("url")
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                all_articles.append(article)
+
+    if not all_articles:
+        logger.warning(
+            "[CHINA_BASELINES] no articles in %s..%s - cache left as it was "
+            "rather than emptied, since an empty refresh would silence every "
+            "classifier that reads it", from_date, to_date)
+        return 0
+
+    # Structured revenue first, filing text only where there is none.
+    #
+    # Which companies to re-fetch is decided from the pooled articles
+    # rather than passed in. A company's stored figures go stale for
+    # exactly one reason - it filed a periodic report - and that filing
+    # is in this pool, so the pool already knows. Everyone else's
+    # stored figures are still current and re-fetching them would be
+    # twenty upstream requests to confirm nothing changed.
+    #
+    # Scoped to `refetch_filed_since`, NOT to the pooled window. The
+    # pool spans five years so every company has filed something in it;
+    # what matters is who filed since the figures were last pulled.
+    # Without this the daily pass re-fetches all sixteen mainland
+    # companies every run, which is the whole-universe cost it exists
+    # to avoid.
+    #
+    # Only periodic reports count. A forecast or a flash states a
+    # figure the company itself will restate, and cninfo carries the
+    # audited number rather than either, so refreshing on one fetches
+    # a figure that has not been published yet.
+    filed_codes: set[str] = set()
+    if refetch_filed_since and not refetch:
+        for article in all_articles:
+            meta = article.get("metadata") or {}
+            if meta.get("source_type") != "cninfo_filing":
+                continue
+            published = str(article.get("published") or "")[:10]
+            if not published or published < refetch_filed_since:
+                continue
+            title = article.get("title") or ""
+            if (filing_period(title)
+                    and filing_authority(title) >= FILING_RANK_PERIODIC
+                    and meta.get("code")):
+                filed_codes.add(meta["code"])
+    # refetch=True with no codes is the monthly job asking for the whole
+    # universe; the daily pass always names codes, even an empty set,
+    # which correctly fetches nothing.
+    revenue_series = await fetch_china_revenue_history(
+        refresh=refetch or bool(filed_codes),
+        codes=sorted(filed_codes) if not refetch else None,
+    )
+    if filed_codes and not refetch:
+        logger.info(
+            "[CHINA_BASELINES] %d company/companies filed a periodic report "
+            "since %s - re-fetching their revenue only: %s",
+            len(filed_codes), refetch_filed_since, ", ".join(sorted(filed_codes)))
+    rows = compute_c2_baselines(
+        all_articles, revenue_series=revenue_series,
+    ) + compute_c3_baselines(all_articles)
+    written = upsert_baselines(config.CHINA_SIGNAL_DOMAIN, rows)
+    trusted = sum(1 for r in rows if r["is_trusted"])
+    logger.info(
+        "[CHINA_BASELINES] pooled %d articles from %d runs -> %d series "
+        "(%d trusted, %d below the floor)",
+        len(all_articles), len(run_ids), written, trusted, written - trusted)
+    return written
+
+
 async def run_china_signal_classification(job_id: int, from_date: str, to_date: str) -> None:
     """Classify china_market_signal items across ALL of news-retrieval's
     completed runs in [from_date, to_date] - same pooling reasoning as
@@ -1025,8 +1140,59 @@ async def run_china_signal_classification(job_id: int, from_date: str, to_date: 
         update_job_status(job_id, "completed", article_count=0, set_completed_at=True)
         return
 
-    classified = classify_china_signal_batch(all_articles)
+    # DISCARD ALREADY-CLASSIFIED ARTICLES BEFORE CLASSIFYING, not after.
+    #
+    # The window selects RUNS by date, not articles by publication
+    # date, so a day on which a multi-year backfill ran pools that
+    # entire backfill - 8,241 articles against a normal day's ~935.
+    # Classifying first and filtering afterwards meant re-running such
+    # a day re-classified every article it had already judged (3,694 of
+    # them, measured) at full LLM cost, to insert nothing: the skip
+    # protected the table from duplicate rows but not the spend.
+    #
+    # The source_id IS the article url, which is known from the pooled
+    # article without classifying it, so the filter can simply move
+    # ahead of the classifier. Same rows out, cost proportional to what
+    # is actually new. Taiwan deliberately keeps the opposite order -
+    # its source_id is derived inside its classifier (ticker+period),
+    # so it cannot be known in advance.
+    candidate_urls = [a["url"] for a in all_articles if a.get("url")]
+    already_done = get_existing_china_signal_source_ids(candidate_urls)
+    pending = [
+        a for a in all_articles if a.get("url") not in already_done
+    ]
+    logger.info(
+        "[CHINA] pooled %d articles from %d runs - %d already classified, "
+        "%d to classify", len(all_articles), len(run_ids),
+        len(all_articles) - len(pending), len(pending))
+    if not pending:
+        update_job_status(
+            job_id, "completed", article_count=0, set_completed_at=True)
+        return
 
+    # The cached baselines, so a daily pass judges against each
+    # company's full history rather than the single day it pooled.
+    # Empty is survivable: the classifier falls back to deriving what
+    # it can from the batch, which is correct for a backfill and
+    # produces nothing for a daily run - the behaviour before the cache
+    # existed.
+    baselines = load_baselines(config.CHINA_SIGNAL_DOMAIN, "revenue_yoy")
+    c3_baselines = load_baselines(
+        config.CHINA_SIGNAL_DOMAIN, "commitment_value")
+    if not baselines:
+        logger.warning(
+            "[CHINA] no cached baselines - C2 will only judge companies "
+            "whose full history happens to be in this batch. Run "
+            "refresh-china-baselines.")
+    classified = classify_china_signal_batch(
+        pending, baselines=baselines, c3_baselines=c3_baselines)
+
+    # Re-checked rather than assumed, in ONE batched query. The
+    # pre-filter above removed everything classified before this run
+    # started, but the two scheduled passes overlap by design and the
+    # other may have inserted rows while this one was classifying.
+    # This is what actually guarantees no duplicate row; the pre-filter
+    # is what keeps the classification cheap.
     candidate_source_ids = [
         c["article"]["url"] for c in classified if c["article"].get("url")
     ]

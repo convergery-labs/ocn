@@ -48,7 +48,8 @@ signal-detection-agent/
 │   ├── controllers/
 │   │   └── run.py
 │   ├── models/
-│   │   └── jobs.py
+│   │   ├── jobs.py
+│   │   └── market_baselines.py   (per-company C2/C3 baselines, written by refresh, read by classify)
 │   ├── pipeline/
 │   │   ├── classifier.py
 │   │   ├── category_candidates.py   (parked - not wired in v1)
@@ -192,7 +193,7 @@ All seven of the spec's signal types are implemented, plus a triage gate:
 |---|---|
 | Gate 1 | Filing-type triage - 4 tiers, discards ~93% of filings before anything expensive runs |
 | C1 | Policy binding verdict (BINDING/NON-BINDING/UNCLEAR) - the one judgment call, 2 confirmation calls, disagreement → UNCLEAR |
-| C2 | Substitution progress - YoY change the filing states about itself, sector MAD baseline |
+| C2 | Substitution progress - revenue YoY against **this company's own** past rates for the **same period type**, structured figures where available |
 | C3 | Capacity commitment - with restatement collapsing (Hua Hong filed 13 announcements tracking one acquisition over 10 months) |
 | C4 | Accelerator milestone - 4 filters, accelerator-role companies only |
 | C5 | Platform capex - platform-role companies only |
@@ -200,8 +201,72 @@ All seven of the spec's signal types are implemented, plus a triage gate:
 | C7 | Named US-company action |
 
 Thresholds are derived from the stored distribution (MAD, not standard deviation - outlier
-resistant), never lifted from the spec. Trust floors (`_C2_MIN_OBSERVATIONS = 8`,
-`_C6_MIN_PERIODS = 6`) make the classifier refuse to judge rather than fabricate a baseline.
+resistant), never lifted from the spec. Trust floors make the classifier refuse to judge
+rather than fabricate a baseline: `_C2_MIN_OBSERVATIONS = 3`, `_C3_MIN_OBSERVATIONS = 3`,
+`_C6_MIN_PERIODS = 6`.
+
+**Three is forced by the data, not chosen.** Zero companies have eight observations in any
+single period type - five of the twenty listed in 2022 or later, so their entire filing
+history is four years or less, and an eight-year Hygon fetch returned exactly what a
+four-year fetch already had. Three is the floor at which a spread can be computed at all.
+
+**The band (`_C2_SIGNAL_MADS = 3.0` / `_C2_WEAK_MADS = 2.0`) was checked against the real
+283-observation distribution**, not inherited. What it has to separate is a genuine break
+from the top of a smooth rising trend - China's semiconductor names have been in a
+continuous upcycle, so a company's newest figure is often its largest. Measuring how many
+firings are the newest point of a monotonically rising series: at 1.0 MAD, 5% of firings;
+at 2.0, 3%; at 2.5 and above, zero. 2.5 is the lowest defensible band and 3.0 sits inside
+that region with margin - needed because at n=4 the MAD is roughly half the interquartile
+spread. See the comment block on `_C2_SIGNAL_MADS` for the full table. The binding
+constraint is sample size, not the band: 63 of 65 baselines have n <= 6.
+
+### Per-company baselines: `market_signal_baselines`
+
+C2 and C3 judge a figure against **that company's own history for the same period type**,
+never against whoever else filed that quarter and never mixing an annual rate with a
+quarterly one (GigaDevice's Q1 median runs 68 points above its annual, about 3x its own
+MAD). Computing that needs years of filings; the scheduled classify pass pools one day.
+
+`market_signal_baselines` (domain, code, metric, period_type) is what lets the two
+coexist - a refresh rebuilds from the full history, the daily pass reads the cache. Without
+it the same classifier gives different answers depending on how it was invoked. The table is
+market-agnostic by design, China-only in practice; `japan_progress_habits` is the intended
+second tenant.
+
+`refresh-china-baselines --years 5 [--refetch]` rebuilds it. **It also runs in-process at
+the start of every `classify-china-signals` pass** (~5s over 9,176 pooled articles), so a
+company filing on the 1st is judged the same day against a baseline that includes it rather
+than waiting for the monthly job. The two cannot be separate scheduled rules: a verdict is
+written once and the next pass skips that `source_id`, so anything judged against a stale
+cache keeps that verdict permanently. `--refetch` is the expensive half (one upstream
+request per company, ~90s) and stays monthly; the daily pass re-pulls only companies that
+filed a periodic report in its window, usually none.
+
+Reporting periods are `FY`, `H1`, `Q1`, `Q3` for mainland issuers - no Q2 or Q4, since the
+half-year covers Q2 and the annual covers Q4. The HK-listed names file in English and do
+announce standalone `Q2`/`Q4`, kept as their own period types rather than folded into
+H1/FY.
+
+### The four values of `signal_detection`
+
+| | Means |
+|---|---|
+| `signal` | cleared the company's own band |
+| `weak_signal` | cleared the weak band but not the signal band |
+| `noise` | **judged and found ordinary**, or a filing type no rule reads |
+| `waiting` | a rule reads this shape but cannot judge it yet |
+
+**Every pooled article gets a row - noise is stored, never dropped.** A dropped article is
+indistinguishable from one never fetched, and because the daily pass skips by `source_id`,
+an article with no row was re-examined on every later pass forever (measured: 650 of one
+real day's 935). Each noise row's `signal_reason` names the gate that actually turned it
+away - C1's relevance vocabulary, C6's band, a Gate 1 filing category, an English coverage
+check that is headline-only by design - so "we looked and it was ordinary" is recoverable.
+
+In practice `waiting` is now empty: a Gate 1 candidate that reaches the end of the batch has
+been offered to every rule that reads its shape and turned down by all of them, which is
+`noise` with a reason saying which of three things stopped it (no fiscal period in the
+title, no year-on-year revenue figure, or too little history for its own baseline).
 
 **One static table: `pipeline/china_companies.py`.** `CHINA_COMPANIES`, keyed by exchange
 code, holding each company's `signal_roles` (which classifiers apply) and `read_through`
@@ -232,12 +297,36 @@ Entry point: `python -m src classify-china-signals` (CLI only, same as every oth
 non-`ai_news` domain), scheduled twice daily - 10:00 UTC after the post-close filings fetch
 and 14:00 UTC after the policy series ends - via
 `signal_detection_agent_china_signals_filings`/`_evening` in
-`infra/modules/ecs_cluster/services.tf`. Both default to today (UTC) and skip
-already-classified `source_id`s, so the passes are additive, not duplicative.
+`infra/modules/ecs_cluster/services.tf`. Both default to today (UTC).
+
+**Every day, not Mon-Fri.** Both rules were weekday-only until the stored history was
+checked: Chinese issuers file at weekends - 1,715 Saturday-dated cninfo filings against
+1,830 on Friday - and since the classify window selects RUNS by date, Monday's pass pools
+Monday's runs, never the weekend's. Those rows were orphaned permanently rather than
+delayed. The fetch rules moved to daily at the same time, which is what let every window
+drop to `--days-back 1`.
+
+**Already-classified articles are filtered out BEFORE the classifier runs**, not after. The
+window selects runs by date, so a day on which a multi-year backfill landed pools that whole
+backfill; filtering afterwards meant re-running such a day re-classified everything at full
+LLM cost to insert nothing (measured: 3,694 articles). The `source_id` is the article url,
+known without classifying it, so the filter moved ahead of the classifier. Re-running a
+completed day now costs about three seconds. Taiwan deliberately keeps the opposite order -
+its `source_id` is derived inside its classifier.
 
 Results persist to `agent_classifications`, `source_type = 'china_market_signal'`,
 distinguished by `metadata.source_category` (`cn_policy`, `cn_disclosure`, `cn_trade`,
 `cn_press`) and `metadata.signal_type` (`C1`..`C7`, `gate1`).
+
+**Every row carries the article's identifying fields**, copied centrally by
+`attach_source_metadata` rather than assembled per classifier: `code`, `company`,
+`native_name`, `sec_name`, `hk_code`, `filing_url`, `filing_language`, `announcement_id`,
+`source_type`, `source_outlet_type`, and `summary` where the fetcher provided one (206 of
+9,176 China rows - only the English coverage check carries an editorial lead; filings and
+government notices open straight into the measure). Each rule used to build its own
+metadata dict and they disagreed - C1 carried no code at all, gate1 carried neither code nor
+filing_url - so `GET /results?code=688981` silently missed whole signal types and a reader
+could not open the document a verdict came from.
 
 **No China-specific read route exists, and none is needed.** The generic `GET /results`
 returns the whole `metadata` JSONB, so `read_through`, `direction`, `would_confirm` and

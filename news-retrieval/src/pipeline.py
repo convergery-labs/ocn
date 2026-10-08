@@ -5068,6 +5068,126 @@ def _edinet_rate_sleep() -> None:
         _edinet_last_call[0] = time.monotonic()
 
 
+# The 臨時報告書 block a 第19条第2項第4号 filing carries. Unlike a
+# docTypeCode-350 report, which the HOLDER files on crossing 5%, this
+# one is filed by the ISSUER when its own 主要株主 (≥10% of voting
+# rights) composition changes - different filer, different trigger,
+# and confirmed live that no 350 exists for the same event.
+_EDINET_MAJOR_SHAREHOLDER_ELEMENT_ID = (
+    "jpcrp-esr_cor:ChangesInMajorShareholderTextBlock"
+)
+
+# The block is prose with the figures embedded, not discrete fields:
+#   ...異動前181,572個9.59％異動後209,566個11.06％...
+# 異動前 = before, 異動後 = after, 個 = the vote count, ％ the share of
+# total voting rights. The percentage is what the signal reads; the
+# vote count is matched only so the two numbers cannot be confused
+# with each other.
+_MAJOR_SHAREHOLDER_MOVE_RE = re.compile(
+    r"異動前[^0-9]*[\d,]+個\s*([\d.]+)\s*[％%]"
+    r".*?異動後[^0-9]*[\d,]+個\s*([\d.]+)\s*[％%]",
+    re.S,
+)
+# 主要株主となるもの ("the party BECOMING a major shareholder") and
+# 主要株主でなくなるもの ("ceasing to be one"). The filing states which
+# of the two happened, in those words, and the holder's name follows.
+#
+# Capturing the marker is what makes the status change a FILED FACT
+# rather than something derived from a threshold. The filing never
+# prints the threshold - it cites the statute and leaves the number
+# to FIEA Article 163 - so comparing the percentage against a
+# hardcoded 10% would be grading on an assumption the document does
+# not support. What the document does support, in its own words, is
+# that this holder became a major shareholder at 11.06% and was not
+# one at 9.59%.
+_MAJOR_SHAREHOLDER_NAME_RE = re.compile(
+    r"主要株主(となるもの|でなくなるもの)\s*([^\n(（]{2,80})"
+)
+_MAJOR_SHAREHOLDER_BECAME = "となるもの"
+
+
+def _is_major_shareholder_clause(reason: str | None) -> bool:
+    """True for 第19条第2項第4号 - a change in major shareholders.
+
+    Matched on the final 第N号 exactly, never as a suffix: a filing
+    citing 第19条第2項第14号 ends with "4号" and would otherwise be
+    fetched as a major-shareholder change it is not.
+    """
+    if not reason:
+        return False
+    normalised = reason.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
+    found = re.findall(r"第(\d+)号(?:の(\d+))?", normalised)
+    return bool(found) and found[-1] == ("4", "")
+
+
+def _fetch_edinet_major_shareholder_change(
+    doc_id: str, api_key: str,
+) -> dict[str, Any] | None:
+    """The holder and the before/after voting-rights share from a
+    第19条第2項第4号 extraordinary report.
+
+    Returns None when the filing is not one of these, or the block
+    cannot be parsed - fail-open, like every other Japan fetcher.
+
+    This is the only source of the figure. The clause tells a reader
+    that a major shareholder changed; it takes the document to say by
+    how much, and without that the event cannot be graded against the
+    same thresholds an ownership filing is.
+    """
+    _edinet_rate_sleep()
+    try:
+        resp = httpx.get(
+            _EDINET_DOCUMENT_URL_TMPL.format(doc_id=doc_id),
+            params={"type": "5", "Subscription-Key": api_key},
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        import zipfile
+        from io import BytesIO
+
+        with zipfile.ZipFile(BytesIO(resp.content)) as zf:
+            names = [n for n in zf.namelist() if n.endswith(".csv")]
+            if not names:
+                return None
+            text = zf.read(names[0]).decode("utf-16")
+    except Exception as exc:                                # noqa: BLE001
+        logger.warning("[EDINET] major-shareholder export fetch failed "
+                       "doc_id=%s error=%s", doc_id, exc)
+        return None
+
+    block = ""
+    for line in text.split("\n"):
+        fields = line.strip().split("\t")
+        if len(fields) >= 9 and fields[0].strip('"') == _EDINET_MAJOR_SHAREHOLDER_ELEMENT_ID:
+            block = fields[8].strip('"')
+            break
+    if not block:
+        return None
+
+    move = _MAJOR_SHAREHOLDER_MOVE_RE.search(block)
+    if not move:
+        logger.warning("[EDINET] major-shareholder block found but no "
+                       "before/after pair doc_id=%s", doc_id)
+        return None
+    try:
+        before, after = float(move.group(1)), float(move.group(2))
+    except ValueError:
+        return None
+
+    name = _MAJOR_SHAREHOLDER_NAME_RE.search(block)
+    # became / ceased / None where the filing words it some other way.
+    status = None
+    if name:
+        status = ("became" if name.group(1) == _MAJOR_SHAREHOLDER_BECAME
+                  else "ceased")
+    return {
+        "major_shareholder_name": name.group(2).strip() if name else None,
+        "major_shareholder_status_change": status,
+        "major_shareholder_pct_previous": before,
+        "major_shareholder_pct": after,
+    }
+
+
 def _fetch_edinet_holding_ratio(
     doc_id: str, api_key: str,
 ) -> tuple[float | None, float | None]:
@@ -5367,6 +5487,17 @@ def _fetch_one_edinet_date(
                     "current_report_reason": doc.get("currentReportReason"),
                     "raw_reason_text": raw_text,
                     "source_category": "jp_extraordinary",
+                    # Only for 第19条第2項第4号, a major-shareholder
+                    # change. That clause names the event but not its
+                    # size, and no docTypeCode-350 filing covers the
+                    # same event (different filer, different trigger -
+                    # confirmed live against EDINET for the one real
+                    # case stored). One extra export fetch per such
+                    # filing is what turns "a major shareholder
+                    # changed" into "9.59% -> 11.06%".
+                    **(_fetch_edinet_major_shareholder_change(doc_id, api_key) or {}
+                       if _is_major_shareholder_clause(doc.get("currentReportReason"))
+                       else {}),
                 },
             })
     return articles
@@ -6493,6 +6624,13 @@ def _fetch_china_filing_body(url: str, title: str = "") -> str | None:
 
     if not text:
         return None
+    # NUL bytes reach here from PDF extraction and Postgres cannot store
+    # them in a text column - the driver raises "A string literal cannot
+    # contain NUL (0x00) characters" and the whole batch insert aborts,
+    # losing every filing in the run rather than the one bad document.
+    # Confirmed live: a four-year HKEX backfill fetched ~2,000 filings
+    # and stored none for this reason.
+    text = text.replace("\x00", "")
     return text[:_CHINA_BODY_MAX_CHARS]
 
 
@@ -6903,6 +7041,19 @@ def _fetch_china_policy(sources: list[dict], days_back: int) -> list[dict]:
 _CNINFO_QUERY_URL = "http://www.cninfo.com.cn/new/hisAnnouncement/query"
 _CNINFO_PDF_BASE = "http://static.cninfo.com.cn/"
 _CNINFO_PAGE_SIZE = 30
+# A ceiling on pagination, not an expected depth. The deepest real
+# company over four years is Luxshare at 785 announcements, which is 27
+# pages; 40 leaves headroom while stopping a malformed response from
+# walking forever.
+_CNINFO_MAX_PAGES = 40
+# Titles whose filing is worth downloading. Everything else is stored
+# with its title and date but no body - see the call site for why.
+#   periodic reports and pre-announcements -> C2's revenue YoY
+#   investment / transaction / fundraising -> C3's commitment amount
+_CNINFO_BODY_RE = re.compile(
+    r"(半年度报告|年度报告|季度报告|业绩预告|业绩快报"
+    r"|对外投资|投资公告|重大资产|收购|股权转让|增资"
+    r"|募集资金|募投|签订|中标|合同)")
 # cninfo rejects an unreferred POST, and needs the XHR marker its own
 # front-end sends - confirmed live, a request without them returns a 500
 # rather than an auth error.
@@ -6933,38 +7084,61 @@ def _fetch_one_cninfo_company(
         return []
     today = datetime.now(_CST).date()
     start = today - timedelta(days=days_back)
-    payload = {
-        "pageNum": "1",
-        "pageSize": str(_CNINFO_PAGE_SIZE),
-        "column": _cninfo_column(code),
-        "tabName": "fulltext",
-        "plate": "",
-        # Both halves are required. A bare code returns zero rows and
-        # totalAnnouncement=0 - it does NOT error, which is what makes
-        # this failure mode worth naming: it looks exactly like a company
-        # that filed nothing.
-        "stock": f"{code},{org_id}",
-        "searchkey": "",
-        "secid": "",
-        "category": "",
-        "trade": "",
-        "seDate": f"{start:%Y-%m-%d}~{today:%Y-%m-%d}",
-        "sortName": "",
-        "sortType": "",
-        "isHLtitle": "true",
-    }
-    try:
-        resp = httpx.post(_CNINFO_QUERY_URL, data=payload,
-                          headers=_CNINFO_HEADERS, timeout=_CHINA_TIMEOUT)
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as exc:
-        logger.warning("[CHINA] cninfo query failed code=%s error=%s",
-                       code, exc)
-        return []
+
+    def _page(num: int) -> dict:
+        return {
+            "pageNum": str(num),
+            "pageSize": str(_CNINFO_PAGE_SIZE),
+            "column": _cninfo_column(code),
+            "tabName": "fulltext",
+            "plate": "",
+            # Both halves are required. A bare code returns zero rows and
+            # totalAnnouncement=0 - it does NOT error, which is what makes
+            # this failure mode worth naming: it looks exactly like a
+            # company that filed nothing.
+            "stock": f"{code},{org_id}",
+            "searchkey": "",
+            "secid": "",
+            "category": "",
+            "trade": "",
+            "seDate": f"{start:%Y-%m-%d}~{today:%Y-%m-%d}",
+            "sortName": "",
+            "sortType": "",
+            "isHLtitle": "true",
+        }
+
+    # cninfo returns 30 announcements per page and the window is walked
+    # to its end, not sampled. This used to request page 1 only, which
+    # silently capped every company at 30 regardless of days_back - a
+    # year's real volume is 103-219 announcements per company and four
+    # years is 396-785, so the stored history was a recent slice wearing
+    # the date range's clothes. Any per-company baseline built on it
+    # measured the wrong thing.
+    announcements: list[dict] = []
+    for page in range(1, _CNINFO_MAX_PAGES + 1):
+        try:
+            resp = httpx.post(_CNINFO_QUERY_URL, data=_page(page),
+                              headers=_CNINFO_HEADERS, timeout=_CHINA_TIMEOUT)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:
+            logger.warning("[CHINA] cninfo query failed code=%s page=%d "
+                           "error=%s", code, page, exc)
+            break
+        batch = data.get("announcements") or []
+        announcements.extend(batch)
+        # A short page is the last page. Checked on the batch rather than
+        # against totalAnnouncement, which cninfo reports inconsistently
+        # once a query spans several years.
+        if len(batch) < _CNINFO_PAGE_SIZE:
+            break
+    else:
+        logger.warning("[CHINA] cninfo hit the %d-page cap for code=%s - "
+                       "older announcements in this window were not read",
+                       _CNINFO_MAX_PAGES, code)
 
     articles: list[dict] = []
-    for ann in (data.get("announcements") or []):
+    for ann in announcements:
         ann_id = ann.get("announcementId")
         if not ann_id:
             continue
@@ -6983,9 +7157,24 @@ def _fetch_one_cninfo_company(
         # sees only a title - and a title like "关于在手订单情况的自愿性披露
         # 公告" (voluntary disclosure of orders on hand) names the subject
         # but carries none of the figures that make it a signal.
-        body = (_fetch_china_filing_body(
-            filing_url, html.unescape(ann.get("announcementTitle") or ""))
-            if filing_url else None)
+        title = html.unescape(ann.get("announcementTitle") or "")
+        # Only filings whose TITLE says they carry figures get their PDF
+        # fetched. Walking a company's full window returns 100-800
+        # announcements, the large majority of them routine - board
+        # resignations, articles of association, shareholding changes -
+        # that no classifier reads. Downloading every one costs a PDF
+        # fetch each and fills the disk for nothing (it did: a four-year
+        # run exhausted the database volume mid-fetch).
+        #
+        # The two classifiers that need a body both key on a title
+        # pattern anyway: C2 reads the YoY revenue a periodic report or
+        # earnings pre-announcement states about itself, and C3 reads
+        # the amount in an investment or transaction announcement.
+        # Titles are always present, so a filing excluded here is still
+        # STORED with its title and date - it is the body that is
+        # skipped, not the row, and a later pass can fill it in.
+        body = (_fetch_china_filing_body(filing_url, title)
+                if filing_url and _CNINFO_BODY_RE.search(title) else None)
         articles.append({
             # Synthetic, and globally unique: announcementId is cninfo's
             # own permanent key, so the existing uq_articles_url index
@@ -7007,7 +7196,6 @@ def _fetch_one_cninfo_company(
                 "source_type": "cninfo_filing",
                 "code": code,
                 "company": company.get("company"),
-                "translated_company_name": company.get("company"),
                 "native_name": company.get("native_name"),
                 # The exchange's own name on the filing. Kept because it
                 # differs from the stored one often enough to matter
@@ -7097,7 +7285,13 @@ def _fetch_one_hkex_company(
         "t1code": "-2",
         "t2Gcode": "-2",
         "t2code": "-2",
-        "rowRange": "100",
+        # A result LIMIT, not a page size - HKEX returns everything up
+        # to this number in one response and has no pagination. 100
+        # silently truncated every company: SMIC's four-year history is
+        # 380 filings and came back as exactly 100 at every window,
+        # which looks like a complete answer rather than a capped one.
+        # 1000 is above the deepest real issuer over four years.
+        "rowRange": "1000",
         "lang": "EN",
     }
     try:
@@ -7161,7 +7355,6 @@ def _fetch_one_hkex_company(
                 "code": company.get("code"),
                 "hk_code": hk_code,
                 "company": company.get("company"),
-                "translated_company_name": company.get("company"),
                 "native_name": company.get("native_name"),
                 "filing_url": doc_url,
                 # English by Hong Kong listing requirement - recorded so a
@@ -7313,17 +7506,14 @@ def _fetch_press_cn_rss(
     """One Chinese press RSS feed, filtered to the universe.
 
     Matching is on the TITLE ONLY, deliberately - not title+summary.
-    Measured live on ITHome's feed: title-only matched 1 article and all
-    of it was about that company; title+summary matched 3, of which 2
-    were false positives (an Nvidia laptop story matched Lenovo on a
-    passing 联想 in the body; an Honor OS story matched Tencent the same
-    way). A company named in passing is exactly what the China Signals
-    spec's own press classifier calls WEAK, so widening the match here
-    would manufacture the noise the classifier then has to reject.
+    See the comment at the match itself for the live measurement: the
+    summary roughly doubles the hit count and roughly half of what it
+    adds is a company named in passing.
 
-    The feed's own summary IS stored - as `summary`, where a consumer
-    can weigh it in context - just not used to decide whether the
-    article is about the company.
+    The feed's own summary IS stored - as `summary`, carried through to
+    the classifier in `metadata.summary`, where it can be weighed in
+    context - just not used to decide whether the article is about the
+    company.
     """
     raw = _china_get(feed_url)
     if not raw:
@@ -7339,6 +7529,21 @@ def _fetch_press_cn_rss(
         url = (entry.get("link") or "").strip()
         if not title or not url or url in seen:
             continue
+        # The feed's summary is HTML, not plain text.
+        summary = _china_strip_html(entry.get("summary") or "") or None
+        # MATCHED ON THE TITLE ONLY, never title+summary. Re-measured
+        # live on a 60-entry feed: title-only matched 3 articles and
+        # all 3 were genuinely about their company; adding the summary
+        # matched 5, and both extras were wrong - an Omdia panel-
+        # shipment forecast that names Lenovo in passing, and a Hang
+        # Seng index-movement story that names SMIC the same way. A
+        # 40% false-positive rate, reproducing the same result this
+        # was first measured at on different articles.
+        #
+        # A company named in passing is what the China Signals spec's
+        # own press classifier calls WEAK, so widening the match here
+        # manufactures exactly the noise the classifier then has to
+        # reject.
         company = _match_china_company(companies, title)
         if not company:
             continue
@@ -7351,8 +7556,6 @@ def _fetch_press_cn_rss(
                                tzinfo=timezone.utc)
             except (TypeError, ValueError):
                 pub = None
-        # The feed's summary is HTML, not plain text.
-        summary = _china_strip_html(entry.get("summary") or "") or None
         articles.append({
             "url": url,
             "title": title,
@@ -7372,7 +7575,6 @@ def _fetch_press_cn_rss(
                 "via": "rss",
                 "code": company.get("code"),
                 "company": company.get("company"),
-                "translated_company_name": company.get("company"),
                 "native_name": company.get("native_name"),
             },
         })
@@ -7485,8 +7687,7 @@ def _fetch_press_cn(sources: list[dict], days_back: int) -> list[dict]:
                         "outlet": outlet,
                         "code": company.get("code"),
                         "company": company.get("company"),
-                        "translated_company_name": company.get("company"),
-                        "native_name": company.get("native_name"),
+                                "native_name": company.get("native_name"),
                     },
                 })
         logger.info("[CHINA] press_cn listing=%s matched=%d",

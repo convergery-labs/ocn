@@ -328,6 +328,15 @@ def create_articles(articles: list[dict]) -> None:
     for a in articles:
         if a.get("published") is None and a.get("_pub_date") is not None:
             a["published"] = a["_pub_date"]
+        # Postgres cannot store a NUL byte in a text column, and the
+        # driver raises on the whole batch rather than the one row, so
+        # a single malformed PDF loses an entire run's articles. The
+        # fetchers strip these at extraction; this is the backstop for
+        # any that still arrive.
+        for field in ("title", "summary", "body"):
+            value = a.get(field)
+            if isinstance(value, str) and "\x00" in value:
+                a[field] = value.replace("\x00", "")
     with get_db() as conn:
         conn.execute_values(
             "INSERT INTO articles"

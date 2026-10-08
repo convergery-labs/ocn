@@ -649,6 +649,21 @@ def _headline(signal_type: str, meta: dict[str, Any]) -> str:
         # the verb-first form in every case - no verb detection, which
         # would be speculative handling for a shape the prompt does
         # not produce.
+        # A major-shareholder change names its holder here. The name
+        # is composed at render time rather than stored in the action
+        # phrase, because translation runs after classification: a
+        # name baked in at classify time is katakana, and the later
+        # swap cannot reach a string already written to the row.
+        # English is preferred and the filed Japanese is the fallback,
+        # so the card never silently drops the holder.
+        holder = (meta.get("translated_major_shareholder_name")
+                  or meta.get("major_shareholder_name"))
+        now = meta.get("major_shareholder_pct")
+        was = meta.get("major_shareholder_pct_previous")
+        if holder and now is not None and was is not None:
+            verb = "raised" if now > was else "cut"
+            return (f"{holder} {verb} its holding to {now:.2f}% of voting "
+                    f"rights, from {was:.2f}%")
         action = meta.get("disclosure_action")
         return f"Filed {action}" if action else "Filed a corporate disclosure"
     return "Classified event"
@@ -923,12 +938,29 @@ def _caveat(signal_type: str, meta: dict[str, Any]) -> str | None:
                     f"it after the fact.")
         return "Reported after the company's own announcement, not ahead of it."
     if signal_type == "disclosure":
-        # The English-filing fact belongs to `unusual`, which is the
-        # field asking what is notable about this row. It used to be
-        # repeated here and in the classifier's reason as well, so one
-        # fact filled three fields on the same card.
-        return ("Judged from the filing's own title - the disclosure's full terms are "
-                "in the document itself.")
+        # No caveat on a disclosure row, of either tier.
+        #
+        # J8 reads the filing's title and nothing else, and three
+        # attempts at saying so all failed the same way. "Judged from
+        # the filing's own title" described our parsing rather than
+        # the reader's risk. "Its size and terms are in the document
+        # itself" pointed at information without supplying any. And
+        # printing the title here - the one version that carried real
+        # detail - put a third near-identical line on a card whose
+        # headline and signal sentence already say the same thing:
+        #
+        #     Filed follow-on investment in OpenAI
+        #     Filed as: Execution of Follow-on Investment (Third
+        #       Tranche) in OpenAI
+        #     SoftBank Group filed a disclosure of follow-on
+        #       investment in OpenAI.
+        #
+        # The detail belongs in the headline, which is where the
+        # classifier prompt now keeps the qualifiers it used to trim.
+        # That a figure is absent is already stated plainly by an
+        # empty `evidence`, and the filing itself is one click away in
+        # `sourceUrl`.
+        return None
     if signal_type == "forecast" and meta.get("habit_is_trusted") is False:
         return ("Too few past revisions to establish this company's usual size, "
                 "so the comparison is against the fixed floor only.")
