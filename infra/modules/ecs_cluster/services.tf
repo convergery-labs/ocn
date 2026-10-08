@@ -1358,7 +1358,25 @@ resource "aws_ecs_task_definition" "signal_detection_agent" {
         { name = "OPENAI_BASE_URL",        value = "https://openrouter.ai/api/v1" },
         { name = "SIGNAL_DETECTION_MODEL",    value = "anthropic/claude-sonnet-4-6" },
         { name = "SIGNAL_DETECTION_MODEL_V2", value = "openai/gpt-4o-mini" },
-        { name = "SEC_FILING_MODEL",          value = "openai/gpt-4.1" }
+        { name = "SEC_FILING_MODEL",          value = "openai/gpt-4.1" },
+        # geopolitical_signal Stage C only (channel/actors/assets/
+        # impacted_categories tagging). Without this it inherits
+        # SIGNAL_DETECTION_MODEL_V2 (gpt-4o-mini), which was measured
+        # against all 19 real staging-tagged rows and under-fills the
+        # structured array fields: gpt-4o-mini returned an empty "assets"
+        # array on 9 of the 11 rows that also had no categories, including
+        # obvious cases (US sanctions on Iranian banks -> no "usd"). gpt-4.1
+        # populates those correctly, recovers the Cuba shipping-container
+        # row (-> Compute Hardware & Edge Systems), and adds a correct
+        # second category on the Cuban nickel row. It does NOT invent
+        # categories for genuinely unmappable stories - Estonia's sanctions
+        # on two named individuals stayed empty 5/5, which is the right
+        # answer. Known trade-off: gpt-4.1 is marginally less repeatable on
+        # one borderline row (Cuba shipping, 4/5 runs) where gpt-4o-mini is
+        # deterministically empty, and costs ~15-20x per call - immaterial
+        # here, since Stage C only runs on Stage B's HIGH rows (19 in total
+        # to date, 0-3 per day) and is capped at 50/day anyway.
+        { name = "GEOPOLITICAL_SIGNAL_STAGE_C_MODEL", value = "openai/gpt-4.1" }
       ]
       secrets = [
         {

@@ -18,13 +18,28 @@ industries named. Return ONLY a JSON object with exactly these keys:
   market access. Direction of impact does not matter, only whether
   it transmits. If the event is macro-only (moves oil or rates but
   no specific AI category more than the market), return an empty
-  array. If neither the headline nor the article text names the
-  specific goods, sectors, or industries affected (e.g. "import
-  bans" or "tariffs" with no named product/sector), you do not have
-  enough information to pick a category - return an empty array
-  rather than guessing which categories a vague action might
-  plausibly touch. A vaguer news item should never produce MORE
-  categories than one that actually names what's affected.
+  array.
+    Decide in two steps, and keep them separate:
+    (1) Does the headline or article text NAME a specific good,
+        sector, or industry? A named sector is an explicit noun for
+        an industry or line of business - "banks", "airlines",
+        "nickel", "dairy", "shipping containers", "crypto
+        exchange", "semiconductors". Naming only a country, a
+        person, a company, or a measure ("sanctions", "tariffs",
+        "import bans", "export controls") is NOT naming a sector.
+    (2) If a sector IS named, map it to the closest category in the
+        list below whenever that category plausibly transmits -
+        even when the link to AI is indirect, and even when the
+        story is not about technology. Do not withhold a category
+        merely because the event feels unrelated to AI; step 1 has
+        already established the sector is stated. If no category in
+        the list covers the named sector (e.g. aviation, dairy),
+        return an empty array rather than forcing a poor fit.
+    If NO sector is named, return an empty array - do not guess
+    which categories a vague action might plausibly touch, and do
+    not infer a sector from the intent or likely effect of a
+    measure. A vaguer news item must never produce MORE categories
+    than one that actually names what's affected.
 "one_line": one plain-English sentence, max 20 words, stating what
   happened and the transmission path. State only what the source
   text says. Do not predict prices. Do not advise. Never state a

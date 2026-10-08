@@ -3802,16 +3802,48 @@ def seed() -> None:
                 "INSERT INTO sources"
                 " (url, domain_id, frequency_id, name, description,"
                 " no_fetch, source_type, config)"
-                " VALUES %s ON CONFLICT (url) DO NOTHING RETURNING id",
+                " VALUES %s"
+                # `config` IS REFRESHED ON CONFLICT. It used to be DO
+                # NOTHING for the whole row, which meant a config
+                # change made in this file never reached an
+                # already-seeded database - the source kept whatever
+                # it was first seeded with, silently and forever.
+                #
+                # That cost real coverage. China's press source gained
+                # an `rss_urls` entry for ITHome, and a seeded database
+                # never picked it up: `config.get("rss_urls", {})`
+                # iterated nothing, so the RSS path never ran and every
+                # ITHome article arrived through the HTML listing with
+                # no summary. The same row was also missing ijiwei,
+                # added to `listing_urls` at the same time. Both were
+                # invisible - the fetcher logged no error, it simply
+                # had nothing to iterate.
+                #
+                # `config` is safe to overwrite because it is derived
+                # entirely from this file; nothing writes it at
+                # runtime. The operator-owned columns are deliberately
+                # NOT touched: `no_fetch` is a kill switch someone may
+                # have flipped, and `frequency_id` may have been tuned
+                # against real volume. Those still require a manual
+                # change, which is the right trade - they encode a
+                # decision, where `config` encodes code.
+                " ON CONFLICT (url) DO UPDATE SET"
+                "   config = EXCLUDED.config,"
+                "   source_type = EXCLUDED.source_type,"
+                "   name = EXCLUDED.name,"
+                "   description = EXCLUDED.description"
+                " RETURNING id, (xmax = 0) AS was_inserted",
                 source_rows,
             )
-            inserted = len(cur.fetchall())
-        skipped = len(source_rows) - inserted
+            returned = cur.fetchall()
+            inserted = sum(1 for r in returned if r["was_inserted"])
+        refreshed = len(source_rows) - inserted
         logger.info(
             "Seed complete: %d sources inserted,"
-            " %d already existed.",
+            " %d existing refreshed from code (config, source_type,"
+            " name, description).",
             inserted,
-            skipped,
+            refreshed,
         )
 
 

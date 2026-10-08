@@ -63,13 +63,33 @@ class TestReversalDirection:
 
 class TestForecastHeadline:
     def test_zero_change_is_not_called_a_cut(self):
-        assert _headline("forecast", {"operating_profit_pct_change": 0.0}) == (
+        assert _headline("forecast", {"operating_profit_pct_change": 0.0,
+                                      "forecast_period": "full_year"}) == (
             "Left full-year profit forecast unchanged"
         )
 
     @pytest.mark.parametrize("pct,word", [(5.0, "Raised"), (-33.3, "Cut")])
     def test_real_moves_keep_their_direction(self, pct, word):
-        assert _headline("forecast", {"operating_profit_pct_change": pct}).startswith(word)
+        assert _headline("forecast", {"operating_profit_pct_change": pct,
+                                      "forecast_period": "full_year"}).startswith(word)
+
+    def test_the_headline_names_the_period_the_figures_came_from(self):
+        """A filing can revise a half-year and a full-year forecast at
+        once. This line said "full-year" for both while the classifier
+        took whichever table came first - which on 51 of 66
+        multi-table filings was not the full year."""
+        assert _headline("forecast", {"operating_profit_pct_change": 13.8,
+                                      "forecast_period": "half_year"}) == (
+            "Raised half-year profit forecast")
+        assert _headline("forecast", {"operating_profit_pct_change": 9.0,
+                                      "forecast_period": "quarter"}) == (
+            "Raised quarterly profit forecast")
+
+    def test_an_unmarked_period_is_not_called_full_year(self):
+        """33 stored tables carry no period marker. Naming one would
+        assert a period the filing never states."""
+        assert _headline("forecast", {"operating_profit_pct_change": 5.0}) == (
+            "Raised profit forecast")
 
 
 class TestProgressBaseline:
@@ -1050,6 +1070,174 @@ class TestMajorShareholderChange:
         """The filing never prints one, so neither does the code."""
         import pipeline.japan_signal_classifier as jc
         assert not hasattr(jc, "_MAJOR_SHAREHOLDER_THRESHOLD_PCT")
+
+
+class TestRevenueOnlyRevision:
+    """A revision that moves revenue and leaves profit flat.
+
+    Hitachi does this in all four of its stored filings: revenue
+    +11.3%, while the filing's own 増減額 row reads 0 for operating
+    profit, EBIT and net income alike - verified against the source
+    PDF, so the figures are right and the behaviour is real. Judged
+    on operating profit alone the card said "Left full-year profit
+    forecast unchanged" beside "¥372bn → ¥372bn", and an 11.3%
+    revenue raise disappeared from the feed. 6 of 191 stored rows.
+    """
+
+    @staticmethod
+    def _card(**over):
+        from pipeline.japan_signal_view import to_jp_signal
+        meta = {"code": "6501", "company": "Hitachi",
+                "source_category": "jp_forecast",
+                "forecast_period": "full_year",
+                "operating_profit_previous": 372000.0,
+                "operating_profit_revised": 372000.0,
+                "operating_profit_pct_change": 0.0}
+        meta.update(over)
+        return to_jp_signal({
+            "source_id": "irbank-financials://6501/140120200727467442",
+            "signal_detection": "weak_signal", "signal_score": None,
+            "signal_reason": "r", "published": "2020-07-30T00:00:00Z",
+            "title": "t", "metadata": meta})
+
+    def test_the_headline_reports_the_line_that_moved(self):
+        c = self._card(revenue_previous=7080000.0, revenue_revised=7880000.0,
+                       revenue_pct_change=11.3)
+        assert c["headline"] == ("Raised full-year revenue forecast 11.3%, "
+                                 "profit unchanged")
+
+    def test_the_change_line_shows_the_revenue_move(self):
+        """"¥372bn → ¥372bn" states a figure twice and shows nothing."""
+        c = self._card(revenue_previous=7080000.0, revenue_revised=7880000.0,
+                       revenue_pct_change=11.3)
+        assert c["change"] == "¥7.1tn → ¥7.9tn revenue"
+
+    def test_a_revenue_cut_keeps_its_direction(self):
+        c = self._card(revenue_previous=7880000.0, revenue_revised=7080000.0,
+                       revenue_pct_change=-10.2)
+        assert c["headline"].startswith("Cut full-year revenue forecast 10.2%")
+
+    def test_everything_flat_still_reads_as_unchanged(self):
+        """Only claim a revision where one happened."""
+        c = self._card()
+        assert c["headline"] == "Left full-year profit forecast unchanged"
+
+    def test_a_profit_move_is_never_displaced_by_revenue(self):
+        """Where profit moved, profit is what the signal is about."""
+        c = self._card(operating_profit_revised=432000.0,
+                       operating_profit_pct_change=16.1,
+                       revenue_pct_change=11.3)
+        assert c["headline"] == "Raised full-year profit forecast"
+
+    def test_ocr_mangled_revenue_keys_are_still_found(self):
+        """The OCR fallback emits 売上⾼ with a different codepoint for
+        高, and 売売上上高高 with every character doubled. Both appear
+        in stored rows."""
+        from pipeline.japan_signal_classifier import _get_revenue
+        for key in ("売上高", "売上⾼", "売売上上高高", "売上収益", "営業収益"):
+            figures = [{"_kind": "revision", "当期利益": {},
+                        key: {"previous": 100.0, "revised": 120.0}}]
+            assert _get_revenue(figures) == {"previous": 100.0, "revised": 120.0}
+
+
+class TestForecastTableSelection:
+    """A revision is judged on the full-year table, not the first one.
+
+    `_get_operating_profit` used to take `figures[0]` on the stated
+    grounds that a filing lists its primary table first, citing
+    Fujikura's Q2+full-year filing as confirmation. The real PDF says
+    the opposite: that filing's HALF-YEAR table is first. Across the
+    stored rows, 51 of 66 multi-table filings carry their full-year
+    table somewhere after position 0, so the card was labelling
+    half-year and quarterly figures "full-year" and the habit median
+    was pooling periods that are not comparable.
+    """
+
+    # Fujikura 5803, filing 140120260806513565, re-parsed from the
+    # source PDF - two tables, half-year first.
+    FUJIKURA = [
+        {"_kind": "revision",
+         "売上高": {"previous": 778000.0, "revised": 821000.0},
+         "営業利益": {"previous": 174000.0, "revised": 198000.0},
+         "親会社株主に帰属する中間純利益": {"previous": 128000.0, "revised": 149000.0}},
+        {"_kind": "revision",
+         "売上高": {"previous": 1462000.0, "revised": 1755000.0},
+         "営業利益": {"previous": 310000.0, "revised": 432000.0},
+         "親会社株主に帰属する当期純利益": {"previous": 229000.0, "revised": 326000.0}},
+    ]
+
+    def test_the_period_is_read_from_the_net_income_line(self):
+        from pipeline.japan_signal_classifier import table_period
+        assert table_period(self.FUJIKURA[0]) == "half_year"
+        assert table_period(self.FUJIKURA[1]) == "full_year"
+
+    def test_the_full_year_table_wins_over_the_first_one(self):
+        from pipeline.japan_signal_classifier import select_forecast_table
+        table, period = select_forecast_table(self.FUJIKURA)
+        assert period == "full_year"
+        assert table["営業利益"] == {"previous": 310000.0, "revised": 432000.0}
+
+    def test_the_figures_are_the_full_year_ones(self):
+        """174000 -> 198000 is the half year. Taking it and calling it
+        full-year understated this revision as 13.8% when it was
+        39.4%."""
+        from pipeline.japan_signal_classifier import _get_operating_profit
+        assert _get_operating_profit(self.FUJIKURA) == {
+            "previous": 310000.0, "revised": 432000.0}
+
+    def test_a_single_table_filing_is_unaffected(self):
+        from pipeline.japan_signal_classifier import select_forecast_table
+        table, period = select_forecast_table([self.FUJIKURA[0]])
+        assert period == "half_year"
+        assert table is self.FUJIKURA[0]
+
+    def test_an_unmarked_table_reports_no_period_rather_than_guessing(self):
+        from pipeline.japan_signal_classifier import select_forecast_table
+        table, period = select_forecast_table(
+            [{"_kind": "revision", "営業利益": {"previous": 1.0, "revised": 2.0}}])
+        assert period is None and table is not None
+
+    def test_quarter_is_not_read_as_full_year(self):
+        """四半期 and 当期 share characters; testing for the full year
+        first would claim every table."""
+        from pipeline.japan_signal_classifier import table_period
+        assert table_period(
+            {"親会社株主に帰属する四半期純利益": {}}) == "quarter"
+
+    def test_the_title_fills_in_where_the_keys_are_silent(self):
+        """Two stored SoftBank rows report under IFRS wording -
+        親会社の所有者に帰属する純利益 - which carries no 当期/中間
+        marker, while their titles read "full-year earnings forecast"
+        plainly."""
+        from pipeline.japan_signal_classifier import table_period
+        ifrs = {"_kind": "revision", "売上高": {}, "営業利益": {},
+                "親会社の所有者に帰属する純利益": {}}
+        assert table_period(ifrs) is None
+        assert table_period(
+            ifrs, "Notice regarding the revision of full-year earnings "
+                  "forecast") == "full_year"
+
+    def test_the_keys_win_over_a_title_that_disagrees(self):
+        """The keys describe the table the figures came from; the
+        title describes the filing, which may revise more than one
+        period."""
+        from pipeline.japan_signal_classifier import table_period
+        assert table_period({"親会社株主に帰属する当期純利益": {}},
+                            "half-year forecast revision") == "full_year"
+
+    def test_a_title_naming_two_periods_names_neither(self):
+        """Fujikura's "revision of half-year and full-year earnings
+        forecasts" cannot say which period the figures describe, so it
+        is not allowed to."""
+        from pipeline.japan_signal_classifier import _title_period
+        assert _title_period(
+            "Notice regarding the revision of half-year and full-year "
+            "earnings forecasts") is None
+
+    def test_no_figures_selects_nothing(self):
+        from pipeline.japan_signal_classifier import select_forecast_table
+        assert select_forecast_table([]) == (None, None)
+        assert select_forecast_table(None) == (None, None)
 
 
 class TestMajorShareholderIsEnglish:

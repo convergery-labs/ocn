@@ -112,6 +112,19 @@ _JAPAN_SIGNAL_MAP = {"SIGNAL": "signal", "WEAK": "weak_signal", "NOISE": "noise"
 # operating_profit finding nothing, not by _is_genuine_revision itself).
 _OPERATING_PROFIT_KEYS = ("営業利益", "営業利益（△損失）", "調整後営業利益")
 
+# The revenue line, read only when operating profit did not move.
+# A company can revise revenue and leave every profit line untouched -
+# Hitachi does it in all four of its stored filings, raising revenue
+# 11.3% while 増減額 reads 0 for operating profit, EBIT and net income
+# alike. Judged on operating profit alone those filings report
+# "unchanged", so a real revision disappears from the feed.
+#
+# 売上⾼ and 売売上上高高 are the same label as 売上高, arriving through
+# the OCR fallback: the first uses a different codepoint for 高, the
+# second has every character doubled. Both appear in stored rows, so
+# both are matched rather than left to read as an absent line.
+_REVENUE_KEYS = ("売上高", "売上⾼", "売売上上高高", "売上収益", "営業収益")
+
 # Renesas Electronics reports Non-GAAP margin PERCENTAGES only, no
 # absolute yen operating-profit figure in any real filing checked - see
 # module docstring. Excluded from J1 entirely rather than silently
@@ -197,21 +210,140 @@ _MIN_FISCAL_YEAR_SPAN_FOR_TRUSTED_HABIT = 3
 
 
 
-def _get_operating_profit(figures: list[dict[str, Any]] | None) -> dict[str, float | None] | None:
-    """Return the {"previous", "revised"} dict for whichever operating-
-    profit key (see _OPERATING_PROFIT_KEYS) is present in the FIRST table
-    of ``figures`` - a filing's own primary consolidated forecast table is
-    always the first one extracted (confirmed live: multi-table filings,
-    e.g. Fujikura's Q2+full-year split, list the more complete/relevant
-    table first - see news-retrieval's own _extract_tables_matching).
-    Returns None if figures is empty/absent or neither key exists.
+# Which period a forecast table covers, read from its own line-item
+# keys. A filing states the period in the net-income line rather than
+# anywhere structural: 当期純利益 is the full year, 中間純利益 the
+# half, 四半期純利益 a quarter.
+_TABLE_PERIOD_MARKERS = (("中間", "half_year"),
+                         ("四半期", "quarter"),
+                         ("当期", "full_year"))
+
+
+# The same three periods as named in a filing's TITLE. Used only
+# where the line-item keys are silent - the title is a weaker source
+# because a filing that revises two periods names both in it, so
+# scanning it first reads Fujikura's "revision of half-year and
+# full-year earnings forecasts" as half-year when the table selected
+# is the full year.
+_TITLE_PERIOD_MARKERS = (
+    ("full_year", ("通期", "full-year", "full year")),
+    ("half_year", ("中間", "半期", "half-year", "interim")),
+    ("quarter", ("四半期", "quarter")),
+)
+
+
+def _title_period(title: str | None) -> str | None:
+    """The period a filing's title names, or None if it names none.
+
+    Only meaningful when the title names exactly one. A filing that
+    revises a half-year and a full-year forecast says both, and which
+    of the two the figures describe is then a question only the table
+    can answer.
+    """
+    if not title:
+        return None
+    low = title.lower()
+    found = [period for period, markers in _TITLE_PERIOD_MARKERS
+             if any(m in title or m in low for m in markers)]
+    return found[0] if len(found) == 1 else None
+
+
+def table_period(table: dict[str, Any] | None,
+                 title: str | None = None) -> str | None:
+    """The period a forecast table covers, or None if unmarked.
+
+    The line-item keys come first and are authoritative: 当期純利益 is
+    the full year, 中間純利益 the half, 四半期純利益 a quarter, and
+    they describe the table the figures were actually read from.
+    Checked longest-marker-first, since 中間 and 四半期 both contain
+    characters that also appear in 当期-style keys.
+
+    ``title`` is consulted only when the keys say nothing. Two stored
+    SoftBank rows report under IFRS wording - 親会社の所有者に帰属する
+    純利益 - which carries no period marker at all, while their titles
+    read "full-year earnings forecast" plainly. (The other 30 unmarked
+    rows are Renesas, excluded from this signal type entirely for
+    reporting Non-GAAP margins with no yen figure.)
+    """
+    if not table:
+        return None
+    keys = " ".join(k for k in table if k != "_kind")
+    for marker, period in _TABLE_PERIOD_MARKERS:
+        if marker in keys:
+            return period
+    return _title_period(title)
+
+
+def select_forecast_table(
+    figures: list[dict[str, Any]] | None,
+    title: str | None = None,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """The table a revision should be judged on, and its period.
+
+    Prefers the full year. One filing routinely revises two periods at
+    once - a half-year forecast and the full year it sits inside - and
+    the full year is the one a reader means by "the forecast".
+
+    This used to take ``figures[0]`` on the stated grounds that a
+    filing lists its primary table first. The real PDFs say otherwise:
+    Fujikura's own Q2+full-year filing, cited as the confirming
+    example, puts the HALF-YEAR table first. Across the stored rows,
+    51 of 66 multi-table filings carry a full-year table somewhere
+    after position 0, so the card was labelling half-year and
+    quarterly figures "full-year" and the habit median was pooling
+    periods that are not comparable.
+
+    Falls back to the first table when no table is marked full-year -
+    a single-table filing, or one whose keys carry no period marker at
+    all (33 stored tables). Its period comes back as whatever that
+    table is, so a caller can still say which it got.
+
+    The habit median stays pooled across periods rather than split by
+    one, and this selection is why. Measured over the stored rows,
+    choosing the full-year table leaves 145 of 154 revisions on the
+    full year, 6 on a quarter, 1 on a half and 2 unmarked. A habit
+    split per period would compute medians over one and six
+    observations - below the three-sample floor that gates a trusted
+    habit at all - so it would add a column and withhold the
+    comparison, where pooling keeps a 145-sample median whose handful
+    of other-period members cannot move it meaningfully.
     """
     if not figures:
+        return None, None
+    for table in figures:
+        if table_period(table) == "full_year":
+            return table, "full_year"
+    # Title only for the fallback table. Asking it per-table above
+    # would let one title's word stand in for every table's period.
+    return figures[0], table_period(figures[0], title)
+
+
+def _get_revenue(figures: list[dict[str, Any]] | None) -> dict[str, float | None] | None:
+    """The {"previous", "revised"} revenue pair for the table this
+    revision is judged on, or None if the table carries no revenue
+    line. Same table selection as operating profit, so the two are
+    always read from the same period.
+    """
+    table, _ = select_forecast_table(figures)
+    if not table:
         return None
-    first_table = figures[0]
+    for key in _REVENUE_KEYS:
+        if key in table:
+            return table[key]
+    return None
+
+
+def _get_operating_profit(figures: list[dict[str, Any]] | None) -> dict[str, float | None] | None:
+    """The {"previous", "revised"} operating-profit pair for the table
+    this revision should be judged on - see select_forecast_table for
+    which that is. Returns None if no table carries either key.
+    """
+    table, _ = select_forecast_table(figures)
+    if not table:
+        return None
     for key in _OPERATING_PROFIT_KEYS:
-        if key in first_table:
-            return first_table[key]
+        if key in table:
+            return table[key]
     return None
 
 
@@ -678,6 +810,9 @@ def classify_forecast_revision(
 
         for r in company_revisions:
             meta = r["metadata"]
+            _table, _period = select_forecast_table(
+                meta["figures"],
+                meta.get("translated_title") or a.get("title"))
             op_profit = _get_operating_profit(meta["figures"])
             previous = op_profit["previous"]
             revised = op_profit["revised"]
@@ -878,6 +1013,27 @@ def classify_forecast_revision(
             meta["operating_profit_previous"] = previous
             meta["operating_profit_revised"] = revised
             meta["operating_profit_pct_change"] = round(pct, 1) if pct is not None else None
+            # Which period these three figures describe. A filing can
+            # revise a half-year and a full-year forecast in one
+            # document, so a percentage with no period attached cannot
+            # be read, compared with another revision, or labelled on a
+            # card. None where the table carries no period marker -
+            # unknown, rather than assumed to be the full year.
+            meta["forecast_period"] = _period
+            # Where operating profit did not move, the revenue line is
+            # what the filing actually revised. Stored only in that
+            # case: when profit moved, profit is the figure the signal
+            # is about and a second number beside it competes with the
+            # one that matters.
+            if pct == 0:
+                _rev = _get_revenue(meta["figures"])
+                if _rev and _rev.get("previous") and _rev.get("revised"):
+                    _rp, _rr = _rev["previous"], _rev["revised"]
+                    if _rp != _rr:
+                        meta["revenue_previous"] = _rp
+                        meta["revenue_revised"] = _rr
+                        meta["revenue_pct_change"] = round(
+                            _pct_change(_rp, _rr), 1)
             meta["habit_revisions_per_year"] = habit["revisions_per_year"]
             meta["habit_typical_size_pct"] = habit["typical_size_pct"]
             # The spread the rule-6 bar is built from. Stored alongside

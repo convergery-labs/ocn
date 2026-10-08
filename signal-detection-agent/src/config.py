@@ -53,13 +53,22 @@ GEOPOLITICAL_SIGNAL_MODEL: str = (
 GEOPOLITICAL_SIGNAL_STAGE_B_DAILY_CAP: int = int(
     os.environ.get("GEOPOLITICAL_SIGNAL_STAGE_B_DAILY_CAP", "1000")
 )
+# Raised 50 -> 200. Still a safety tripwire against a bug flooding the
+# worklist, not a cost control (same reasoning as Stage B's cap above) -
+# the headroom just got wider. Measured against the full stored staging
+# history (5,487 rows): Stage B has promoted 19 rows to HIGH in total,
+# peaking at 3 in a day, so the old 50 had never fired once (every run
+# logged capped=0) and 200 is not expected to either. Sized to stay a
+# tripwire after the Stage A allowlist expansion (32 -> 45 domains), which
+# recovers ~126 historical drops and is projected to roughly double the
+# HIGH rate to 3-4/day - still two orders of magnitude below this ceiling.
 GEOPOLITICAL_SIGNAL_STAGE_C_DAILY_CAP: int = int(
-    os.environ.get("GEOPOLITICAL_SIGNAL_STAGE_C_DAILY_CAP", "50")
+    os.environ.get("GEOPOLITICAL_SIGNAL_STAGE_C_DAILY_CAP", "200")
 )
 # Stage B and Stage C (both single-model-call-per-row) share
 # CLASSIFY_CONCURRENCY and the module-level _executor in controllers/run.py -
 # same pool the news domain already uses, no dedicated knob needed since
-# their own daily caps (1000/50) bound total volume anyway.
+# their own daily caps (1000/200) bound total volume anyway.
 
 # Taiwan's translate/gdelt-relevance loops (pipeline/taiwan_signal_classifier.py)
 # - both are single blocking HTTP calls per item, same shape as the other
