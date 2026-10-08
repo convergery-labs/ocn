@@ -54,25 +54,55 @@ def get_companies_for_name_matching() -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
-def get_tickers_for_categories(categories: list[str]) -> list[dict[str, Any]]:
-    """Return [{ticker, company_name, matched_categories}] for exactly the
-    given category names - Layer 3's expansion step, reading only the
-    categories Layer 2 (+ overrides) actually chose rather than the full
-    19-category table.
+# Maximum tickers returned per article. A category is an unweighted
+# membership list, so expansion size is a property of the category, not of
+# the story: confirmed live in staging that one chosen category yields 8
+# tickers (Defense, Aerospace & Sovereign AI) or 50 (Energy & Grid
+# Infrastructure) purely by how many companies sit in it, and two chosen
+# categories yielded 58. A 58-ticker list is not a more useful answer than
+# an 8-ticker one - past roughly this size the field stops naming the
+# companies a reader should look at and just restates the category's
+# membership, which the category name already said.
+#
+# NOT a relevance ranking - the cache holds only ticker/company_name/
+# categories (no market cap, index weight or revenue exposure), so there is
+# nothing here to rank BY. Ranking would need research-universe to supply a
+# weight through controllers/category_map_refresh.py first. Until then this
+# is an honest truncation: deterministic (ticker order), and the caller is
+# told the list was cut rather than being handed a silently partial list
+# that looks complete.
+_MAX_TICKERS_PER_ARTICLE = 25
+
+
+def get_tickers_for_categories(
+    categories: list[str], *, limit: int = _MAX_TICKERS_PER_ARTICLE,
+) -> tuple[list[dict[str, Any]], int]:
+    """Return (tickers, total_matched) for exactly the given category names
+    - Layer 3's expansion step, reading only the categories Layer 2 (+
+    overrides) actually chose rather than the full 19-category table.
 
     One entry per ticker (not per ticker-category pair) - matched_categories
     is a list so a ticker exposed via multiple chosen categories (a real,
     common case: e.g. a Canada-tariff headline spanning Semiconductor
     Manufacturing + Cloud & Compute Platforms) appears once with both
     categories named, rather than as duplicate rows.
+
+    ``tickers`` is capped at ``limit`` (see _MAX_TICKERS_PER_ARTICLE for
+    why, and for why this is truncation rather than a ranking).
+    ``total_matched`` is the uncapped count, so a caller can show "25 of
+    58" rather than presenting a truncated list as the whole answer.
+    Ordering is by ticker - arbitrary but deterministic, so the same
+    article re-tagged keeps the same list instead of reshuffling on each
+    run.
     """
     if not categories:
-        return []
+        return [], 0
     with get_db() as conn:
         rows = conn.execute(
             """
             SELECT ticker, company_name, categories FROM geopolitical_signal_companies
             WHERE categories && %s
+            ORDER BY ticker
             """,
             (categories,),
         ).fetchall()
@@ -86,7 +116,7 @@ def get_tickers_for_categories(categories: list[str]) -> list[dict[str, Any]]:
                 "company_name": row["company_name"],
                 "matched_categories": matched,
             })
-    return result
+    return result[:limit], len(result)
 
 
 def get_companies_refreshed_at() -> Any | None:

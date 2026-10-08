@@ -499,9 +499,30 @@ def _headline(signal_type: str, meta: dict[str, Any]) -> str:
             # independently, so operating profit is often reaffirmed
             # while other lines move. That is not a cut - and "Cut" is
             # what a bare `pct > 0` test produces at exactly 0.0.
+            # The period comes from the table the figures were read
+            # from, never assumed. This line said "full-year" for
+            # every revision while the classifier was taking whichever
+            # table came first, which on 51 of 66 multi-table filings
+            # was a half-year or quarterly one - so the card named a
+            # period the figures did not describe.
+            span = {"full_year": "full-year", "half_year": "half-year",
+                    "quarter": "quarterly"}.get(meta.get("forecast_period"))
+            what = f"{span} profit forecast" if span else "profit forecast"
             if pct == 0:
-                return "Left full-year profit forecast unchanged"
-            return f"{'Raised' if pct > 0 else 'Cut'} full-year profit forecast"
+                # Profit flat does not mean nothing happened. A company
+                # can revise revenue and leave every profit line
+                # untouched - Hitachi does it in all four of its
+                # filings, raising revenue 11.3% while the filing's own
+                # 増減額 row reads 0 for operating profit. Reading only
+                # profit reported that as "unchanged" and the revision
+                # vanished from the feed.
+                rev = meta.get("revenue_pct_change")
+                if rev:
+                    return (f"{'Raised' if rev > 0 else 'Cut'} "
+                            f"{span + ' ' if span else ''}revenue forecast "
+                            f"{abs(rev)}%, profit unchanged")
+                return f"Left {what} unchanged"
+            return f"{'Raised' if pct > 0 else 'Cut'} {what}"
         revised = meta.get("margin_revised_pct")
         reference = meta.get("margin_reference_prior_year_actual_pct")
         if revised is not None and reference is not None:
@@ -672,6 +693,13 @@ def _headline(signal_type: str, meta: dict[str, Any]) -> str:
 def _change(signal_type: str, meta: dict[str, Any]) -> str | None:
     """The before-to-after line, in the units the filing itself uses."""
     if signal_type == "forecast":
+        # The revenue line where that is what moved - "¥372bn → ¥372bn"
+        # states a figure twice and shows no change at all.
+        if meta.get("revenue_pct_change"):
+            rp = _format_jpy_millions(meta.get("revenue_previous"))
+            rr = _format_jpy_millions(meta.get("revenue_revised"))
+            if rp and rr:
+                return f"{rp} → {rr} revenue"
         prev = _format_jpy_millions(meta.get("operating_profit_previous"))
         rev = _format_jpy_millions(meta.get("operating_profit_revised"))
         if prev and rev:
@@ -1618,6 +1646,14 @@ def to_jp_signal(row: dict[str, Any]) -> dict[str, Any]:
         # target". Read the same field the headline reads.
         actuals = meta["period_type"].replace("_", " ").capitalize()
         reporting_period = f"{actuals}, against {_target_period_label(meta)} target"
+    if reporting_period is None and meta.get("forecast_period"):
+        # Which period a J1 revision's figures describe. A filing can
+        # revise a half-year and a full-year forecast at once, and the
+        # headline said "full-year" for both until the classifier
+        # started choosing the table by its period rather than its
+        # position. Stating it here means the card cannot claim a
+        # period the figures do not come from.
+        reporting_period = meta["forecast_period"].replace("_", "-")
 
     # An empty string is not a reason - the filing had a 理由 heading
     # with nothing under it. Send null so the card omits the quote

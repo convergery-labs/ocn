@@ -7050,8 +7050,19 @@ _CNINFO_MAX_PAGES = 40
 # with its title and date but no body - see the call site for why.
 #   periodic reports and pre-announcements -> C2's revenue YoY
 #   investment / transaction / fundraising -> C3's commitment amount
+#
+# 业绩预增 / 预减 / 预盈 / 预亏 / 变动 are the OTHER pre-announcement
+# wordings and were missing. A company does not always head the filing
+# 业绩预告: 拓荆科技's own "2023年年度业绩预增公告" states its full-year
+# revenue growth and was skipped, so its PDF was never fetched and C2
+# never saw the figure. Measured across the stored history, 30 filings
+# that state results were being skipped this way - 15 of them 业绩预增.
+# The bare 营业收入 catches the few that name the line item in the
+# title instead of the filing type.
 _CNINFO_BODY_RE = re.compile(
-    r"(半年度报告|年度报告|季度报告|业绩预告|业绩快报"
+    r"(半年度报告|年度报告|季度报告|业绩快报"
+    r"|业绩(?:预告|预增|预减|预盈|预亏|变动|修正)"
+    r"|营业收入"
     r"|对外投资|投资公告|重大资产|收购|股权转让|增资"
     r"|募集资金|募投|签订|中标|合同)")
 # cninfo rejects an unreferred POST, and needs the XHR marker its own
@@ -7685,9 +7696,18 @@ def _fetch_press_cn(sources: list[dict], days_back: int) -> list[dict]:
                         "source_outlet_type": outlet_type,
                         "source_type": "press_cn",
                         "outlet": outlet,
+                        # Which path fetched this, stated on both. The
+                        # RSS path has always set `via`; this one did
+                        # not, so a null meant either "came via HTML"
+                        # or "the fetcher forgot" and a reader could
+                        # not tell. It matters because only the RSS
+                        # path carries a summary - "which outlets give
+                        # us a lead?" is answerable from this field
+                        # alone once both paths fill it.
+                        "via": "html",
                         "code": company.get("code"),
                         "company": company.get("company"),
-                                "native_name": company.get("native_name"),
+                        "native_name": company.get("native_name"),
                     },
                 })
         logger.info("[CHINA] press_cn listing=%s matched=%d",

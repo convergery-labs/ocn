@@ -711,6 +711,41 @@ _C1_RELEVANCE_PATTERNS: list[tuple[str, str]] = [
 ]
 _C1_RELEVANCE_RE = [(n, re.compile(p)) for n, p in _C1_RELEVANCE_PATTERNS]
 
+# What makes a trade remedy OURS rather than merely a trade remedy.
+# China runs far more anti-dumping cases on food, chemicals and steel
+# than on anything in this universe, and 反倾销 alone cannot tell them
+# apart - see the pecan case in classify_policy_relevance.
+#
+# Matched against the document text: the goods a measure covers are
+# named in its title or opening, as is any company it targets. US
+# tickers are included because a measure naming Micron or Intel is
+# this programme's subject even where the Chinese sector words are
+# absent.
+_C1_TRACKED_SUBJECT_RE = re.compile(
+    # The sector and its inputs, in the words a Chinese measure uses.
+    r"半导体|芯片|集成电路|晶圆|光刻|刻蚀|存储器|闪存|显示面板"
+    r"|电子元器件|计算机|服务器|人工智能|算力"
+    # Materials this universe actually depends on.
+    r"|稀土|永磁|钨|锗|镓|锑|石墨"
+    # US names a Chinese measure would write in Latin script.
+    r"|(?i:micron|intel|nvidia|amd|qualcomm|broadcom|applied materials"
+    r"|lam research|kla|texas instruments|analog devices|skyworks)"
+    # Their Chinese renderings.
+    r"|美光|英特尔|英伟达|高通|博通|应用材料|泛林|科磊|德州仪器"
+)
+
+
+def _names_tracked_company(text: str) -> bool:
+    """Does this policy text name a company or sector this programme
+    tracks, in any of the forms a Chinese measure would use?
+
+    Deliberately broader than the read-through table: a measure can be
+    material without naming a universe member - an export control on
+    photoresist touches every fab here - so the sector and its inputs
+    count, not only the companies.
+    """
+    return bool(_C1_TRACKED_SUBJECT_RE.search(text or ""))
+
 # Language that marks a document as NOT yet binding. The spec is explicit
 # that a draft for comment and a measure with an effective date are
 # completely different events that use similar language.
@@ -809,6 +844,28 @@ def classify_policy_relevance(title: str, body: str) -> tuple[bool, list[str]]:
             if pattern.search(strong):
                 matched.append(name)
                 break
+
+    # A TRADE REMEDY MUST TOUCH SOMETHING WE TRACK. 反倾销 is decisive
+    # vocabulary for "this is a trade remedy" but says nothing about
+    # what the remedy is ABOUT - China runs anti-dumping cases on
+    # agricultural goods, chemicals and steel far more often than on
+    # anything in this universe.
+    #
+    # Found in the stored data: MOFCOM's announcement extending its
+    # anti-dumping investigation into PECANS from Mexico and the US
+    # (碧根果) was stored as a full `signal`, on a trade_remedy match
+    # alone. It is a real binding measure naming the United States, and
+    # entirely irrelevant to semiconductors.
+    #
+    # So trade_remedy only counts alongside another category - export
+    # control, critical minerals, the sector itself, procurement
+    # security - or a tracked company named in the text. On its own it
+    # is dropped. The other four categories are self-qualifying: each
+    # names the subject matter directly rather than the instrument.
+    if matched == ["trade_remedy"]:
+        subject = f"{title} {(body or '')[:4000]}"
+        if not _names_tracked_company(subject):
+            return False, []
     return bool(matched), matched
 
 
@@ -1334,6 +1391,39 @@ _EN_AMOUNT_RE = re.compile(
     r"(?P<num>[0-9][0-9,]*(?:\.[0-9]+)?)\s*(?P<unit>billion|million)",
     re.I)
 _EN_UNIT_MULTIPLIER = {"billion": 10**9, "million": 10**6}
+
+# NON-RMB AMOUNTS MUST BE CONVERTED BEFORE THEY ARE COMPARED. The
+# HK-listed names file in English and quote US dollars or Hong Kong
+# dollars; a company's C3 baseline is built in renminbi, so an
+# unconverted US$1bn entered the distribution as if it were ¥1bn -
+# roughly a 7x understatement - and the same figure would rank
+# differently depending only on which exchange the company filed with.
+# 61 of 460 extracted amounts are USD-denominated.
+#
+# A FIXED rate, deliberately, and it is an approximation rather than a
+# quotation. C3 asks whether a commitment is unusual against that
+# company's own past commitments, measured in MADs; the answer does
+# not turn on a few percent of FX. A live rate would make a verdict
+# depend on the day it was computed and make a backfill
+# irreproducible, which is a worse failure than being a few percent
+# out. Recorded on the row as `fx_rate` so a reader can see the
+# assumption rather than infer it.
+_FX_TO_CNY = {
+    "US$": 7.1, "USD": 7.1, "$": 7.1,
+    "HK$": 0.91, "HKD": 0.91,
+    "EUR": 7.7, "€": 7.7,
+    "JPY": 0.047, "¥": 1.0,   # a bare ¥ in a Chinese filing is RMB
+    "RMB": 1.0, "CNY": 1.0,
+}
+
+
+def _to_cny(value: float, currency: str | None) -> tuple[float, float]:
+    """(value in CNY, the rate applied). Unknown currency is left as-is
+    at rate 1.0 - guessing would be worse than a figure a reader can
+    see is unconverted."""
+    rate = _FX_TO_CNY.get((currency or "").strip().upper()) \
+        or _FX_TO_CNY.get((currency or "").strip()) or 1.0
+    return value * rate, rate
 # A percentage, with its surrounding words kept so a consumer can tell a
 # growth rate from an ownership stake - 88.20% (order growth) and 49%
 # (fund stake) are both "a percent" and mean completely different things.
@@ -1382,6 +1472,14 @@ _VALUATION_TERMS = (
     "净资产",      # net assets
     "市值",        # market capitalisation
     "作价",        # priced at
+    # English equivalents, for the HK-listed names' own filings. A
+    # third party's size is named in passing just as often in English:
+    # Lenovo's quarterly results describe "Alat, a US$100 billion
+    # sovereign fund", which unguarded became the single largest
+    # commitment in the dataset.
+    "valuation", "valued at", "appraised", "market cap",
+    "registered capital", "total assets", "net assets",
+    "sovereign fund", "fund with", "aum", "assets under management",
 )
 
 
@@ -1392,8 +1490,11 @@ def _valuation_term(context: str) -> str | None:
     excluded, rather than a bare boolean a reader would have to
     re-derive from the filing.
     """
+    # Case-insensitive for the English terms; the Chinese ones are
+    # unaffected by casing.
+    lowered = (context or "").lower()
     for term in _VALUATION_TERMS:
-        if term in context:
+        if term in lowered:
             return term
     return None
 
@@ -1412,13 +1513,59 @@ def _valuation_term(context: str) -> str | None:
 # they occur 19 and 15 times with no consistent subject. Only phrases
 # that are explicitly aggregate are listed, and each must still clear
 # the "another party is named" check below.
-_AGGREGATE_TERMS = ("合计", "总规模", "总额为", "各方", "全体", "共同投资")
+_AGGREGATE_TERMS = (
+    "合计", "总规模", "总额为", "各方", "全体", "共同投资",
+    # English: the same "everyone's money" wording in an HK filing.
+    "in aggregate", "aggregate of", "total of", "combined",
+    "together with", "collectively",
+)
 
 # What marks the company's own outlay, checked FIRST. A clause that
 # names the filer as the actor is not an aggregate however it reads:
 # 公司拟以自有资金15亿元 is this company's commitment even though a
 # later clause totals the round.
 _OWN_OUTLAY_TERMS = ("自有资金", "公司拟以", "本公司拟", "自筹资金")
+
+# A REPORTED RESULT, OR A RULE'S THRESHOLD - never this company's
+# outlay. Two shapes, both found in real C3 candidate filings:
+#
+#   results cited as context   Hygon's board opinion on listing-rule
+#       eligibility states 公司2024年营业收入为131.48亿元 - its 2024
+#       REVENUE - inside a compliance checklist. Unguarded that was
+#       a ¥13.15bn "commitment", the fourth largest in the dataset.
+#
+#   a rule's own threshold     "营业收入占...的40%以上，且绝对金额超过
+#       5,000万元" is the exchange's materiality test quoted verbatim.
+#       The ¥50m is a number the REGULATION names, not one the company
+#       is spending. Four filings had this as their max_amount.
+#
+# Kept separate from _VALUATION_TERMS because the two say different
+# things - one is someone else's worth, this is the filer's own
+# past performance or a rule it is citing - and a reader auditing the
+# exclusion needs to know which.
+_RESULT_OR_THRESHOLD_TERMS = (
+    # Reported results, Chinese and English.
+    "营业收入", "营业总收入", "净利润", "利润总额", "营业利润",
+    "实现收入", "實現收入", "营收",
+    "revenue", "turnover", "net profit", "gross profit", "earnings",
+    # A rule's materiality test rather than a transaction.
+    "以上，且", "绝对金额", "占公司最近", "会计年度", "达到3亿元",
+    "上市规则", "持续监管办法", "符合科创板定位",
+)
+
+
+def _result_or_threshold_term(context: str) -> str | None:
+    """The word marking this amount as a reported result or a quoted
+    regulatory threshold, if any. Checked after the own-outlay terms,
+    which are decisive: a sentence saying the company will invest its
+    own funds is a commitment however much else surrounds it."""
+    lowered = (context or "").lower()
+    if any(term in lowered for term in _OWN_OUTLAY_TERMS):
+        return None
+    for term in _RESULT_OR_THRESHOLD_TERMS:
+        if term in lowered:
+            return term
+    return None
 
 
 def _aggregate_term(context: str) -> str | None:
@@ -1428,10 +1575,11 @@ def _aggregate_term(context: str) -> str | None:
     filer's own outlay - that phrasing is decisive and an aggregate
     word nearby does not override it.
     """
-    if any(term in context for term in _OWN_OUTLAY_TERMS):
+    lowered = (context or "").lower()
+    if any(term in lowered for term in _OWN_OUTLAY_TERMS):
         return None
     for term in _AGGREGATE_TERMS:
-        if term in context:
+        if term in lowered:
             return term
     return None
 
@@ -1516,7 +1664,24 @@ _EN_YOY_RE = re.compile(
 # observations had no subject, and this was the largest cause.
 _CN_YOY_SUBJECT_RE = re.compile(
     r"(营业(?:总)?收入|營業(?:總)?收入"
-    r"|实现收入|實現收入|收入"
+    r"|实现收入|實現收入"
+    # A BARE 收入 only where nothing qualifies it. The alternative
+    # exists for SMIC's traditional-character filings ("本集團實現
+    # 收入5,511.1百萬美元"), but written unguarded it also matched a
+    # SEGMENT line and reported it as company revenue.
+    #
+    # Confirmed in AMEC's 2025 Q3 report: "LPCVD和ALD等薄膜设备收入
+    # 4.03亿元，同比增长约1332.69%" is thin-film EQUIPMENT revenue, a
+    # product line that grew from a tiny base. The same filing states
+    # the company figure as +46.40%. Both were extracted with
+    # subject=revenue and nothing distinguished them, so a 1,332.69%
+    # product-line number was eligible to become a company signal.
+    #
+    # A preceding CJK character means something qualifies the noun
+    # (设备收入, 产品收入, 业务收入, 服务收入 ...). 营业收入 and
+    # 实现收入 are matched by their own alternatives above, so
+    # excluding a qualified bare 收入 costs nothing real.
+    r"|(?<![一-鿿])收入"
     r"|净利润|淨利潤|利润总额|利潤總額|营业利润|營業利潤"
     r"|归属于.{0,12}?净利润|歸屬於.{0,12}?淨利潤)")
 
@@ -1974,6 +2139,11 @@ def extract_filing_figures(body: str) -> dict[str, Any]:
             # treatment and the same reason - a round total is a real
             # fact about the deal, just not about this filer's outlay.
             entry["aggregate_term"] = aggregate
+        result_term = _result_or_threshold_term(context)
+        if result_term:
+            # A REPORTED RESULT OR A QUOTED RULE. Same treatment
+            # again - see _RESULT_OR_THRESHOLD_TERMS.
+            entry["result_term"] = result_term
         amounts.append(entry)
         if len(amounts) >= _GATE2_MAX_FIGURES:
             break
@@ -1984,11 +2154,45 @@ def extract_filing_figures(body: str) -> dict[str, Any]:
                 value = float(m.group("num").replace(",", ""))
             except ValueError:
                 continue
-            amounts.append({
-                "value": value * _EN_UNIT_MULTIPLIER[m.group("unit").lower()],
+            native = value * _EN_UNIT_MULTIPLIER[m.group("unit").lower()]
+            currency = (m.group("cur") or "").upper() or None
+            # Converted to CNY so it is comparable with the renminbi
+            # baselines every China company is measured against. The
+            # filed figure is kept beside it, never overwritten - a
+            # reader checking against the document needs the number
+            # the document states.
+            cny, rate = _to_cny(native, currency)
+            # English names the qualifier on EITHER side: "a US$100
+            # billion sovereign fund" puts it after the figure, where
+            # Chinese puts it before ("投前估值约为..."). Both sides are
+            # read here; the Chinese path above needs only the left.
+            context = (
+                text[max(0, m.start() - _AMOUNT_CONTEXT_CHARS):m.start()]
+                + " " + text[m.end():m.end() + _AMOUNT_CONTEXT_CHARS])
+            entry: dict[str, Any] = {
+                "value": cny,
                 "raw": m.group(0).strip(),
-                "currency": (m.group("cur") or "").upper() or None,
-            })
+                "currency": currency,
+                "context": context.strip()[-_AMOUNT_CONTEXT_CHARS:],
+            }
+            if rate != 1.0:
+                entry["native_value"] = native
+                entry["fx_rate"] = rate
+            # The same two exclusions the Chinese path applies - an
+            # English filing names other parties' money just as often.
+            # Lenovo's quarterly results mention "Alat, a US$100
+            # billion sovereign fund"; unguarded that became the
+            # largest commitment in the dataset.
+            valuation = _valuation_term(context)
+            if valuation:
+                entry["valuation_term"] = valuation
+            aggregate = _aggregate_term(context)
+            if aggregate:
+                entry["aggregate_term"] = aggregate
+            result_term = _result_or_threshold_term(context)
+            if result_term:
+                entry["result_term"] = result_term
+            amounts.append(entry)
             if len(amounts) >= _GATE2_MAX_FIGURES:
                 break
 
@@ -2036,7 +2240,7 @@ def extract_filing_figures(body: str) -> dict[str, Any]:
         "max_amount": max(
             (a["value"] for a in amounts
              if not a.get("per_unit") and not a.get("valuation_term")
-             and not a.get("aggregate_term")),
+             and not a.get("aggregate_term") and not a.get("result_term")),
             default=None),
     }
 
@@ -2486,6 +2690,96 @@ _C2_MIN_OBSERVATIONS = 3
 # Alibaba FY2012 - a different population, not this one's tail.
 _C2_SIGNAL_MADS = 3.0
 _C2_WEAK_MADS = 2.0
+
+# The absolute growth a figure must show before any deviation counts.
+#
+# COMPUTED WITH THE SAME STATISTIC C2 USES, not picked. A per-company
+# MAD asks "unusual for this company"; these ask "unusual for this
+# universe", and the honest way to set them is the identical
+# median + k x MAD applied to every stored observation rather than to
+# one company's history.
+#
+# Measured over all 285 stored revenue observations:
+#   median = +25.12%   MAD = 20.99 percentage points
+#
+#   median + 1.0 x MAD = +46.11%   admits 73 of 285 (25.6%)
+#   median + 2.0 x MAD = +67.10%   admits 35 of 285 (12.3%)
+#
+# So the bands below are the universe's own median plus one and two
+# MADs - the same 1/2/3-MAD vocabulary the per-company test uses,
+# applied one level up. Nothing here is a round number chosen for
+# looking tidy.
+#
+# WHY A FLOOR AT ALL. The MAD test alone is not monotonic in what C2
+# measures. Over the 153 judged observations a MAD-only rule gave 27
+# signals, SEVEN of them under +30% growth, including a company whose
+# revenue FELL 0.3% and still scored 3.5 MADs - it qualified because
+# its own past was flatter still. In the other direction it missed
+# +166.1% and +159.6% because those companies swing wildly anyway.
+# Deviation alone therefore ranks partly by how boring a company used
+# to be.
+#
+# Note the median observation in this universe is +25.1%: these
+# companies grow fast as a class, so a 25% threshold would admit half
+# of everything ever filed and would not be a floor at all.
+def universe_yoy_floors(
+    series_by_key: dict[tuple[str, str], list[dict[str, Any]]] | None,
+    as_of_year: str | None,
+) -> tuple[float, float]:
+    """The (signal, weak) YoY floors as they stood BEFORE `as_of_year`.
+
+    Same median + k x MAD derivation as the constants below, but
+    computed from only the observations that existed when the filing
+    was published - the universe floor had exactly the look-ahead the
+    per-company baseline was fixed for.
+
+    It moves enough to matter. Recomputed by vintage:
+
+        as of 2023   n=58    median 41.97   MAD 24.40   signal 90.77
+        as of 2024   n=120   median 20.05   MAD 28.85   signal 77.75
+        as of 2025   n=186   median 21.04   MAD 25.01   signal 71.05
+        as of 2026   n=252   median 24.16   MAD 21.31   signal 66.78
+        all data     n=285   median 25.12   MAD 20.99   signal 67.10
+
+    Measured on the stored corpus, using the fixed floor instead of
+    the vintage one flips two verdicts: Inspur's FY2024 (+74.2%) and
+    Q3 2024 (+72.8%) both clear today's 67.10% but NOT the 77.75% that
+    applied when they were filed, so a fixed floor promotes them on
+    information from two years later.
+
+    Falls back to the stored constants where too little predates the
+    filing to compute anything - a floor from nine observations would
+    be noisier than the long-run one.
+    """
+    import statistics as _st
+
+    if not series_by_key or not as_of_year:
+        return _C2_SIGNAL_YOY_PCT, _C2_WEAK_YOY_PCT
+    prior = [
+        float(entry["yoy_pct"])
+        for entries in series_by_key.values()
+        for entry in entries
+        if entry.get("yoy_pct") is not None
+        and str(entry.get("year") or "") < str(as_of_year)
+    ]
+    if len(prior) < _C2_UNIVERSE_MIN_OBS:
+        return _C2_SIGNAL_YOY_PCT, _C2_WEAK_YOY_PCT
+    median = _st.median(prior)
+    mad = _st.median([abs(v - median) for v in prior])
+    return round(median + 2.0 * mad, 2), round(median + 1.0 * mad, 2)
+
+
+# Below this many prior observations the vintage floor is noisier than
+# the long-run one - the 2022 vintage has nine observations, all from
+# two companies.
+_C2_UNIVERSE_MIN_OBS = 30
+
+_C2_UNIVERSE_MEDIAN_PCT = 25.12
+_C2_UNIVERSE_MAD_PCT = 20.99
+_C2_SIGNAL_YOY_PCT = round(
+    _C2_UNIVERSE_MEDIAN_PCT + 2.0 * _C2_UNIVERSE_MAD_PCT, 2)   # +67.10%
+_C2_WEAK_YOY_PCT = round(
+    _C2_UNIVERSE_MEDIAN_PCT + 1.0 * _C2_UNIVERSE_MAD_PCT, 2)   # +46.11%
 # The same floor reasoning as C6: a tight baseline would otherwise make
 # an ordinary quarter look extreme. Semiconductor revenue routinely
 # moves 10-20% year on year.
@@ -2682,6 +2976,13 @@ FILING_RANK_FORECAST = 1
 FILING_RANK_FLASH = 2
 FILING_RANK_PERIODIC = 3
 
+# Every wording a pre-announcement uses. 业绩预告 is the generic form;
+# a company may instead state the direction in the title (预增 up,
+# 预减 down, 预盈 to profit, 预亏 to loss), or file a 业绩变动 /
+# 业绩预告修正 revising an earlier one. All are forecasts.
+_FORECAST_TITLE_RE = re.compile(
+    r"业绩(?:预告|预增|预减|预盈|预亏|变动|预告修正)")
+
 
 def _filing_authority(title: str) -> int:
     """How much a filing's own figure should be trusted, 1-3.
@@ -2691,7 +2992,13 @@ def _filing_authority(title: str) -> int:
     fact. Where the same period is reported more than once, the highest
     rank wins.
     """
-    if "业绩预告" in (title or ""):
+    # Every pre-announcement wording, not just 业绩预告. A company may
+    # head the filing 业绩预增 / 预减 / 预盈 / 预亏 / 变动 instead, and
+    # matching only the one string ranked those as PERIODIC - the most
+    # authoritative tier - so an unaudited forecast could outrank the
+    # audited annual report covering the same period and win the
+    # baseline slot for it.
+    if _FORECAST_TITLE_RE.search(title or ""):
         return FILING_RANK_FORECAST
     if "业绩快报" in (title or ""):
         return FILING_RANK_FLASH
@@ -2834,9 +3141,115 @@ def compute_c2_baselines(
     return rows
 
 
+def _period_year(title: str) -> str | None:
+    """The YEAR of the fiscal period a filing reports on, or None.
+
+    `_filing_period` returns e.g. "2025H1"; this is its first four
+    characters, which is what a point-in-time baseline compares
+    against. Kept separate because the period TYPE and the period YEAR
+    answer different questions - the type picks which baseline, the
+    year picks how much of it existed yet.
+    """
+    period = _filing_period(title)
+    return period[:4] if period else None
+
+
+def point_in_time_baseline(
+    series: list[dict[str, Any]], as_of_year: str,
+    min_observations: int, mad_floor: float,
+) -> tuple[float, float, int] | None:
+    """Median and MAD over only the observations that PRECEDE a period.
+
+    Returns None only where NOTHING precedes it. `min_observations` is
+    accepted for signature compatibility and deliberately unused - see
+    the note on the floor below.
+
+    THE CACHE CANNOT ANSWER THIS. `market_signal_baselines` holds one
+    row per (code, metric, period_type) - a single current snapshot
+    with no notion of "as of when" - so a verdict read from it is
+    measured against every observation, including ones published after
+    the filing being judged.
+
+    Confirmed on real data: Cambricon's 2025 half-year signal, filed
+    2025-08-27, was scored against a median built from [2023, 2024,
+    2025, 2026] H1 observations. The 2026 figure did not exist when
+    that filing was published. Every historical verdict carried the
+    same contamination, which makes a backtest measure hindsight
+    rather than the rule.
+
+    A live daily pass is unaffected - the newest observation IS the
+    one being judged, so there is nothing later to leak. This matters
+    for backfills and for any evaluation of past signals, which is
+    exactly where a baseline gets trusted most.
+    """
+    import statistics as _st
+
+    prior = sorted({
+        round(float(entry["yoy_pct"]), 2)
+        for entry in series
+        if entry.get("yoy_pct") is not None
+        and str(entry.get("year") or "") < str(as_of_year)
+    })
+    # NO FLOOR. Whatever precedes the filing is what it is judged
+    # against, even if that is one or two observations.
+    #
+    # The floor was doing harm rather than good here. Requiring three
+    # prior observations meant Cambricon's 2025 half-year - which has
+    # exactly two (2023, 2024) - could not be judged point-in-time at
+    # all, and the code then fell back to the full-series baseline
+    # that included 2026. A floor meant to prevent a weak verdict was
+    # producing a dishonest one instead.
+    #
+    # A baseline of one or two observations IS weak, and that is
+    # reported rather than hidden: every row carries
+    # `baseline_observations`, so a reader sees n=2 and can weigh the
+    # verdict accordingly. Two real prior figures beat four figures
+    # one of which is from the future.
+    if not prior:
+        return None
+    median = _st.median(prior)
+    raw_mad = _st.median([abs(v - median) for v in prior])
+
+    # THE FLOOR APPLIES ONLY BELOW THREE OBSERVATIONS.
+    #
+    # At n=1 the MAD is mathematically zero - one value has no
+    # deviation from itself - so there is nothing to measure and the
+    # floor is the only option. At n=2 the "MAD" is half the gap
+    # between two numbers, which is a coincidence of two draws rather
+    # than a spread: two observations nine points apart give a MAD of
+    # 4.48, and an ordinary quarter then scores 16.7 MADs. That is the
+    # blow-up the floor exists to stop, and at n=2 it keeps happening.
+    #
+    # At n=3 there is a genuine middle value with deviations either
+    # side. Thin, but it is a measurement of THIS company, which is
+    # the whole premise of C2 - "unusual for this company", not
+    # "unusual against an assumed 10%". Overriding a real 4-point MAD
+    # with 10.0 throws away the only company-specific information
+    # available.
+    #
+    # Measured across the 65 series with enough history: the true MAD
+    # runs p10 3.17, p50 10.74, p90 32.64 percentage points. The 10.0
+    # floor sits almost exactly on the median of that distribution, so
+    # where it does apply it stands in for "about as variable as a
+    # typical company here".
+    #
+    # KNOWN LIMIT, not solved by this: a company that was flat has a
+    # small MAD by construction, so its first real move looks enormous
+    # however many observations back it. JL MAG's H1 series runs
+    # +3.82 / -2.00 / +4.33, a true MAD of 0.51, and its +32.57% 2026
+    # half-year scores 56.4 MADs - beside Cambricon's +4,348% at 56.9.
+    # The move is real; the ranking is not meaningful at that end.
+    # `baseline_observations` and `mad_is_floor` are what let a reader
+    # see which verdicts rest on a thin denominator.
+    mad = raw_mad if len(prior) >= 3 and raw_mad > 0 else max(raw_mad, mad_floor)
+    return median, mad, len(prior)
+
+
 def _c2_result(article: dict[str, Any], company: str, period_type: str,
                pct: float, median: float, mad: float, deviation: float,
-               n_obs: int) -> dict[str, Any]:
+               n_obs: int,
+               signal_floor: float | None = None,
+               weak_floor: float | None = None) -> dict[str, Any]:
     """One C2 row, however the baseline was obtained.
 
     Shared by both paths so a signal judged against a cached baseline
@@ -2851,9 +3264,30 @@ def _c2_result(article: dict[str, Any], company: str, period_type: str,
     # (no baseline yet, or no classifier claimed the filing), and the
     # two were previously indistinguishable because everything below
     # the signal band was simply dropped.
-    if deviation >= _C2_SIGNAL_MADS:
+    # BOTH TESTS MUST PASS: real growth AND unusual for this company.
+    #
+    # The MAD test alone was not monotonic in the thing C2 is about.
+    # Measured over the 153 judged observations, a MAD-only rule gave
+    # 27 signals of which SEVEN had growth under +30%, including a
+    # company whose revenue FELL 0.3% and still scored 3.5 MADs - it
+    # qualified only because its own past was flatter still. In the
+    # other direction it missed +166.1% and +159.6% observations,
+    # scoring them 2.2 and 1.6, because those companies swing wildly
+    # anyway.
+    #
+    # Ranking by deviation alone therefore ranks partly by how boring
+    # a company used to be. The absolute floor fixes that: it asks
+    # whether this is real substitution progress, while the MAD still
+    # asks whether it is unusual for them. Neither works alone - a
+    # floor by itself would flag a fast-growing company every single
+    # quarter.
+    # The floors as they stood when this filing was published, where
+    # the caller could compute them - see universe_yoy_floors.
+    sig_floor = _C2_SIGNAL_YOY_PCT if signal_floor is None else signal_floor
+    wk_floor = _C2_WEAK_YOY_PCT if weak_floor is None else weak_floor
+    if pct >= sig_floor and deviation >= _C2_SIGNAL_MADS:
         signal = "signal"
-    elif deviation >= _C2_WEAK_MADS:
+    elif pct >= wk_floor and deviation >= _C2_WEAK_MADS:
         signal = "weak_signal"
     else:
         signal = "noise"
@@ -2863,9 +3297,33 @@ def _c2_result(article: dict[str, Any], company: str, period_type: str,
             "signal": signal,
             "reason": (
                 f"{company} {label} revenue {pct:+.1f}% YoY, "
-                f"{deviation:+.1f} MADs from its own {label} median of "
-                f"{median:+.1f}% over {n_obs} {label} periods"
-                + (" - NEGATIVE read for the US names it competes with"
+                + (
+                    # n=1 is not a distribution and should not be
+                    # described as one. "+12.3 MADs from its median
+                    # over 1 period" reads like a measurement; it is
+                    # one prior figure and an assumed spread. Say so.
+                    f"its first comparable {label} on record is "
+                    f"{median:+.1f}%, so this is only the second "
+                    f"{label} figure for the company - no spread to "
+                    f"measure against"
+                    if n_obs <= 1 else
+                    f"{deviation:+.1f} MADs from its own {label} "
+                    f"median of {median:+.1f}% over {n_obs} {label} "
+                    f"periods"
+                )
+                # POTENTIAL pressure, not established displacement.
+                # The earlier wording - "NEGATIVE read for the US names
+                # it competes with" - asserted substitution as fact
+                # from a growth rate alone. A company can grow because
+                # it took share, or because the whole market grew; this
+                # figure cannot tell those apart, and only the first is
+                # bad news for an incumbent. Saying which evidence is
+                # missing is more useful than implying it exists -
+                # customer wins and share data would settle it, and
+                # neither is in a revenue line.
+                + (" - potential competitive pressure on the US names "
+                   "it competes with; substitution not established "
+                   "without customer-win or market-share evidence"
                    if signal != "noise" else
                    " - within its usual range")),
             "metadata": {
@@ -2881,6 +3339,26 @@ def _c2_result(article: dict[str, Any], company: str, period_type: str,
                 "period_type": period_type,
                 "company_median_pct": round(median, 2),
                 "company_mad_pct": round(mad, 2),
+                # THE SPREAD WAS ASSUMED, NOT MEASURED. At n=1 the MAD
+                # is mathematically zero - one value has no deviation
+                # from itself - and at n=2 it is half the gap between
+                # two figures. Both are routinely below
+                # _C2_MIN_MAD_PCT and get floored to it, which means
+                # the constant, not the company's history, is setting
+                # the denominator of `deviation_mads`.
+                #
+                # Measured on the full corpus: every n=1 row and 37%
+                # of n=2 rows are floored. Flagged rather than hidden
+                # so a reader can filter them - the verdict is still
+                # worth having, it just rests on an assumption the
+                # data did not supply.
+                "mad_is_floor": round(mad, 2) == _C2_MIN_MAD_PCT,
+                # Which universe floor judged this row. Recorded so a
+                # verdict stays interpretable after the floor moves -
+                # it drifts as history accumulates (90.77 as of 2023,
+                # 66.78 as of 2026).
+                "universe_signal_floor_pct": round(sig_floor, 2),
+                "universe_weak_floor_pct": round(wk_floor, 2),
                 "deviation_mads": round(deviation, 2),
                 "baseline_observations": n_obs,
                 # The spec's defining property for this market.
@@ -2893,6 +3371,7 @@ def _c2_result(article: dict[str, Any], company: str, period_type: str,
 def classify_substitution_progress(
     articles: list[dict[str, Any]],
     baselines: dict[tuple[str, str], dict[str, Any]] | None = None,
+    period_series: dict[tuple[str, str], list[dict[str, Any]]] | None = None,
 ) -> list[dict[str, Any]]:
     """C2: a revenue growth rate far above what this sector is posting.
 
@@ -3051,12 +3530,44 @@ def classify_substitution_progress(
                 if key in seen_cached:
                     continue
                 seen_cached.add(key)
-                # Every judged observation is written, including the
-                # ordinary ones - see _c2_result on why `noise` and
-                # `waiting` are different answers.
+                # POINT-IN-TIME, OR NOT JUDGED AT ALL.
+                #
+                # The cached baseline spans the company's whole
+                # history, including periods filed AFTER the one being
+                # judged. An earlier version of this fell back to that
+                # cache whenever too little history preceded a filing,
+                # and that silently reintroduced the exact look-ahead
+                # this is here to prevent: Cambricon's 2025 half-year
+                # report has only two prior H1 observations (2023,
+                # 2024), below the floor of three - so it fell back
+                # and was scored n=4 against a median that included
+                # the 2026 figure, which did not exist when that
+                # filing was published.
+                #
+                # A verdict measured against the future is worse than
+                # no verdict, because nothing downstream can tell the
+                # difference. So where the point-in-time baseline
+                # cannot be built, the filing is NOT judged here - it
+                # falls through to the gate1 path, which records it as
+                # noise with a reason naming the missing history.
+                as_of = _period_year(article.get("title") or "")
+                series = (period_series or {}).get((code, period_type))
+                pit = (
+                    point_in_time_baseline(
+                        series, as_of, _C2_MIN_OBSERVATIONS,
+                        _C2_MIN_MAD_PCT)
+                    if as_of and series else None
+                )
+                if not pit:
+                    # No honest baseline for this filing's own period.
+                    # Skipped rather than judged; see above.
+                    continue
+                row_median, row_mad, row_n = pit
+                sig_f, wk_f = universe_yoy_floors(period_series, as_of)
                 results.append(_c2_result(
-                    article, company, period_type, pct, median, mad,
-                    (pct - median) / mad, n_obs))
+                    article, company, period_type, pct, row_median,
+                    row_mad, (pct - row_median) / row_mad, row_n,
+                    signal_floor=sig_f, weak_floor=wk_f))
             continue
 
         if len(distinct) < _C2_MIN_OBSERVATIONS:
@@ -3083,15 +3594,35 @@ def classify_substitution_progress(
             key = article.get("url") or ""
             if key in seen:
                 continue
+            seen.add(key)
+            # POINT-IN-TIME HERE TOO. This branch builds its median
+            # from every observation in the batch, which for a company
+            # with no cached baseline means future periods enter the
+            # comparison exactly as they did in the cached path.
+            # Hua Hong's Q3 filings were scored n=3 against a series
+            # whose only two members are 2024 and 2025 - a 2023 filing
+            # judged against figures from two years after it.
+            #
+            # Same rule as above: no honest prior baseline, no verdict.
+            as_of = _period_year(article.get("title") or "")
+            series = (period_series or {}).get((code, period_type))
+            pit = (
+                point_in_time_baseline(
+                    series, as_of, _C2_MIN_OBSERVATIONS, _C2_MIN_MAD_PCT)
+                if as_of and series else None
+            )
+            if not pit:
+                continue
+            row_median, row_mad, row_n = pit
             # One-sided: the spec's C2 is about growth ABOVE the
             # company's own pattern, so a figure far BELOW its median is
             # noise rather than an inverted signal - the absence of
             # substitution progress, not evidence against it.
-            deviation = (pct - median) / mad
-            seen.add(key)
+            deviation = (pct - row_median) / row_mad
+            sig_f, wk_f = universe_yoy_floors(period_series, as_of)
             results.append(_c2_result(
-                article, company, period_type, pct, median, mad,
-                deviation, len(distinct)))
+                article, company, period_type, pct, row_median, row_mad,
+                deviation, row_n, signal_floor=sig_f, weak_floor=wk_f))
 
     if skipped:
         logger.info("[CHINA] c2 not judged, below the %d-observation "
@@ -3550,6 +4081,52 @@ _C4_MILESTONE_RE = re.compile(
     # alternatives. Kept as Weak like everything else here, never
     # promoted, so it informs without being read as displacement.
     r"|charging more|hiked? price|price (?:hike|increase|rise))")
+# WHICH KIND of milestone, recorded rather than collapsed. All five
+# fire the same C4 rule, but they do not mean the same thing and a
+# reader cannot tell them apart from a Weak label alone: a product
+# launch is a capability claim, a shipment is capability realised, a
+# customer win is displacement with a counterparty attached, and a
+# price rise is an inference about scarcity rather than an event at
+# the company at all.
+#
+# Found by reading the stored signals: "Huawei and Cambricon Are
+# Charging More for AI Chips as Memory Runs Short" sat beside
+# "Loongson launches homegrown 16-core server CPU" under one label.
+# Both are legitimately C4 - see the pricing note above - but the
+# first is a margin story driven by an HBM shortage and the second is
+# a product existing. Stored as `event_type` so a consumer can filter.
+#
+# First match wins, most specific first: a customer win usually also
+# contains launch vocabulary, and the win is the stronger statement.
+_C4_EVENT_PATTERNS: list[tuple[str, str]] = [
+    ("customer_win",
+     r"(?i)\b(order\w*|contract\w*|procurement|award\w*|supply agreement"
+     r"|design win|customer win|selected by|deal with)"),
+    ("shipment",
+     r"(?i)\b(ship\w*|volume production|mass produc\w*|deliver\w+"
+     r"|units? (?:shipped|delivered)|tape[- ]?out)"),
+    ("capacity",
+     r"(?i)\b(expansion|capacity|new (?:fab|line|plant)|scale up)"),
+    ("pricing",
+     r"(?i)\b(charging more|hiked? price|price (?:hike|increase|rise)"
+     r"|raise[sd]? prices?)"),
+    ("product_launch",
+     r"(?i)\b(unveil\w*|launch\w*|releas\w+|announce[sd]? (?:the )?new"
+     r"|qualif\w+|deploy\w+)"),
+]
+_C4_EVENT_RE = [(n, re.compile(p)) for n, p in _C4_EVENT_PATTERNS]
+
+
+def _c4_event_type(text: str) -> str:
+    """Which kind of C4 event this is. `other` where none matches -
+    the milestone regex is wider than these five between them, and a
+    guess would be worse than saying nothing."""
+    for name, pattern in _C4_EVENT_RE:
+        if pattern.search(text or ""):
+            return name
+    return "other"
+
+
 # Market commentary. Present in the same search results and must not be
 # read as a milestone - these are about the stock, not the chip.
 _C4_COMMENTARY_RE = re.compile(
@@ -3672,6 +4249,10 @@ def classify_accelerator_milestone(
                     "signal_type": "C4",
                     "company": meta.get("company"),
                     "code": meta.get("code"),
+                    # WHICH kind of milestone - a price rise and a
+                    # customer win are both C4 but imply different
+                    # things. See _C4_EVENT_PATTERNS.
+                    "event_type": _c4_event_type(blob),
                     # Recorded so a later rule can promote on it once
                     # article bodies are available for this source.
                     "substance_markers": substance,
@@ -4374,11 +4955,18 @@ def translate_china_results(
     The original title is never overwritten - a reader may need to check
     the source, and the extraction rules read the Chinese.
 
-    Runs on CLASSIFIED results rather than on every fetched article, so
-    the cost tracks what actually gets stored: measured on the stored
-    year, 171 of 281 classifications carry a Chinese title, against 935
-    pooled articles. Translating at fetch time would have paid for
-    hundreds of rows that Gate 1 discards.
+    SIGNALS ONLY - `noise` rows are deliberately left untranslated.
+    Running on everything classified was still far too wide: measured
+    on the full five-year corpus, 7,806 of 7,871 translation calls
+    (99.2%) went to noise rows, costing about 31 minutes of a
+    45-minute run at concurrency 5 while the process sat 97% idle on
+    network. A noise row says "routine filing no rule reads" - nobody
+    needs that headline in English, and no consumer reads
+    `translated_title` on one.
+
+    The 81 signal and weak_signal rows are what a reader actually
+    opens, and they still get translated. That is ~80 calls instead of
+    7,871.
 
     A failure leaves the field absent rather than setting it to None, so
     a consumer can tell "not translated" from "translated to nothing" -
@@ -4389,7 +4977,9 @@ def translate_china_results(
     model = model or config.CHINA_SIGNAL_MODEL
     pending = [
         r for r in results
-        if _CJK_RE.search((r.get("article") or {}).get("title") or "")
+        # Signals only - see the docstring for the measurement.
+        if (r.get("result") or {}).get("signal") in ("signal", "weak_signal")
+        and _CJK_RE.search((r.get("article") or {}).get("title") or "")
         and not (r.get("result") or {}).get(
             "metadata", {}).get("translated_title")
         # A filing the issuer already published in English needs no
@@ -4493,7 +5083,16 @@ _CARRIED_ARTICLE_FIELDS = (
     "announcement_id",         # cninfo's own id for the filing
     "source_type",             # cninfo_filing, miit_policy, press_cn, ...
     "source_outlet_type",      # official / state_press / commercial_press
-    "translated_company_name",
+    # Which of the four Chinese outlets ran the story. Kept because a
+    # reader weighing a press signal wants to know whether it came
+    # from ITHome or ijiwei.
+    #
+    # `via` (rss vs html) is deliberately NOT carried: it records how
+    # news-retrieval fetched the page, which is that service's own
+    # plumbing and says nothing about the signal. It stays on the
+    # article row, where it explains why some press rows have a
+    # summary and others do not.
+    "outlet",
 )
 
 
@@ -4561,6 +5160,7 @@ def classify_china_signal_batch(
     model: str | None = None,
     baselines: dict[tuple[str, str], dict[str, Any]] | None = None,
     c3_baselines: dict[tuple[str, str], dict[str, Any]] | None = None,
+    period_series: dict[tuple[str, str], list[dict[str, Any]]] | None = None,
 ) -> list[dict[str, Any]]:
     """Run every implemented China classifier on one pooled batch and
     return ``{"article", "result"}`` dicts for
@@ -4658,7 +5258,7 @@ def classify_china_signal_batch(
 
     # --- C2: substitution progress ---------------------------------------
     results.extend(classify_substitution_progress(
-        articles, baselines=baselines))
+        articles, baselines=baselines, period_series=period_series))
 
     # --- C5: platform capex ---------------------------------------------
     results.extend(classify_platform_capex(articles))

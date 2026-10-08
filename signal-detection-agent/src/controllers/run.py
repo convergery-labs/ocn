@@ -1184,8 +1184,21 @@ async def run_china_signal_classification(job_id: int, from_date: str, to_date: 
             "[CHINA] no cached baselines - C2 will only judge companies "
             "whose full history happens to be in this batch. Run "
             "refresh-china-baselines.")
+    # The raw revenue observations behind the C2 baselines, so a
+    # filing can be judged against only what preceded its own
+    # reporting period. The cache holds one current snapshot per
+    # (code, period_type) and cannot answer "as of when" - see
+    # point_in_time_baseline for the Cambricon case this cost.
+    period_series: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for entry in await fetch_china_revenue_history():
+        code = entry.get("code")
+        period_type = entry.get("period_type")
+        if code and period_type:
+            period_series.setdefault((code, period_type), []).append(entry)
+
     classified = classify_china_signal_batch(
-        pending, baselines=baselines, c3_baselines=c3_baselines)
+        pending, baselines=baselines, c3_baselines=c3_baselines,
+        period_series=period_series)
 
     # Re-checked rather than assumed, in ONE batched query. The
     # pre-filter above removed everything classified before this run
@@ -1698,8 +1711,8 @@ async def run_geopolitical_signal_stage_c(job_id: int) -> None:
     this was a deliberate fix during design review, not the naive
     per-article refetch the original plan implied.
 
-    Daily cap (config.GEOPOLITICAL_SIGNAL_STAGE_C_DAILY_CAP, default 50) is
-    a safety tripwire, same reasoning as Stage B's cap - once hit,
+    Daily cap (config.GEOPOLITICAL_SIGNAL_STAGE_C_DAILY_CAP, default 200)
+    is a safety tripwire, same reasoning as Stage B's cap - once hit,
     remaining untagged rows are left untouched for the next run.
     """
     update_job_status(job_id, "running")
@@ -1762,8 +1775,10 @@ async def run_geopolitical_signal_stage_c(job_id: int) -> None:
         # Layer 3 - free cache lookup, only for the categories actually
         # chosen. Already [{ticker, company_name, matched_categories}] -
         # one entry per ticker, not per ticker-category pair (see
-        # get_tickers_for_categories' docstring).
-        category_matches = get_tickers_for_categories(final_categories)
+        # get_tickers_for_categories' docstring). Capped per article;
+        # total_matched is the uncapped count so a reader sees "25 of 58"
+        # rather than a truncated list presented as the whole answer.
+        category_matches, total_matched = get_tickers_for_categories(final_categories)
 
         tags = {
             "channel": layer2_result["channel"],
@@ -1772,6 +1787,12 @@ async def run_geopolitical_signal_stage_c(job_id: int) -> None:
             "impacted_categories": final_categories or None,
             "impacted_companies_direct": direct_matches or None,
             "impacted_companies_by_category": category_matches or None,
+            # Stored only when the list was actually cut - a row whose
+            # full expansion already fit carries no key, so "truncated"
+            # never has to be read as "0 hidden".
+            "impacted_companies_by_category_total": (
+                total_matched if total_matched > len(category_matches) else None
+            ),
             "one_line": layer2_result["one_line"],
         }
         try:

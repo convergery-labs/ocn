@@ -100,6 +100,63 @@ ALLOWED_DOMAINS: frozenset[str] = frozenset({
     "politico.com",
     "spglobal.com",
     "agenceurope.eu",
+    # fifth review pass, measured against the FULL stored staging history
+    # (5,487 rows) rather than a sample: every one of the 5,280 Stage A
+    # drops was domain_not_allowed - no article has ever been dropped as
+    # non_english or by the talk-verb rule - so this allowlist is the
+    # entire funnel loss, and only 207 articles (3.8%) have ever reached
+    # Stage B at all.
+    #
+    # Deliberately a narrow addition, not a broad loosening. The 5,280
+    # drops span 2,142 distinct domains with no head to unlock (top 10 =
+    # 7% of drops, top 100 = 30%, and 1,225 domains appear exactly once),
+    # and the highest-volume rejects are aggregator/junk traffic the
+    # allowlist exists to stop - dailymail.com (86), newsroomamerica.com
+    # (53), bignewsnetwork.com (41), plus screenrant.com and collider.com
+    # (film sites matching on keyword coincidence). Scanning the dropped
+    # set for genuine wire/paper-of-record/trade-press tiers yields ~194
+    # recoverable articles, 3.7% of drops; at the measured 9.2% Stage B
+    # HIGH rate that is roughly +18 HIGH rows, about doubling the feed.
+    # Everything below was confirmed by reading its real dropped
+    # headlines, not added on reputation:
+    #   cnbc.com (17) - "Russian gold floods Hong Kong as Western
+    #     sanctions redraw bullion trade"
+    #   gcaptain.com (5), tradewindsnews.com (2) - shipping trade press,
+    #     the chokepoint/vessel channel Stage B rates HIGH and no listed
+    #     source covers: "U.S. Sanctions Law Puts Russia's Arctic Yamal
+    #     LNG Fleet in Crosshairs"
+    #   oilprice.com (12) - energy supply trade press
+    #   scmp.com (13) - "US sanctions boost China's science-driven
+    #     innovation by over 70%, study finds"; China/HK trade coverage
+    #   channelnewsasia.com (10) - Asia wire, fills the same gap
+    #     asia.nikkei.com covers for Japan
+    #   jpost.com (13) - Israeli paper of record, same tier as the
+    #     already-listed haaretz.com
+    #   defensenews.com (3), breakingdefense.com (3) - defense trade
+    #     press for the arms-export/defense-action channel
+    #   latimes.com (15), cbc.ca (15), abcnews.com (14) - US/Canadian
+    #     papers of record, same tier as nytimes.com already listed
+    #   rferl.org (4) - US-funded wire for Russia/Central Asia
+    # Excluded despite high volume, on the module's own standard: the
+    # partisan/commentary tier (foxnews.com 30, nypost.com 29,
+    # zerohedge.com 24, newsweek.com 20, thedailybeast.com 19,
+    # breitbart.com 19, naturalnews.com 15) and euronews.com (19) /
+    # defence24.com (13), whose dropped headlines read as opinion and
+    # analysis ("Will the EU help to extend the NATO pipeline?") rather
+    # than the completed actions Stage B is looking for.
+    "cnbc.com",
+    "gcaptain.com",
+    "tradewindsnews.com",
+    "oilprice.com",
+    "scmp.com",
+    "channelnewsasia.com",
+    "jpost.com",
+    "defensenews.com",
+    "breakingdefense.com",
+    "latimes.com",
+    "cbc.ca",
+    "abcnews.com",
+    "rferl.org",
 })
 
 # Talk verbs: the headline is reporting rhetoric, not a completed/announced
