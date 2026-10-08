@@ -544,11 +544,60 @@ _CANDIDATE_PATTERNS: list[tuple[str, str]] = [
 #
 # Both were found by reading the weak bucket after the three-tier split,
 # not predicted.
+#   - Housekeeping on money the company ALREADY RAISED. A 募投项目
+#     (IPO/placement-proceeds project) throws off a long tail of
+#     administrative filings - swapping bridge funds for the proceeds,
+#     moving a project's implementing entity or location, extending a
+#     deadline, closing it out and sweeping the remainder into working
+#     capital. Each re-cites the original raise, and the `capacity`
+#     pattern claimed them all because it matches the bare words
+#     募投项目.
+#
+#     Measured on two real days: 32 of 91 valued C3 rows (35%) were
+#     these, producing 5 signals and 9 weak signals out of money
+#     already committed. GigaDevice's single ¥4.28bn DRAM raise
+#     appeared SEVEN times, once per admin notice, each re-entering
+#     its own baseline and inflating the median it would later be
+#     judged against. The 置换 cases are the clearest tell:
+#     以募集资金等额置换 means "reimburse ourselves the same amount from
+#     the proceeds" - a movement between the company's own accounts.
+#
+#     Every branch is anchored on 募投/募集资金/超募 so a genuine
+#     new-build announcement that merely mentions how it is funded is
+#     not swept up with it.
 _ALWAYS_NOISE_RE: list[tuple[str, re.Pattern[str]]] = [
     ("routine_return_mechanical_en",
      re.compile(r"(?i)^\s*next day disclosure return")),
+    # 鉴证报告 is an ACCOUNTANT's attestation, the audit-side twin of
+    # the legal opinions beside it. Found in the full reclassification:
+    # a 天健会计师事务所 attestation that Piotech had pre-funded its
+    # 募投项目 from own funds scored 66 MADs and ranked as the single
+    # largest C3 signal in five years of filings - third-party
+    # paperwork about money already raised, not a commitment.
     ("legal_opinion",
-     re.compile(r"法律意见|核查意见|验资报告|合规性报告")),
+     re.compile(r"法律意见|核查意见|验资报告|合规性报告|鉴证报告|审阅报告")),
+    ("proceeds_admin",
+     re.compile(
+         r"募投项目.*(进展|变更|延期|结项|调整|终止|实施主体|实施地点"
+         r"|内部投资结构)"
+         r"|(募集资金|超募资金|募投).*等额置换"
+         r"|置换.*(预先投入|募投项目)"
+         r"|(结项|节余).*募集资金"
+         r"|募集资金.*永久补充流动资金"
+         r"|(增加|变更|调整).*募(投项目|集资金投资项目)"
+         r".*(实施主体|实施地点)"
+         # DEPLOYING proceeds already raised, however it is worded.
+         # 使用(部分)?(超)?募集资金...增资 is the commonest form - the
+         # parent moves IPO money into a subsidiary to build what the
+         # prospectus already described. Cambricon filed it twice in
+         # one window with the identical figure, GigaDevice twice more
+         # for its DRAM project. The raise itself was the commitment;
+         # these are its disbursement.
+         r"|使用.*(募集资金|超募资金).*(增资|支付|置换|出资)"
+         r"|募集资金(保证金账户|专户)"
+         # The placement's own completion report - paperwork about a
+         # raise already announced, not a new one.
+         r"|募集配套资金.*发行情况报告书")),
 ]
 
 _NOISE_RE = [(name, re.compile(p)) for name, p in _NOISE_PATTERNS]
@@ -1299,6 +1348,93 @@ _PCT_CONTEXT_CHARS = 24
 
 _GATE2_MAX_FIGURES = 12
 
+# How much text before an amount is kept as its context. Wider than the
+# percentage window because the phrase that identifies an amount sits
+# further from it: "本轮融资投前估值约为人民币1,399.82亿元" puts the
+# giveaway word nine characters ahead of the figure, and a Chinese
+# clause routinely carries a company name in between.
+_AMOUNT_CONTEXT_CHARS = 40
+
+# Words that mark a figure as WHAT SOMETHING IS WORTH rather than what
+# this company is spending. The distinction is the whole of C3: a
+# capacity commitment is an outlay, and the largest number in a filing
+# that also prices the target is almost never the outlay.
+#
+# Confirmed live on the filing that produced this list. GigaDevice's
+# supplemental announcement on its ChangXin investment states its own
+# commitment as 公司拟以自有资金15亿元 ("the company intends to invest
+# 1.5bn of its own funds") and ChangXin's worth, in the same document,
+# three ways: 投前估值约为人民币1,399.82亿元 (pre-money valuation),
+# 评估值为人民币13,998,175.09万元 (appraised value) and a 2022
+# 投后估值约1,077.89亿元 (post-money). The extractor took the largest,
+# returned ¥139.98bn - 93x the real commitment - and C3 scored it 64
+# MADs above GigaDevice's own median.
+#
+# 注册资本 (registered capital) is included for the same reason: the
+# same filing states 全部注册资本536.33亿元, which is the target's
+# capital base, not a transaction.
+_VALUATION_TERMS = (
+    "估值",        # valuation (covers 投前估值 / 投后估值)
+    "评估值",      # appraised value
+    "评估结果",    # appraisal result
+    "注册资本",    # registered capital of the target
+    "总资产",      # total assets
+    "净资产",      # net assets
+    "市值",        # market capitalisation
+    "作价",        # priced at
+)
+
+
+def _valuation_term(context: str) -> str | None:
+    """The valuation word in this amount's preceding text, if any.
+
+    Returns the matched term so the flag records WHY the figure was
+    excluded, rather than a bare boolean a reader would have to
+    re-derive from the filing.
+    """
+    for term in _VALUATION_TERMS:
+        if term in context:
+            return term
+    return None
+
+
+# Words that mark a figure as EVERYONE'S money rather than this
+# company's. The same GigaDevice filing that over-reported a valuation
+# also states 融资规模合计108亿元 - the total size of the funding round
+# across all its investors - beside the company's own 15亿元. Excluding
+# valuations alone brought that filing from ¥139.98bn to ¥10.8bn, which
+# is still 7x the real commitment, because the round total is the next
+# largest number.
+#
+# Deliberately narrow. 出资 and 增资 appear with roughly equal frequency
+# for the filer's own outlay and for other parties', so matching them
+# would discard real commitments; measured across 400 candidate filings
+# they occur 19 and 15 times with no consistent subject. Only phrases
+# that are explicitly aggregate are listed, and each must still clear
+# the "another party is named" check below.
+_AGGREGATE_TERMS = ("合计", "总规模", "总额为", "各方", "全体", "共同投资")
+
+# What marks the company's own outlay, checked FIRST. A clause that
+# names the filer as the actor is not an aggregate however it reads:
+# 公司拟以自有资金15亿元 is this company's commitment even though a
+# later clause totals the round.
+_OWN_OUTLAY_TERMS = ("自有资金", "公司拟以", "本公司拟", "自筹资金")
+
+
+def _aggregate_term(context: str) -> str | None:
+    """The word marking this amount as a multi-party total, if any.
+
+    Returns None when the same context also marks the figure as the
+    filer's own outlay - that phrasing is decisive and an aggregate
+    word nearby does not override it.
+    """
+    if any(term in context for term in _OWN_OUTLAY_TERMS):
+        return None
+    for term in _AGGREGATE_TERMS:
+        if term in context:
+            return term
+    return None
+
 # A results filing states its unit ONCE in a table header - 单位：元 /
 # 单位：万元 - and then prints bare numbers underneath. Confirmed live on
 # China Northern Rare Earth's Q1 report: "单位：元 ... 营业收入
@@ -1396,6 +1532,82 @@ _CN_YOY_TABLE_ROW_RE = re.compile(
     r"(?P<prior>-?[0-9][0-9,]*(?:\.[0-9]+)?)\s+"
     r"(?P<pct>-?[0-9][0-9,]*(?:\.[0-9]+)?)")
 
+# Three more real forms, all found in filings that state a revenue
+# change the two patterns above do not see. Measured on one company's
+# two-year history: sixteen periodic filings carried a revenue-YoY
+# phrase and only five produced a value, and these account for the
+# difference.
+#
+#   1. ANNUAL-REPORT TABLE, three year-columns and no 同期增减 header.
+#      "营业收入（元） 29,838,069,162.26 22,079,458,092.37 35.14%
+#       14,688,111,969.67" - the percent sits BETWEEN the second and
+#      third figures rather than after them, and the header reads
+#      本年比上年增减, which _CN_YOY_TABLE_HEADER_RE does not match.
+_CN_YOY_THREE_COL_RE = re.compile(
+    r"(?P<label>营业(?:总)?收入|利润总额|净利润|营业利润)"
+    r"(?:（元）|\(元\))?\s+"
+    r"(?P<cur>-?[0-9][0-9,]*(?:\.[0-9]+)?)\s+"
+    r"(?P<prior>-?[0-9][0-9,]*(?:\.[0-9]+)?)\s+"
+    r"(?P<pct>-?[0-9][0-9,]*(?:\.[0-9]+)?)\s*%")
+
+#   1b. BARE TABLE ROW, no header line to anchor on. The periodic
+#      report's data table often loses its header to PDF extraction -
+#      the column labels end up shuffled above it ("本报告期比上年同期增
+#      减（%） 本报告期 上年同期") or split across a page break - so the
+#      header pattern finds nothing and the row is never read. The row
+#      itself survives intact:
+#        "营业收入 3,718,097,074.64 3,265,291,841.84 13.87"
+#      Matched on the row alone, WITHOUT a header, and kept only when
+#      the stated percent follows from the two figures beside it. That
+#      arithmetic check is what makes a headerless match safe: on 35
+#      real filings from the four companies this was blind to, it
+#      agreed 12 times out of 12 and never admitted a wrong row.
+_CN_YOY_BARE_ROW_RE = re.compile(
+    r"(?P<label>营业(?:总)?收入|利润总额|净利润|营业利润)\s+"
+    r"(?P<cur>[\d,]+\.\d+)\s+"
+    r"(?P<prior>[\d,]+\.\d+)\s+"
+    r"(?P<pct>-?\d+\.\d+)(?!\d)")
+
+#   1c. QUARTERLY ROW, which states a percent WITHOUT the prior figure:
+#        "营业收入 1,244,203,445.71 30.28 3,193,795,521.45 30.28"
+#      that is this-quarter value, this-quarter change, year-to-date
+#      value, year-to-date change. There is no prior-period column to
+#      check the percent against, so the guard here is structural
+#      instead: four alternating value/percent fields, with both
+#      percents plausible (|pct| < 1000) and both values far larger
+#      than them. The FIRST percent is taken - the quarter's own
+#      change, not the cumulative one, which would double-count.
+_CN_YOY_QUARTER_ROW_RE = re.compile(
+    r"(?P<label>营业(?:总)?收入|利润总额|净利润|营业利润)\s+"
+    r"(?P<cur>[\d,]+\.\d+)\s+"
+    r"(?P<pct>-?\d+\.\d+)\s+"
+    r"(?P<ytd>[\d,]+\.\d+)\s+"
+    r"(?P<ytd_pct>-?\d+\.\d+)(?!\d)")
+
+#   2. PROSE, figure first and the change after it.
+#      "营业收入2025年1-9月为27,301,379,656.81元，比上年同期增加32.97%"
+#      The subject and the percent are separated by the figure itself,
+#      so a pattern expecting them adjacent misses it.
+_CN_YOY_PROSE_RE = re.compile(
+    r"(?P<label>营业(?:总)?收入|利润总额|净利润|营业利润)"
+    r"[^。；\n]{0,60}?"
+    r"(?:比上年同期|较上年同期|同比)\s*"
+    r"(?P<dir>增加|增长|上升|下降|减少)\s*"
+    r"(?P<pct>[0-9][0-9,]*(?:\.[0-9]+)?)\s*%")
+
+#   3. GUIDANCE RANGE, in an 业绩预告.
+#      "营业收入 595,056.84万元 比上年同期增长23.35%-50.91%"
+#      A forecast states a band, not a point. The LOW end is taken: it
+#      is the part the company is committing to, and treating the top
+#      of a range as achieved would overstate every pre-announcement.
+_CN_YOY_RANGE_RE = re.compile(
+    r"(?P<label>营业(?:总)?收入|利润总额|净利润|营业利润)"
+    r"[^。；\n]{0,60}?"
+    r"(?:比上年同期|较上年同期|同比)\s*"
+    r"(?P<dir>增加|增长|上升|下降|减少)[：:]?\s*"
+    r"(?P<low>[0-9][0-9,]*(?:\.[0-9]+)?)\s*%\s*[-—~至]\s*"
+    r"(?P<high>[0-9][0-9,]*(?:\.[0-9]+)?)\s*%")
+
 
 # Subjects are normalised to a canonical form before storage. The raw
 # matches fragment three ways, all confirmed live:
@@ -1478,8 +1690,144 @@ def _extract_yoy_changes(text: str) -> list[dict[str, Any]]:
                 "pct_high": None,
                 "raw": m.group(0).strip()[:48],
             })
-            if len(out) >= _GATE2_MAX_FIGURES:
-                return out
+
+    # The annual report's own three-column table. Same agreement check
+    # as above - the stated percent must follow from the two figures
+    # beside it, or the columns are not what they appear to be.
+    for m in _CN_YOY_THREE_COL_RE.finditer(text):
+        label = m.group("label")
+        if label in seen_subjects:
+            continue
+        try:
+            pct = float(m.group("pct").replace(",", ""))
+            current = float(m.group("cur").replace(",", ""))
+            prior = float(m.group("prior").replace(",", ""))
+        except ValueError:
+            continue
+        if not prior:
+            continue
+        implied = (current - prior) / abs(prior) * 100
+        if abs(implied - pct) > 2.0:
+            continue
+        seen_subjects.add(label)
+        out.append({
+            "subject": _canonical_yoy_subject(label),
+            "subject_raw": label,
+            "pct": pct,
+            "pct_high": None,
+            "raw": m.group(0).strip()[:48],
+        })
+
+    # Headerless quarterly row, before the bare row: its four fields
+    # would otherwise be read by the three-field pattern as
+    # (cur, pct, ytd), with the percent mistaken for a prior-period
+    # figure. Tried first so the more specific shape wins.
+    for m in _CN_YOY_QUARTER_ROW_RE.finditer(text):
+        label = m.group("label")
+        if label in seen_subjects:
+            continue
+        try:
+            pct = float(m.group("pct"))
+            ytd_pct = float(m.group("ytd_pct"))
+            cur = float(m.group("cur").replace(",", ""))
+            ytd = float(m.group("ytd").replace(",", ""))
+        except ValueError:
+            continue
+        # Structural check, since there is no prior figure to verify
+        # against: both percents must be plausible changes and both
+        # values must dwarf them, or these are four ordinary numbers
+        # that happen to follow the label.
+        if abs(pct) >= 1000 or abs(ytd_pct) >= 1000:
+            continue
+        if cur <= abs(pct) * 100 or ytd <= abs(ytd_pct) * 100:
+            continue
+        seen_subjects.add(label)
+        out.append({
+            "subject": _canonical_yoy_subject(label),
+            "subject_raw": label,
+            "pct": pct,
+            "pct_high": None,
+            "raw": m.group(0).strip()[:48],
+        })
+        if len(out) >= _GATE2_MAX_FIGURES:
+            return out
+
+    # Headerless table row. Admitted only when the stated percent
+    # follows from the two figures beside it - that agreement is the
+    # whole safeguard for reading a row with no header above it.
+    for m in _CN_YOY_BARE_ROW_RE.finditer(text):
+        label = m.group("label")
+        if label in seen_subjects:
+            continue
+        try:
+            pct = float(m.group("pct"))
+            cur = float(m.group("cur").replace(",", ""))
+            prior = float(m.group("prior").replace(",", ""))
+        except ValueError:
+            continue
+        if not prior:
+            continue
+        implied = (cur - prior) / abs(prior) * 100
+        if abs(implied - pct) > 2.0:
+            continue
+        seen_subjects.add(label)
+        out.append({
+            "subject": _canonical_yoy_subject(label),
+            "subject_raw": label,
+            "pct": pct,
+            "pct_high": None,
+            "raw": m.group(0).strip()[:48],
+        })
+        if len(out) >= _GATE2_MAX_FIGURES:
+            return out
+
+    # A forecast range, before the single-figure prose form: the range
+    # pattern is the more specific of the two and would otherwise have
+    # its low end taken by the prose pattern with the high end dropped
+    # silently.
+    for m in _CN_YOY_RANGE_RE.finditer(text):
+        label = m.group("label")
+        if label in seen_subjects:
+            continue
+        try:
+            low = float(m.group("low").replace(",", ""))
+            high = float(m.group("high").replace(",", ""))
+        except ValueError:
+            continue
+        if m.group("dir") in ("下降", "减少"):
+            low, high = -low, -high
+        seen_subjects.add(label)
+        out.append({
+            "subject": _canonical_yoy_subject(label),
+            "subject_raw": label,
+            "pct": low,
+            "pct_high": high,
+            "raw": m.group(0).strip()[:48],
+        })
+        if len(out) >= _GATE2_MAX_FIGURES:
+            return out
+
+    # Prose, figure first and the change after it.
+    for m in _CN_YOY_PROSE_RE.finditer(text):
+        label = m.group("label")
+        if label in seen_subjects:
+            continue
+        try:
+            pct = float(m.group("pct").replace(",", ""))
+        except ValueError:
+            continue
+        if m.group("dir") in ("下降", "减少"):
+            pct = -pct
+        seen_subjects.add(label)
+        out.append({
+            "subject": _canonical_yoy_subject(label),
+            "subject_raw": label,
+            "pct": pct,
+            "pct_high": None,
+            "raw": m.group(0).strip()[:48],
+        })
+        if len(out) >= _GATE2_MAX_FIGURES:
+            return out
 
     for m in _CN_YOY_RE.finditer(text):
         try:
@@ -1595,18 +1943,37 @@ def extract_filing_figures(body: str) -> dict[str, Any]:
             value = float(m.group("num").replace(",", ""))
         except ValueError:
             continue
+        context = text[max(0, m.start() - _AMOUNT_CONTEXT_CHARS):m.start()]
         entry = {
             "value": value * _CN_UNIT_MULTIPLIER[m.group("unit")],
             "raw": m.group(0).strip(),
             # Chinese filings quote CNY unless they say otherwise;
             # recorded rather than inferred per-row.
             "currency": "CNY",
+            # The words immediately before the number, kept verbatim so
+            # a consumer can tell what the figure IS rather than
+            # guessing from its size - the same reason percentages
+            # carry one.
+            "context": context.strip()[-_AMOUNT_CONTEXT_CHARS:],
         }
         if m.group("per"):
             # A unit price, not a total. Flagged rather than dropped -
             # an issue price is a real disclosed fact, it just must not
             # be compared against transaction sizes.
             entry["per_unit"] = m.group("per").strip().lstrip("/").strip()
+        valuation = _valuation_term(context)
+        if valuation:
+            # SOMEONE ELSE'S WORTH, NOT THIS COMPANY'S OUTLAY. Flagged
+            # rather than dropped, same as per_unit: a target's
+            # valuation is a real disclosed fact and belongs in
+            # `amounts`, it just must never be read as a commitment.
+            entry["valuation_term"] = valuation
+        aggregate = _aggregate_term(context)
+        if aggregate:
+            # EVERYONE'S MONEY, NOT THIS COMPANY'S SHARE. Same
+            # treatment and the same reason - a round total is a real
+            # fact about the deal, just not about this filer's outlay.
+            entry["aggregate_term"] = aggregate
         amounts.append(entry)
         if len(amounts) >= _GATE2_MAX_FIGURES:
             break
@@ -1660,8 +2027,16 @@ def extract_filing_figures(body: str) -> dict[str, Any]:
         # not a transaction size, and including it made one asset-purchase
         # filing report a max_amount of ¥43 against a median of ¥1.5bn
         # across its own category.
+        #
+        # Valuations are excluded for the mirror-image reason: they are
+        # too LARGE rather than too small. A filing that prices what it
+        # is buying into states that price alongside its own outlay,
+        # and the price is the bigger number by construction - see
+        # _VALUATION_TERMS for the GigaDevice case this cost.
         "max_amount": max(
-            (a["value"] for a in amounts if not a.get("per_unit")),
+            (a["value"] for a in amounts
+             if not a.get("per_unit") and not a.get("valuation_term")
+             and not a.get("aggregate_term")),
             default=None),
     }
 
@@ -2003,8 +2378,39 @@ def classify_platform_capex(
 # three genuine outliers (37.0, 82.9, 93.1bn, at 12.4-33.1 MADs). 3.0
 # MADs sits in that gap and is the same band C2 and C6 already use, so
 # the three classifiers answer "unusual" the same way.
-_C3_MIN_OBSERVATIONS = 8
+# THREE, matching C2's floor, because the data will not support eight
+# and three is where a spread can be computed at all. Measured over the
+# full four-year history: only 2 of 17 companies have eight distinct
+# commitment figures, 12 reach three, and three and four give identical
+# coverage - so the lower floor costs nothing and keeps the two
+# classifiers answering "enough history" the same way. Commitments are
+# announced a handful of times a year at most, and five of these
+# companies have only been listed since 2022.
+_C3_MIN_OBSERVATIONS = 3
+# The same band as C2 and C6, and deliberately NOT re-derived here.
+# C2's band was measured against its real distribution (see the block
+# on _C2_SIGNAL_MADS); C3's cannot be measured the same way yet, for
+# two reasons that are both about the input rather than the band:
+#
+#   - the extractor is known to mis-read the figure. A GigaDevice
+#     filing stating a 15亿元 investment yielded 139.98bn - ChangXin's
+#     implied VALUATION, the largest number in the document. That one
+#     row scores 64 MADs. Fitting a band to a distribution containing
+#     errors of that size would fit the band to the errors.
+#   - commitments are episodic, not periodic. A company files revenue
+#     four times a year and a capacity commitment when it makes one, so
+#     there is no per-period series to build a comparable distribution
+#     from.
+#
+# So this stays aligned with C2 until the extraction defect above is
+# fixed, at which point C3's own distribution becomes worth measuring.
+# A DIFFERENT band here would need its own evidence; the same one needs
+# only the reasoning C2 already recorded.
 _C3_SIGNAL_MADS = 3.0
+# The weak band, mirroring C2. Below it a commitment was measured
+# against a real baseline and found ordinary, which is `noise` - a
+# different statement from `waiting`, which means nothing judged it.
+_C3_WEAK_MADS = 2.0
 # A floor on the MAD itself, proportional rather than absolute because
 # commitments span two orders of magnitude. Without it a batch of
 # near-identical figures would make any ordinary commitment look
@@ -2012,7 +2418,72 @@ _C3_SIGNAL_MADS = 3.0
 # against in percentage space.
 _C3_MIN_MAD_FRACTION = 0.25
 
-_C2_MIN_OBSERVATIONS = 8
+# Baselines are built PER PERIOD TYPE (annual, half-year, Q1, Q3), so
+# an annual growth rate is compared only against this company's other
+# annual rates. Those are different measurements - 12 months against
+# 12, versus 3 months against 3 - and pooling them inflates the spread
+# with seasonality rather than with anything that happened. Measured on
+# the stored data: GigaDevice's Q1 figures run 68 points above its
+# annual ones, nearly three times its own MAD, so every Q1 looked
+# extreme and every Q3 flat regardless of events.
+#
+# THREE, not eight, and the listing dates force it. A four-year window
+# yields at most four annual figures, and fetching further back does
+# not help the companies that need it most: five of the sixteen listed
+# in 2022 or later - Hygon (Jul 2022), Loongson (Jun 2022), Hwatsing
+# (May 2022), Piotech (Mar 2022), Hua Hong (Jul 2023) - so their full
+# history IS four years or less. An eight-year fetch for Hygon returned
+# exactly the filings a four-year fetch already had.
+#
+# Three is the floor at which a spread can be computed at all: at two,
+# the MAD is half the gap between the only two values and one of them
+# defines it entirely. Every signal carries `baseline_observations` and
+# `period_type`, so a reader can see a verdict resting on three annual
+# figures for what it is.
+_C2_MIN_OBSERVATIONS = 3
+# Checked against the real stored distribution (283 observations with a
+# baseline, 65 trusted baselines over 18 companies) rather than carried
+# over unexamined. The band arrived here from C6; the measurement below
+# is why it stays.
+#
+# What the band has to separate is not "big" from "small" - it is a
+# genuine BREAK from the top of a smooth rising trend. China's
+# semiconductor names have been in a continuous upcycle across the whole
+# four-year window, so a company's newest figure is very often its
+# largest, and a band set too low flags ordinary growth. Measuring how
+# many firings are the newest point of a monotonically rising series:
+#
+#     k      fires   of 283   monotone trend in the firing set
+#     1.0       62    21.9%    5%
+#     1.5       47    16.6%    6%
+#     2.0       34    12.0%    3%
+#     2.5       27     9.5%    0%
+#     3.0       22     7.8%    0%
+#     4.0       12     4.2%    0%
+#
+# Contamination reaches zero at 2.5 and stays there, so 2.5 is the
+# lowest defensible band and 3.0 sits inside that region with margin.
+# The margin is the point: at n=4 the MAD is roughly half the
+# interquartile spread, and dropping a single Hygon observation moves
+# its own threshold between +87% and +176% - an estimator that loose can
+# push a 2.5 band back into the trend zone, where 3.0 has room to
+# absorb it. 3.0 also matches C6, and an unexplained DIFFERENCE between
+# the two classifiers would be worse than a shared conservative value.
+#
+# What 3.0 gives up over 2.5 is five modest accelerations (Hwatsing Q3
+# +62.37% on [30.3, 33.2, 62.4], Piotech H1, JL MAG H1, Naura Q1, China
+# Northern Q3). Real, but small, and each rests on three or four points.
+#
+# THE BAND IS NOT THE BINDING CONSTRAINT - the sample size is. 63 of 65
+# baselines have n <= 6 and most have n = 4. Choosing between 2.5 and
+# 3.0 decides 27 firings versus 22, on estimates that wobble by more
+# than that gap. Effort spent widening the history will buy more than
+# effort spent tuning k.
+#
+# The distribution's own break is nowhere near this range: it sits at
+# p97.5, around 7.5 MADs, above which are Cambricon's three 2025
+# quarters (+2386%, +4348%, +4230%), Piotech FY2022 (+292%) and
+# Alibaba FY2012 - a different population, not this one's tail.
 _C2_SIGNAL_MADS = 3.0
 _C2_WEAK_MADS = 2.0
 # The same floor reasoning as C6: a tight baseline would otherwise make
@@ -2021,8 +2492,407 @@ _C2_WEAK_MADS = 2.0
 _C2_MIN_MAD_PCT = 10.0
 
 
+# A filing's fiscal period and how authoritative it is, both read from
+# the title. Needed because the same period is reported several times:
+# Hygon's FY2024 revenue growth appears as a January forecast (45.04%,
+# the low end of a range), a February flash (52.40%) and the March
+# annual report (52.40%). Pooling all three put ONE year of growth into
+# the baseline as two distinct observations, and a forecast - a
+# prediction the company later revised - carried the same weight as the
+# filed figure.
+#
+# The periods are also different measurements: a Q1 growth rate
+# compares three months, an annual one compares twelve. They are not
+# interchangeable observations of the same quantity, and the spread
+# across a company's history is inflated by mixing them. Collapsing to
+# one value per period does not fix that mixing, but it does stop the
+# same period being counted up to four times.
+_CN_PERIOD_YEAR_RE = re.compile(r"(20\d{2})\s*年")
+
+# 截至2026年6月30日止三个月 / 截至二零二六年六月三十日止六個月 - the
+# HK-listed names' Chinese mirrors date a period by when it ends
+# rather than naming a quarter, in either Arabic or full-width
+# numerals, and in either simplified or traditional characters.
+_HK_CN_PERIOD_RE = re.compile(
+    r"截至\s*(?P<year>[0-9〇零一二三四五六七八九]{2,4})\s*年"
+    r"\s*(?P<month>[0-9〇零一二三四五六七八九十]{1,3})\s*月"
+    r"[^止]{0,8}止\s*(?P<span>[^，。,\s]{0,6})")
+_CN_DIGITS = {"〇": "0", "零": "0", "一": "1", "二": "2", "三": "3",
+              "四": "4", "五": "5", "六": "6", "七": "7", "八": "8",
+              "九": "9"}
+# Month 1-12 -> the quarter it closes, matching _MONTH_TO_QUARTER for
+# the English form.
+_MONTH_TO_QUARTER_NUM = {1: "Q1", 2: "Q1", 3: "Q1", 4: "Q2", 5: "Q2",
+                         6: "Q2", 7: "Q3", 8: "Q3", 9: "Q3", 10: "Q4",
+                         11: "Q4", 12: "Q4"}
+
+
+def _cn_numeral_year(raw: str) -> str | None:
+    """A four-digit year from either 2026 or 二零二六."""
+    digits = "".join(_CN_DIGITS.get(ch, ch) for ch in raw)
+    return digits if len(digits) == 4 and digits.isdigit() else None
+
+
+def _cn_numeral_month(raw: str) -> int | None:
+    """A month number from 6, 六, 十, 十一 or 十二."""
+    if raw.isdigit():
+        value = int(raw)
+        return value if 1 <= value <= 12 else None
+    if raw == "十":
+        return 10
+    if raw.startswith("十") and len(raw) == 2:
+        tail = _CN_DIGITS.get(raw[1])
+        return 10 + int(tail) if tail else None
+    digit = _CN_DIGITS.get(raw)
+    return int(digit) if digit and digit != "0" else None
+
+# THE HONG KONG NAMES FILE IN ENGLISH, and C2 was blind to all of it.
+# SMIC, Hua Hong, Lenovo, Alibaba, Tencent and Baidu file to HKEX in
+# English by listing requirement, so their titles carry no 年 and the
+# Chinese matcher above returned None for every one - the figures were
+# extracted, stored, and then dropped because no period could be read
+# to say which baseline they belonged to. Measured: 3,338 of 3,587
+# `waiting` rows had no period word the Chinese patterns recognise.
+#
+# A fiscal year written 2024/25 is taken as the year it ENDS, matching
+# how the issuer labels the report itself.
+_EN_PERIOD_YEAR_RE = re.compile(r"(20\d{2})\s*/\s*(\d{2})|(20\d{2})")
+
+# Q2 AND Q4 ARE REAL HERE, unlike on the mainland. A Shanghai or
+# Shenzhen issuer files FY / H1 / Q1 / Q3 only - the half-year covers
+# Q2 and the annual covers Q4 - but SMIC announces standalone second
+# and fourth quarters (8 of each in the stored history). They are kept
+# as their own period types rather than mapped onto H1/FY: a
+# standalone Q2 growth rate is not a half-year growth rate, and
+# folding them together would put two different measurements into one
+# baseline, which is the exact mixing _PERIOD_LABEL exists to prevent.
+_EN_PERIOD_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"(?i)first quarter"), "Q1"),
+    (re.compile(r"(?i)second quarter"), "Q2"),
+    (re.compile(r"(?i)nine months ended|third quarter"), "Q3"),
+    (re.compile(r"(?i)fourth quarter"), "Q4"),
+    (re.compile(r"(?i)six months ended|interim"), "H1"),
+    (re.compile(r"(?i)annual report|annual results|full year"), "FY"),
+]
+
+# "THREE MONTHS ENDED <date>" names a quarter by when it ENDS, not by
+# the phrase - SMIC's "THREE MONTHS ENDED JUNE 30, 2024" is Q2, and
+# reading it as Q1 would file a second-quarter growth rate into the
+# first-quarter baseline. The month decides it.
+_EN_THREE_MONTHS_RE = re.compile(
+    r"(?i)three months ended\s+([a-z]+)\s+\d{1,2}")
+_MONTH_TO_QUARTER = {
+    "january": "Q1", "february": "Q1", "march": "Q1",
+    "april": "Q2", "may": "Q2", "june": "Q2",
+    "july": "Q3", "august": "Q3", "september": "Q3",
+    "october": "Q4", "november": "Q4", "december": "Q4",
+}
+
+
+def _filing_period(title: str) -> str | None:
+    """The fiscal period a filing reports on, e.g. "2024FY", or None.
+
+    None for anything that is not a periodic financial filing - a
+    shareholder meeting notice, a board election, an incentive plan.
+    Confirmed against 168 real titles: 106 parsed, and all 62 that did
+    not are non-financial filings carrying no revenue figure.
+
+    Chinese forms are tried first and English second, not because one
+    is more authoritative but because a mainland title is unambiguous
+    while "2024 Annual Report" needs the looser year match that would
+    otherwise fire on a date inside a Chinese title.
+    """
+    if not title:
+        return None
+
+    # HK-STYLE CHINESE DATE WORDING, used by the dual-listed names in
+    # their 港股公告 mirrors. SMIC writes
+    # 截至2026年6月30日止三个月 ("the three months ended 30 June 2026")
+    # and 截至二零二六年六月三十日止六个月 in full-width numerals -
+    # neither carries 第二季度 or 半年度, so the mainland keywords below
+    # returned None and the figures were dropped. Same convention as
+    # the English "THREE MONTHS ENDED": the quarter is named by the
+    # month it ENDS in.
+    hk = _HK_CN_PERIOD_RE.search(title)
+    if hk:
+        year = _cn_numeral_year(hk.group("year"))
+        month = _cn_numeral_month(hk.group("month"))
+        span = hk.group("span")
+        if year and month:
+            if "三個月" in span or "三个月" in span:
+                return f"{year}{_MONTH_TO_QUARTER_NUM.get(month, 'Q1')}"
+            if "六個月" in span or "六个月" in span:
+                return f"{year}H1"
+            if "九個月" in span or "九个月" in span:
+                return f"{year}Q3"
+            if "十二個月" in span or "十二个月" in span:
+                return f"{year}FY"
+
+    year = _CN_PERIOD_YEAR_RE.search(title)
+    if year:
+        y = year.group(1)
+        if "第一季度" in title:
+            return f"{y}Q1"
+        if "第二季度" in title:
+            return f"{y}Q2"
+        if "第三季度" in title or "前三季度" in title:
+            return f"{y}Q3"
+        if "第四季度" in title:
+            return f"{y}Q4"
+        if "半年度" in title or "中期" in title:
+            return f"{y}H1"
+        if "年度" in title or "年报" in title:
+            return f"{y}FY"
+        return None
+
+    # English. The period word has to be present before a year is worth
+    # reading - "ANNOUNCEMENT OF 2025 ANNUAL RESULTS" is a periodic
+    # filing, "PLACING OF 2025 NEW SHARES" is not, and both carry a
+    # four-digit year.
+    #
+    # Checked before the table because a three-month period is named
+    # by its end date rather than by an ordinal.
+    quarter_end = _EN_THREE_MONTHS_RE.search(title)
+    if quarter_end:
+        period = _MONTH_TO_QUARTER.get(quarter_end.group(1).lower())
+        match = _EN_PERIOD_YEAR_RE.search(title)
+        if period and match:
+            return (f"20{match.group(2)}{period}" if match.group(1)
+                    else f"{match.group(3)}{period}")
+        return None
+
+    for pattern, period in _EN_PERIOD_PATTERNS:
+        if pattern.search(title):
+            match = _EN_PERIOD_YEAR_RE.search(title)
+            if not match:
+                return None
+            # A 2024/25 label resolves to 2025 - the year the fiscal
+            # period ends, which is what the issuer calls the report.
+            if match.group(1):
+                return f"20{match.group(2)}{period}"
+            return f"{match.group(3)}{period}"
+    return None
+
+
+# The three authority levels a filing's own figure can carry, named so
+# a caller can say which it means rather than comparing against a bare
+# integer. FILING_RANK_PERIODIC is the only one that marks a figure as
+# settled - see _filing_authority.
+FILING_RANK_FORECAST = 1
+FILING_RANK_FLASH = 2
+FILING_RANK_PERIODIC = 3
+
+
+def _filing_authority(title: str) -> int:
+    """How much a filing's own figure should be trusted, 1-3.
+
+    A forecast states a range before the books close and is routinely
+    revised; a flash is unaudited; the periodic report is the filed
+    fact. Where the same period is reported more than once, the highest
+    rank wins.
+    """
+    if "业绩预告" in (title or ""):
+        return FILING_RANK_FORECAST
+    if "业绩快报" in (title or ""):
+        return FILING_RANK_FLASH
+    return FILING_RANK_PERIODIC
+
+
+# Public aliases. Both helpers read a filing's title the way C2 does,
+# and the baseline refresh needs the same reading to decide which
+# companies have figures worth re-fetching - a periodic report settles
+# a figure, a forecast does not. Exposed as aliases rather than renamed
+# so the dozen internal call sites below stay as they are, and so there
+# is one definition of what a period and an authority rank mean.
+filing_period = _filing_period
+filing_authority = _filing_authority
+
+# How each period code reads in a sentence.
+# Q2/Q4 appear only in the HK-listed names' English filings - a
+# mainland issuer never reports a standalone second or fourth quarter.
+_PERIOD_LABEL = {"FY": "annual", "H1": "half-year",
+                 "Q1": "first-quarter", "Q2": "second-quarter",
+                 "Q3": "nine-month", "Q4": "fourth-quarter"}
+
+
+def compute_c2_baselines(
+    articles: list[dict[str, Any]],
+    revenue_series: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Every company's revenue-growth baseline, per reporting period.
+
+    The refresh half of the split described in
+    models/market_baselines.py: this is given the FULL stored history
+    and produces rows for market_signal_baselines, which the daily
+    classify pass then reads instead of recomputing.
+
+    Returns one row per (company, period type) actually observed,
+    including those below the trust floor - an untrusted row records
+    that the company was measured and found to have too little history,
+    which is worth storing rather than silently omitting.
+    """
+    import statistics as _st
+
+    # A structured revenue series, where one is available, replaces
+    # everything derived from filing text for that company. Each entry
+    # is already {code, period_type, year, yoy_pct} - no PDF parsing, no
+    # period read out of a Chinese title, no forecast-versus-report
+    # ranking, and no risk of reading the largest number in a document
+    # as the company's own figure. Measured against the extracted
+    # series it agrees exactly where both exist, and additionally
+    # covers five companies text extraction could not read at all.
+    #
+    # Falls through to extraction for a company with no structured
+    # source - Tencent and Lenovo are OTC ADRs on neither cninfo nor
+    # the SEC, so their figures exist only in filing text.
+    structured: dict[tuple[str, str], list[float]] = {}
+    structured_names: dict[str, str] = {}
+    for entry in revenue_series or []:
+        code = entry.get("code")
+        period_type = entry.get("period_type")
+        pct = entry.get("yoy_pct")
+        if code and period_type and pct is not None:
+            structured.setdefault((code, period_type), []).append(float(pct))
+
+    best: dict[tuple[str, str], tuple[int, float, str]] = {}
+    for article in articles:
+        meta = article.get("metadata") or {}
+        if meta.get("source_type") not in ("cninfo_filing", "hkex_filing"):
+            continue
+        # Same Gate 1 check the classifier makes - a baseline built
+        # from documents the triage rejected would be the mirror of
+        # the same bug, with the figure entering the median instead of
+        # producing a verdict.
+        if classify_filing_type(article.get("title") or "")[0] == "noise":
+            continue
+        company = meta.get("company") or "?"
+        code = meta.get("code") or "?"
+        title = article.get("title") or ""
+        period = _filing_period(title)
+        if period is None:
+            continue
+        rank = _filing_authority(title)
+        for change in extract_filing_figures(
+                article.get("body") or "")["yoy_changes"]:
+            if change.get("subject") != "revenue":
+                continue
+            key = (code, period)
+            current = best.get(key)
+            if current is None or rank > current[0]:
+                best[key] = (rank, change["pct"], company)
+
+    by_series: dict[tuple[str, str], list[float]] = {}
+    names: dict[str, str] = {}
+    for (code, period), (_rank, pct, company) in best.items():
+        by_series.setdefault((code, period[-2:]), []).append(pct)
+        names[code] = company
+
+    # Structured series win outright - a company present there has its
+    # text-derived observations discarded rather than merged, so one
+    # baseline never mixes two extraction methods.
+    for key in structured:
+        by_series.pop(key, None)
+    for (code, period_type), values in structured.items():
+        by_series[(code, period_type)] = values
+        names.setdefault(code, structured_names.get(code, code))
+
+    rows: list[dict[str, Any]] = []
+    for (code, period_type), values in sorted(by_series.items()):
+        distinct = sorted(set(round(v, 2) for v in values))
+        trusted = len(distinct) >= _C2_MIN_OBSERVATIONS
+        median = _st.median(distinct) if distinct else None
+        mad = None
+        if trusted:
+            mad = max(_st.median([abs(v - median) for v in distinct]),
+                      _C2_MIN_MAD_PCT)
+        rows.append({
+            "code": code,
+            "metric": "revenue_yoy",
+            "period_type": period_type,
+            "company": names.get(code),
+            "median": round(median, 2) if median is not None else None,
+            "mad": round(mad, 2) if mad is not None else None,
+            "sample_size": len(distinct),
+            "is_trusted": trusted,
+            # Which source actually produced this series, not which
+            # ones could have. The two are not interchangeable: a
+            # structured figure comes from the issuer's own income
+            # statement, a text-extracted one from whatever the PDF
+            # parser read out of a filing - and that path is the one
+            # with a known failure mode (the largest number in a
+            # document is not always the company's own). A reader
+            # auditing a surprising baseline needs to know which they
+            # are looking at.
+            "computed_from": (
+                "structured revenue API (cninfo data20 / Alpha Vantage)"
+                if (code, period_type) in structured
+                else "cninfo_filing+hkex_filing revenue YoY, text-extracted"
+            ),
+        })
+    logger.info("[CHINA] c2 baselines computed: %d series, %d trusted",
+                len(rows), sum(1 for r in rows if r["is_trusted"]))
+    return rows
+
+
+def _c2_result(article: dict[str, Any], company: str, period_type: str,
+               pct: float, median: float, mad: float, deviation: float,
+               n_obs: int) -> dict[str, Any]:
+    """One C2 row, however the baseline was obtained.
+
+    Shared by both paths so a signal judged against a cached baseline
+    and one judged against a batch-derived baseline are indistinguishable
+    downstream - the only difference being `baseline_observations`,
+    which says how much history stood behind the verdict.
+    """
+    label = _PERIOD_LABEL.get(period_type, period_type)
+    # Three bands, not two. A figure measured against a real baseline
+    # and found ordinary is NOISE - it was judged. That is a different
+    # statement from `waiting`, which means nothing judged it at all
+    # (no baseline yet, or no classifier claimed the filing), and the
+    # two were previously indistinguishable because everything below
+    # the signal band was simply dropped.
+    if deviation >= _C2_SIGNAL_MADS:
+        signal = "signal"
+    elif deviation >= _C2_WEAK_MADS:
+        signal = "weak_signal"
+    else:
+        signal = "noise"
+    return {
+        "article": article,
+        "result": {
+            "signal": signal,
+            "reason": (
+                f"{company} {label} revenue {pct:+.1f}% YoY, "
+                f"{deviation:+.1f} MADs from its own {label} median of "
+                f"{median:+.1f}% over {n_obs} {label} periods"
+                + (" - NEGATIVE read for the US names it competes with"
+                   if signal != "noise" else
+                   " - within its usual range")),
+            "metadata": {
+                "source_category": "cn_disclosure",
+                "signal_type": "C2",
+                "company": company,
+                "code": (article.get("metadata") or {}).get("code"),
+                "revenue_yoy_pct": round(pct, 2),
+                # Which reporting period this figure covers, and
+                # therefore which baseline judged it. Without it a
+                # reader cannot tell whether a deviation compares
+                # twelve months or three.
+                "period_type": period_type,
+                "company_median_pct": round(median, 2),
+                "company_mad_pct": round(mad, 2),
+                "deviation_mads": round(deviation, 2),
+                "baseline_observations": n_obs,
+                # The spec's defining property for this market.
+                "direction": "opposite",
+            },
+        },
+    }
+
+
 def classify_substitution_progress(
     articles: list[dict[str, Any]],
+    baselines: dict[tuple[str, str], dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """C2: a revenue growth rate far above what this sector is posting.
 
@@ -2040,78 +2910,194 @@ def classify_substitution_progress(
     """
     import statistics as _st
 
-    observations: list[tuple[float, dict[str, Any], str]] = []
+    # Grouped BY COMPANY. Each company is judged against its own
+    # trailing distribution, which is what the spec asks for and what a
+    # signal has to mean: "unusual for this company", not "unusual
+    # compared to whoever happened to file this quarter".
+    #
+    # This used to pool every company into one sector baseline. That
+    # was forced by the data rather than chosen - at the time no
+    # company had more than one stored revenue observation, because the
+    # cninfo fetcher silently capped each company at a single page of
+    # 30 announcements regardless of the window asked for. With
+    # pagination fixed and four years fetched, twelve of sixteen
+    # companies now carry 8+ distinct observations and can be judged
+    # against themselves.
+    #
+    # A company below the floor is NOT judged against the sector
+    # instead. A mixed baseline would make two signals carrying the
+    # same deviation mean different things, which is worse than
+    # producing fewer signals.
+    # Keyed (company, fiscal period) and keeping only the most
+    # authoritative filing for each - see _filing_period above for why
+    # the same period otherwise enters the baseline several times.
+    best: dict[tuple[str, str], tuple[int, float, dict[str, Any]]] = {}
+    # Every filing that states a figure for a period, against `best`'s
+    # single most-authoritative one. The baseline uses `best`; the
+    # verdicts use this, so a company's summary report is judged
+    # rather than left unexplained.
+    stated: dict[tuple[str, str], list[tuple[float, dict[str, Any]]]] = {}
+    undated: dict[str, list[tuple[float, dict[str, Any]]]] = {}
+    names: dict[str, str] = {}
     for article in articles:
         meta = article.get("metadata") or {}
         if meta.get("source_type") not in ("cninfo_filing", "hkex_filing"):
             continue
+        # SKIP WHAT GATE 1 ALREADY REJECTED. C2 used to filter on
+        # source_type alone, so it read documents the triage had
+        # already classified as noise - and those documents QUOTE the
+        # company's results, which is exactly what C2 looks for.
+        #
+        # Found in the full reclassification: Cambricon's 2026 half-year
+        # +108.13% was emitted four times, from its 半年度报告, its
+        # 摘要 summary, a 提质增效重回报 shareholder-relations
+        # self-assessment (boilerplate prose that cites the results as
+        # evidence of progress) and a 持续督导跟踪报告 (the sponsoring
+        # broker's regulatory supervision report, not the company's
+        # filing at all). The first two are the issuer reporting its
+        # own results; the last two are paperwork about them.
+        verdict, _category = classify_filing_type(article.get("title") or "")
+        if verdict == "noise":
+            continue
+        # Keyed on CODE, not company name. The code is the stable
+        # identifier - it is what the cached baselines are keyed by,
+        # what article metadata always carries, and what survives a
+        # company being renamed in the catalogue. The display name is
+        # carried alongside for the reason text.
+        code = meta.get("code") or "?"
+        company = meta.get("company") or code
+        names.setdefault(code, company)
+        title = article.get("title") or ""
+        period = _filing_period(title)
+        rank = _filing_authority(title)
         for change in extract_filing_figures(
                 article.get("body") or "")["yoy_changes"]:
             if change.get("subject") != "revenue":
                 continue
-            observations.append(
-                (change["pct"], article, meta.get("company") or "?"))
+            if period is None:
+                # A revenue figure in a filing whose period cannot be
+                # read. Without knowing whether it covers a quarter or
+                # a year there is no baseline it can honestly join.
+                undated.setdefault(code, []).append(
+                    (change["pct"], article))
+                continue
+            key = (code, period)
+            current = best.get(key)
+            if current is None or rank > current[0]:
+                best[key] = (rank, change["pct"], article)
+            # EVERY filing that states the figure still gets judged,
+            # not just the one that wins the period. A company reports
+            # the same period several times - Naura's 2026 half-year
+            # appears in its 半年度报告, its 摘要 summary, a proceeds
+            # report and a related-party table, all at the same
+            # authority rank - and keeping only one of them left the
+            # others to fall through to gate1 as `waiting`, labelled
+            # "too little history" when the company had a trusted
+            # baseline and the figure was sitting in their metadata.
+            #
+            # `best` still decides which figure enters the BASELINE,
+            # so one period is counted once; this list decides which
+            # articles get a VERDICT, which is a different question.
+            stated.setdefault(key, []).append((change["pct"], article))
 
-    distinct = sorted({round(p, 2) for p, _, _ in observations})
-    if len(distinct) < _C2_MIN_OBSERVATIONS:
-        logger.info("[CHINA] c2 %d distinct revenue observations, below "
-                    "floor of %d - not judging",
-                    len(distinct), _C2_MIN_OBSERVATIONS)
-        return []
-
-    median = _st.median(distinct)
-    mad = max(_st.median([abs(v - median) for v in distinct]),
-              _C2_MIN_MAD_PCT)
+    # Keyed (code, PERIOD TYPE) - an annual figure joins the annual
+    # baseline, a half-year figure the half-year one. The period label
+    # is the last two characters of the period key: 2024FY -> FY.
+    by_company: dict[tuple[str, str], list[tuple[float, dict[str, Any]]]] = {}
+    for (code, period), entries in stated.items():
+        by_company.setdefault((code, period[-2:]), []).extend(entries)
+    # A revenue figure whose period could not be read is dropped rather
+    # than pooled: without knowing whether it is a quarter or a year
+    # there is no baseline it can honestly join.
+    if undated:
+        logger.info("[CHINA] c2 %d revenue figure(s) with an unreadable "
+                    "period, not judged", sum(len(v) for v in undated.values()))
 
     results: list[dict[str, Any]] = []
-    # Deduped on (company, figure), not on url. The same quarter's
-    # revenue growth is filed several times - a company's interim
-    # report, its summary, a broker's tracking report and the HK mirror
-    # all carry it, under different urls. Confirmed live: Cambricon's
-    # +108.1% appeared under two separate cninfo filings and would
-    # otherwise have been reported as two signals.
-    seen: set[tuple[str, float]] = set()
-    for pct, article, company in observations:
-        key = (company, round(pct, 2))
-        if key in seen:
-            continue
-        deviation = (pct - median) / mad
-        # One-sided: the spec's C2 is about growth ABOVE the pattern.
-        # A company growing slower than its peers is not substitution
-        # progress, it is the absence of it.
-        if deviation >= _C2_SIGNAL_MADS:
-            signal = "signal"
-        elif deviation >= _C2_WEAK_MADS:
-            signal = "weak_signal"
-        else:
-            continue
-        seen.add(key)
-        results.append({
-            "article": article,
-            "result": {
-                "signal": signal,
-                "reason": (
-                    f"{company} revenue {pct:+.1f}% YoY, {deviation:.1f} "
-                    f"MADs above the sector median of {median:+.1f}% - "
-                    f"NEGATIVE read for the US names it competes with"),
-                "metadata": {
-                    "source_category": "cn_disclosure",
-                    "signal_type": "C2",
-                    "company": company,
-                    "code": (article.get("metadata") or {}).get("code"),
-                    "revenue_yoy_pct": round(pct, 2),
-                    "sector_median_pct": round(median, 2),
-                    "sector_mad_pct": round(mad, 2),
-                    "deviation_mads": round(deviation, 2),
-                    "baseline_observations": len(distinct),
-                    # The spec's defining property for this market.
-                    "direction": "opposite",
-                },
-            },
-        })
+    skipped: list[str] = []
+    for (code, period_type), observations in sorted(by_company.items()):
+        company = names.get(code, code)
+        # Distinct values: the same quarter's figure is filed several
+        # times - the interim report, its summary, a broker's tracking
+        # report and the HK mirror all carry it under different urls -
+        # and counting it four times would narrow the company's own
+        # spread around whichever quarter it reported most.
+        distinct = sorted({round(p, 2) for p, _ in observations})
 
-    logger.info("[CHINA] c2 observations=%d distinct=%d flagged=%d",
-                len(observations), len(distinct), len(results))
+        # A cached baseline, computed by the refresh job from the full
+        # stored history, wins over anything derivable from this batch.
+        # The daily pass pools one day of filings - two or three
+        # observations per company at most - so without the cache it
+        # falls below the floor and issues no verdict, while the same
+        # code over a four-year backfill produces signals. Reading the
+        # cache is what makes the two invocations agree.
+        cached = (baselines or {}).get((code, period_type))
+        if cached and cached.get("median") is not None:
+            median = float(cached["median"])
+            mad = float(cached["mad"]) if cached.get("mad") else _C2_MIN_MAD_PCT
+            n_obs = int(cached["sample_size"])
+            # Deduplicated per ARTICLE, not per value. Two filings
+            # reporting the same period necessarily state the same
+            # percentage - Naura's 2026 half-year is +24.9% in both
+            # its 半年度报告 and its 摘要 summary - and skipping the
+            # second because the number repeats left a real filing
+            # with no verdict, falling through to gate1 as `waiting`
+            # with a reason that blamed the trust floor. The figure
+            # entering the baseline once is handled by `best`; this
+            # loop decides which ARTICLES get judged.
+            seen_cached: set[str] = set()
+            for pct, article in observations:
+                key = article.get("url") or ""
+                if key in seen_cached:
+                    continue
+                seen_cached.add(key)
+                # Every judged observation is written, including the
+                # ordinary ones - see _c2_result on why `noise` and
+                # `waiting` are different answers.
+                results.append(_c2_result(
+                    article, company, period_type, pct, median, mad,
+                    (pct - median) / mad, n_obs))
+            continue
+
+        if len(distinct) < _C2_MIN_OBSERVATIONS:
+            # Some companies will never clear this, and that is a
+            # property of their disclosure rather than of the
+            # extraction. BOE states revenue qualitatively in its
+            # pre-announcements - 营业收入同比增长超10% ("grew by MORE
+            # than 10%"), 同比均有所增长 ("both grew somewhat") - so
+            # there is no percentage to read. Recording "超10%" as 10.0
+            # would turn a deliberately open statement into a precise
+            # one, which is worse than leaving the company unjudged.
+            skipped.append(f"{company}/{period_type}({len(distinct)})")
+            continue
+
+        median = _st.median(distinct)
+        mad = max(_st.median([abs(v - median) for v in distinct]),
+                  _C2_MIN_MAD_PCT)
+
+        # Per article, for the same reason as the cached path above -
+        # two filings of one period state one percentage, and both are
+        # real filings that need a verdict.
+        seen: set[str] = set()
+        for pct, article in observations:
+            key = article.get("url") or ""
+            if key in seen:
+                continue
+            # One-sided: the spec's C2 is about growth ABOVE the
+            # company's own pattern, so a figure far BELOW its median is
+            # noise rather than an inverted signal - the absence of
+            # substitution progress, not evidence against it.
+            deviation = (pct - median) / mad
+            seen.add(key)
+            results.append(_c2_result(
+                article, company, period_type, pct, median, mad,
+                deviation, len(distinct)))
+
+    if skipped:
+        logger.info("[CHINA] c2 not judged, below the %d-observation "
+                    "floor: %s", _C2_MIN_OBSERVATIONS, ", ".join(skipped))
+    logger.info("[CHINA] c2 companies=%d judged=%d flagged=%d",
+                len(by_company), len(by_company) - len(skipped), len(results))
     return results
 
 
@@ -2158,8 +3144,23 @@ def classify_substitution_progress(
 # stripping only "further update" / "despatch" left "on..." and
 # "ofthecircularrelatingto..." as different keys - confirmed live, Hua
 # Hong's single acquisition still split into four chains.
+# Longer phrases FIRST: this is a single alternation and Python's `re`
+# takes the leftmost alternative that matches, so 标的资产过户 must come
+# before 过户 or only the shorter tail would be stripped and the two
+# titles would still differ.
+#
+# The stage phrases matter as much as the leading "update" wording,
+# and were added after a real miss: GigaDevice's acquisition of Suzhou
+# Saixin filed as both 控股权暨关联交易公告 and
+# 控股权暨关联交易之标的资产过户完成公告 - one deal, two C3 rows, each
+# contributing its own figure to the company's baseline. Stripping
+# only leading markers left the mid-title stage wording in place, and
+# once the issuer's own name is removed the subjects fall under the
+# 24-character key window, so the difference stopped being truncated
+# away and started splitting the chain.
 _C3_RESTATEMENT_MARKERS = re.compile(
-    r"(?i)(进展|实施情况|实施结果|结果|完成|补充|之|暨"
+    r"(?i)(标的资产过户|资产过户|股份登记|工商变更登记|过户"
+    r"|进展|实施情况|实施结果|结果|完成|补充|之|暨"
     r"|further update(?:\s+on)?|update announcement(?:\s+on)?"
     r"|supplemental(?:\s+announcement)?(?:\s+in relation to)?"
     r"|despatch of the circular relating to"
@@ -2196,8 +3197,63 @@ def _c3_transaction_key(article: dict[str, Any]) -> tuple[str, str]:
     return (meta.get("company") or "?", subject[:24])
 
 
+def compute_c3_baselines(
+    articles: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Every company's commitment-size baseline, from the full history.
+
+    The C3 half of the refresh described in models/market_baselines.py.
+    Commitments have no reporting period - a company announces one when
+    it announces one - so `period_type` is empty, unlike C2 where a
+    figure belongs to a named quarter or year.
+    """
+    import statistics as _st
+
+    # Gate 1 first: classify_capacity_commitment reads `filing_category`,
+    # which gate_filings attaches and raw articles do not carry. Passing
+    # the raw list produced zero baselines - every article was skipped
+    # for having no category, which looked like "no commitments found"
+    # rather than "the input was the wrong shape".
+    buckets = gate_filings(articles)
+    rows_out = classify_capacity_commitment(buckets["candidate"])
+    by_code: dict[str, list[float]] = {}
+    names: dict[str, str] = {}
+    for r in rows_out:
+        meta = r["result"]["metadata"]
+        amount = meta.get("commitment_value")
+        code = meta.get("code") or "?"
+        if amount:
+            by_code.setdefault(code, []).append(amount)
+            names[code] = meta.get("company") or code
+
+    out: list[dict[str, Any]] = []
+    for code, values in sorted(by_code.items()):
+        distinct = sorted(set(values))
+        trusted = len(distinct) >= _C3_MIN_OBSERVATIONS
+        median = _st.median(distinct) if distinct else None
+        mad = None
+        if trusted:
+            mad = max(_st.median([abs(a - median) for a in distinct]),
+                      median * _C3_MIN_MAD_FRACTION)
+        out.append({
+            "code": code,
+            "metric": "commitment_value",
+            "period_type": "",
+            "company": names.get(code),
+            "median": round(median, 2) if median is not None else None,
+            "mad": round(mad, 2) if mad is not None else None,
+            "sample_size": len(distinct),
+            "is_trusted": trusted,
+            "computed_from": "cninfo_filing+hkex_filing commitment amounts",
+        })
+    logger.info("[CHINA] c3 baselines computed: %d companies, %d trusted",
+                len(out), sum(1 for r in out if r["is_trusted"]))
+    return out
+
+
 def classify_capacity_commitment(
     articles: list[dict[str, Any]],
+    baselines: dict[tuple[str, str], dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """C3: a capacity or capital commitment, one row per transaction.
 
@@ -2279,44 +3335,121 @@ def classify_capacity_commitment(
     # 28 stored filings covering 11 of 20 companies, so a ratio rule
     # would silently skip the other nine. When that coverage improves,
     # this is where the switch goes.
-    amounts = sorted({
-        r["result"]["metadata"]["commitment_value"] for r in pending
-        if r["result"]["metadata"].get("commitment_value")
-    })
-    results: list[dict[str, Any]] = []
-    if len(amounts) >= _C3_MIN_OBSERVATIONS:
-        import statistics as _st
-        median = _st.median(amounts)
-        mad = max(_st.median([abs(a - median) for a in amounts]),
+    # Grouped BY COMPANY, same as C2 and for the same reason: a
+    # commitment is large or ordinary relative to what THIS company
+    # normally commits, not relative to whoever else filed this
+    # quarter. A batch median mixes Hua Hong's multi-billion fab
+    # programmes with JL MAG's magnet plants and calls the difference a
+    # signal, when it is only a difference in company size.
+    #
+    # A company below the floor keeps its weak rating rather than being
+    # ranked against other companies' figures.
+    import statistics as _st
+
+    # KNOWN DEFECT, not yet fixed: `commitment_value` is
+    # extract_filing_figures' max_amount - the LARGEST figure in the
+    # document - which is not always the company's own commitment.
+    # Confirmed live: GigaDevice's ChangXin filing states its own
+    # investment as 15亿元 (1.5bn) for ~1.88% of the company, and the
+    # extractor returns 139.98bn, which is ChangXin's implied total
+    # valuation. That inflated figure then becomes a 64-MAD signal.
+    # Any C3 verdict resting on a single large number in a filing that
+    # also describes someone else's valuation should be treated as
+    # unverified until the extractor distinguishes "we are investing X"
+    # from "the target is worth Y".
+    #
+    # A cached baseline, computed by the refresh job from the full
+    # stored history, wins over anything derivable from this batch -
+    # same reason as C2: the daily pass pools one day of filings and
+    # cannot rebuild a company's own commitment history from it.
+    cached = {
+        code: (float(b["median"]), float(b["mad"]), int(b["sample_size"]))
+        for (code, _period), b in (baselines or {}).items()
+        if b.get("median") is not None and b.get("mad") is not None
+    }
+
+    by_company: dict[str, list[float]] = {}
+    for row in pending:
+        meta = row["result"]["metadata"]
+        amount = meta.get("commitment_value")
+        if amount:
+            by_company.setdefault(meta.get("code") or "?", []).append(amount)
+
+    derived: dict[str, tuple[float, float, int]] = {}
+    skipped: list[str] = []
+    for code, values in by_company.items():
+        if code in cached:
+            continue
+        distinct = sorted(set(values))
+        if len(distinct) < _C3_MIN_OBSERVATIONS:
+            skipped.append(f"{code}({len(distinct)})")
+            continue
+        median = _st.median(distinct)
+        mad = max(_st.median([abs(a - median) for a in distinct]),
                   median * _C3_MIN_MAD_FRACTION)
-        for row in pending:
-            meta = row["result"]["metadata"]
-            amount = meta.get("commitment_value")
-            if not amount:
-                results.append(row)
-                continue
-            deviation = abs(amount - median) / mad if mad else 0.0
-            meta["batch_median_value"] = round(median, 2)
-            meta["batch_mad_value"] = round(mad, 2)
-            meta["deviation_mads"] = round(deviation, 2)
-            if deviation >= _C3_SIGNAL_MADS and amount > median:
-                row["result"]["signal"] = "signal"
-                row["result"]["reason"] += (
-                    f" - {deviation:.1f} MADs above the "
-                    f"{median / 1e9:.2f}bn median commitment in this batch")
+        derived[code] = (median, mad, len(distinct))
+
+    results: list[dict[str, Any]] = []
+    for row in pending:
+        meta = row["result"]["metadata"]
+        amount = meta.get("commitment_value")
+        code = meta.get("code") or "?"
+        base = cached.get(code) or derived.get(code)
+        if not amount:
+            # No figure to judge, and none is coming - the filing
+            # simply does not state one. That is a finished answer,
+            # not a pending one, so `noise` rather than `waiting`.
+            # A JV supplemental notice genuinely carries no amount.
+            row["result"]["signal"] = "noise"
+            row["result"]["reason"] += (
+                " - states no commitment amount to measure")
             results.append(row)
-        logger.info("[CHINA] c3 baseline n=%d median=%.2fbn mad=%.2fbn "
-                    "signals=%d", len(amounts), median / 1e9, mad / 1e9,
-                    sum(1 for r in results
-                        if r["result"]["signal"] == "signal"))
-    else:
-        # Below the floor the classifier declines to rank rather than
-        # judging against two or three points - the same refusal
-        # _C2_MIN_OBSERVATIONS and _C6_MIN_PERIODS already make.
-        results = pending
-        logger.info("[CHINA] c3 only %d figure(s), below the %d needed to "
-                    "rank - all rows left weak", len(amounts),
-                    _C3_MIN_OBSERVATIONS)
+            continue
+        if not base:
+            # A real figure this company has too little history to
+            # rank. Kept as `noise` rather than `waiting`: a
+            # commitment is episodic - a company announces one when it
+            # makes one - so there is no next period that reliably
+            # fills the gap, and a row left pending on an event that
+            # may never come reads as a queue that is being worked
+            # through when it is not. The amount is still stored, so
+            # the figure counts toward the baseline that eventually
+            # makes this company rankable.
+            row["result"]["signal"] = "noise"
+            row["result"]["reason"] += (
+                f" - fewer than {_C3_MIN_OBSERVATIONS} past commitments "
+                f"on record for this company, so not ranked")
+            results.append(row)
+            continue
+        median, mad, n = base
+        deviation = (amount - median) / mad if mad else 0.0
+        meta["company_median_value"] = round(median, 2)
+        meta["company_mad_value"] = round(mad, 2)
+        meta["deviation_mads"] = round(deviation, 2)
+        meta["baseline_observations"] = n
+        # Three bands, mirroring C2. One-sided: a commitment far BELOW
+        # this company's own median is not an inverted signal, it is an
+        # ordinary small announcement.
+        if deviation >= _C3_SIGNAL_MADS:
+            row["result"]["signal"] = "signal"
+        elif deviation >= _C3_WEAK_MADS:
+            row["result"]["signal"] = "weak_signal"
+        else:
+            row["result"]["signal"] = "noise"
+        row["result"]["reason"] += (
+            f" - {deviation:+.1f} MADs from its own median commitment of "
+            f"{median / 1e9:.2f}bn over {n} observations"
+            + ("" if row["result"]["signal"] != "noise"
+               else ", within its usual range"))
+        results.append(row)
+
+    from collections import Counter as _Counter
+    bands = _Counter(r["result"]["signal"] for r in results)
+    logger.info("[CHINA] c3 baselines: %d cached + %d derived | %s",
+                len(cached), len(derived), dict(bands))
+    if skipped:
+        logger.info("[CHINA] c3 not ranked, below the %d-observation "
+                    "floor: %s", _C3_MIN_OBSERVATIONS, ", ".join(skipped))
 
     collapsed = sum(len(v) - 1 for v in chains.values())
     logger.info("[CHINA] c3 transactions=%d restatements collapsed=%d",
@@ -3259,6 +4392,14 @@ def translate_china_results(
         if _CJK_RE.search((r.get("article") or {}).get("title") or "")
         and not (r.get("result") or {}).get(
             "metadata", {}).get("translated_title")
+        # A filing the issuer already published in English needs no
+        # translation call. HKEX requires English, and those rows
+        # carry filing_language='en' from the fetcher - paying a model
+        # to translate a document that has an official English version
+        # is both wasted and worse, since the issuer's own wording is
+        # authoritative and a model's is not.
+        and (r.get("result") or {}).get(
+            "metadata", {}).get("filing_language") != "en"
     ]
     if not pending:
         return
@@ -3324,31 +4465,124 @@ def translate_china_results(
                     "across %d row(s)", fields, len(needs))
 
 
+# The fields every stored row carries, whatever produced it, copied
+# from the article the verdict was reached on.
+#
+# These are facts the FETCHER established - which company, which
+# exchange, which document - and no classifier has a better source for
+# them. Each rule used to assemble its own metadata dict and they
+# disagreed: measured on one real day, C1 carried no code at all,
+# C2/C3/C5 carried a code but no link back to the filing, and gate1
+# carried neither until it was fixed. So `GET /results?code=688981`
+# silently missed whole signal types, and a reader could not open the
+# document a verdict came from.
+#
+# Applied centrally by attach_source_metadata rather than in each
+# classifier, so a rule added later gets them without remembering to.
+# A classifier that sets one of these itself keeps its own value - it
+# knows something the article does not, as C2 does when it resolves a
+# company from a filing's own text.
+_CARRIED_ARTICLE_FIELDS = (
+    "code",                    # the exchange code - the join key
+    "company",                 # English name, as the rest of the pipeline uses
+    "native_name",             # 北方华创 - what Chinese press writes
+    "sec_name",                # the exchange's own registered short name
+    "hk_code",                 # HK listing code for the dual-listed names
+    "filing_url",              # the source PDF, so a verdict is checkable
+    "filing_language",         # 'en' on HKEX - whether translation is needed
+    "announcement_id",         # cninfo's own id for the filing
+    "source_type",             # cninfo_filing, miit_policy, press_cn, ...
+    "source_outlet_type",      # official / state_press / commercial_press
+    "translated_company_name",
+)
+
+
+def attach_source_metadata(results: list[dict[str, Any]]) -> None:
+    """Copy the article's identifying fields onto every result.
+
+    Mutates in place. Never overwrites a value a classifier already
+    set: where the two differ the classifier is the better authority,
+    since it may have resolved the issuer from the document itself.
+    """
+    for row in results:
+        article = row.get("article") or {}
+        source = article.get("metadata") or {}
+        metadata = row.setdefault("result", {}).setdefault("metadata", {})
+        for key in _CARRIED_ARTICLE_FIELDS:
+            if source.get(key) and not metadata.get(key):
+                metadata[key] = source[key]
+        # The fetcher's own summary, where the source provided one.
+        # news-retrieval returns it on every article and it was being
+        # dropped: agent_classifications has no `summary` column, so
+        # it is carried in metadata rather than requiring a migration.
+        #
+        # Only ITHome's RSS feed and the English coverage check carry
+        # a real editorial lead (206 of 9,176 China articles) - the
+        # rest are filings and government notices, which open straight
+        # into the measure and have no lead to store. A NULL is the
+        # honest answer for those; this service never slices one out
+        # of `body`.
+        summary = article.get("summary")
+        if summary and not metadata.get("summary"):
+            metadata["summary"] = summary
+
+
+# Why an article that reached a classifier was not claimed by one,
+# keyed by source_category. The reason names the gate that actually
+# rejected the row rather than saying "not a signal": each of these
+# was turned away for a different and specific cause, and a reader
+# auditing the noise pile needs to know which. A policy page rejected
+# on vocabulary is a different fact from a trade series sitting inside
+# its own band, and only one of them would be worth revisiting if a
+# rule changed.
+_UNCLAIMED_REASON = {
+    "cn_policy": (
+        "Policy announcement outside C1's subject matter - no export "
+        "control, controlled-material, trade-remedy, procurement-security "
+        "or semiconductor-sector term in its title or opening text"),
+    "cn_trade": (
+        "Trade observation within its own series' normal range, or with "
+        f"fewer than {_C6_MIN_PERIODS} periods of history to judge it "
+        "against"),
+    "cn_english_coverage_check": (
+        "English coverage check - headline only, stored to measure how "
+        "fast a Chinese development reaches English-language press, never "
+        "a signal in its own right"),
+    "cn_press": (
+        "Press article naming no universe company in a signal context - "
+        "matched on headline, as this domain's press filter requires"),
+    "cn_disclosure": (
+        "Filing no signal rule claimed and Gate 1 did not route"),
+}
+
+
 def classify_china_signal_batch(
     articles: list[dict[str, Any]],
     model: str | None = None,
+    baselines: dict[tuple[str, str], dict[str, Any]] | None = None,
+    c3_baselines: dict[tuple[str, str], dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Run every implemented China classifier on one pooled batch and
     return ``{"article", "result"}`` dicts for
     insert_china_signal_classification.
 
-    Same top-level shape as classify_korea_signal_batch. What is
-    implemented today is C1 (policy action, with the §9.1 binding call),
-    C7 (US company named in an action), and Gate 1 (filing triage).
+    Same top-level shape as classify_korea_signal_batch. All seven
+    signal types are implemented (C1-C7) plus Gate 1 filing triage.
 
-    C2-C6 are NOT here, deliberately. Every one of them depends on a
-    numeric threshold the stored data cannot yet support - see this
-    module's own docstring. Filings that survive Gate 1 are returned as
-    `extracted`, carrying their category but no Signal/Weak/Noise
-    judgment, so the distribution those rules need can accumulate
-    without a fabricated verdict being written in the meantime.
+    EVERY POOLED ARTICLE GETS A ROW. An article no classifier claims is
+    returned as `noise` with a reason saying why, rather than dropped.
+    Dropping it meant two things that were both wrong: nothing recorded
+    that the article had been judged and found ordinary - the same
+    noise/waiting distinction this domain already draws for C2 - and
+    because the daily pass skips by source_id, an article with no row
+    was re-examined on every later pass forever (measured: 650 of one
+    real day's 935).
 
-    Noise is NOT returned. A filing that Gate 1 discarded has no row
-    written: the China spec's own signal set has no rule that would ever
-    surface it, and storing 73 shareholder-meeting resolutions per run
-    to label them noise would bury the handful that matter. The
-    `unclassified` bucket IS returned, because an unrecognised filing
-    shape is a gap in the table rather than a judgment about the filing.
+    So the four verdicts divide as:
+      signal / weak_signal  a rule fired
+      waiting               passed triage, no rule has judged it yet
+      noise                 judged and ordinary, or a filing type no
+                            rule reads
     """
     results: list[dict[str, Any]] = []
 
@@ -3423,7 +4657,8 @@ def classify_china_signal_batch(
     results.extend(classify_accelerator_milestone(articles))
 
     # --- C2: substitution progress ---------------------------------------
-    results.extend(classify_substitution_progress(articles))
+    results.extend(classify_substitution_progress(
+        articles, baselines=baselines))
 
     # --- C5: platform capex ---------------------------------------------
     results.extend(classify_platform_capex(articles))
@@ -3436,7 +4671,8 @@ def classify_china_signal_batch(
 
     # --- C3: capacity / capital commitment --------------------------------
     # Runs on gated rows, since it needs filing_category.
-    results.extend(classify_capacity_commitment(filings["candidate"]))
+    results.extend(classify_capacity_commitment(
+        filings["candidate"], baselines=c3_baselines))
 
     # Every url already claimed by a real classifier - C2, C3, C4, C5,
     # not just C3. `source_id` is the article url and the DB has a
@@ -3455,12 +4691,33 @@ def classify_china_signal_batch(
         if row.get("url") in claimed_urls:
             continue
         verdict = row["filing_verdict"]
+        # WHO FILED THIS, AND WHERE IT CAME FROM. The article has
+        # always carried these and this dict never copied them, so
+        # every gate1 row - 3,587 of them - recorded a filing with no
+        # issuer and no way back to the source document. The
+        # consequences were not cosmetic:
+        #
+        #   - GET /results?code=688981 silently missed them, because
+        #     that filter reads metadata.code
+        #   - a `waiting` row could not be matched to the baseline it
+        #     is waiting for
+        #   - nothing could pair a Chinese filing with its English
+        #     twin from the other exchange, so both get translated
+        #   - a reader could not open the filing a verdict came from
+        #
+        # Every other signal type carries the identifying fields;
+        # gate1 was the one that did not. Copied rather than
+        # recomputed - these are facts the fetcher established and
+        # this module has no better source for them.
+        article_meta = row.get("metadata") or {}
         metadata: dict[str, Any] = {
             "source_category": "cn_disclosure",
             "signal_type": "gate1",
             "filing_verdict": verdict,
             "filing_category": row["filing_category"],
         }
+        # The identifying fields are copied centrally by
+        # attach_source_metadata, below - see _CARRIED_ARTICLE_FIELDS.
         # Gate 2 runs on candidates only. A `weak` filing is a real
         # corporate action no rule reads yet, and an `unclassified` one
         # is a shape the table has never seen - extracting figures from
@@ -3487,17 +4744,72 @@ def classify_china_signal_batch(
             if figures["financials"]:
                 metadata["financials"] = figures["financials"]
 
-        # `extracted` is not a signal label - it says a tradable fact may
-        # be present and no rule exists to judge it yet. Stored as
-        # weak_signal because agent_classifications has no fourth state
-        # and weak is the honest floor: the item is real, unjudged, and
-        # must not read as a confirmed signal.
+        # WAITING ONLY WHERE SOMETHING REALLY IS STILL COMING. The
+        # three Gate 1 verdicts that land here are not the same claim,
+        # and collapsing them under `waiting` made the label mean
+        # "nothing happened" rather than "a judgment is pending":
+        #
+        #   candidate     a rule DOES read this shape, and the only
+        #                 reason there is no verdict is a baseline
+        #                 below its trust floor. That genuinely is
+        #                 pending - it resolves as history accumulates.
+        #   weak          a real corporate action no China rule reads.
+        #                 Nothing is coming for it; the spec has no
+        #                 rule that would ever surface it.
+        #   unclassified  a filing shape the category table has never
+        #                 seen. Also not pending - it is a gap in the
+        #                 table, and saying so is more useful than
+        #                 implying a verdict is on its way.
+        #
+        # So only `candidate` keeps `waiting`. The other two are
+        # `noise` with a reason that says which of the two they are -
+        # judged against the rules that exist and claimed by none,
+        # which is exactly what `noise` means everywhere else in this
+        # domain.
+        # NOISE, NOT WAITING - and the reason says which of the three
+        # things actually stopped a rule from judging it. A Gate 1
+        # candidate reaching this loop has already been offered to
+        # every classifier that reads its shape and been turned down
+        # by all of them; calling that "pending" implies a queue
+        # somebody is working through, when nothing will revisit it.
+        #
+        # The three causes are genuinely different and a reader needs
+        # to know which, because only one of them is about this
+        # company's history:
+        if verdict == "candidate":
+            signal = "noise"
+            period = _filing_period(row.get("title") or "")
+            has_revenue_yoy = any(
+                change.get("subject") == "revenue"
+                for change in (metadata.get("yoy_changes") or []))
+            if not period:
+                reason = (f"Filing category '{row['filing_category']}' - "
+                          f"states no fiscal period in its title, so there "
+                          f"is no baseline it could be compared against")
+            elif not has_revenue_yoy:
+                reason = (f"Filing category '{row['filing_category']}' "
+                          f"({period}) - states no year-on-year revenue "
+                          f"change, which is the figure C2 compares")
+            else:
+                reason = (f"Filing category '{row['filing_category']}' "
+                          f"({period}) - fewer than "
+                          f"{_C2_MIN_OBSERVATIONS} past observations for "
+                          f"this company and period, so its own baseline "
+                          f"is not yet trustworthy")
+        elif verdict == "weak":
+            signal = "noise"
+            reason = (f"Filing category '{row['filing_category']}' - a real "
+                      f"corporate action, but no China signal rule reads "
+                      f"this type")
+        else:
+            signal = "noise"
+            reason = (f"Filing shape not in the category table - matched no "
+                      f"signal rule and no known routine-disclosure pattern")
         results.append({
             "article": row,
             "result": {
-                "signal": "weak_signal",
-                "reason": (f"Filing category '{row['filing_category']}' "
-                           f"({verdict}) - no threshold rule implemented"),
+                "signal": signal,
+                "reason": reason,
                 "metadata": metadata,
             },
         })
@@ -3506,6 +4818,69 @@ def classify_china_signal_batch(
     # before translation so a card has both by the time anything reads
     # it.
     attach_read_through(results)
+
+    # EVERYTHING ELSE IS NOISE, AND NOISE IS STORED.
+    #
+    # Dropping it was the earlier behaviour and it was wrong in two
+    # ways. A dropped article is indistinguishable from one that was
+    # never fetched, so "we looked at this and it was ordinary" was not
+    # recorded anywhere - the same noise/waiting distinction this
+    # domain already makes for C2. And because the daily pass skips
+    # articles by source_id, an article with no row was re-examined on
+    # every later pass forever: measured on one real day, 650 of 935
+    # pooled articles produced nothing and were re-read every time.
+    #
+    # Two populations end up here, and the reason text says which:
+    # filings Gate 1 discarded on their own title, and policy, press
+    # and trade rows no classifier claimed. No figures are extracted
+    # for either - Gate 2 runs on candidates only, so a noise row costs
+    # one insert and nothing more.
+    #
+    # Added AFTER attach_read_through and before the enrichment passes
+    # below deliberately: a noise row has no signal to carry a
+    # read-through, no US name worth resolving, no checkpoint to state
+    # and nothing worth paying a translation call for.
+    claimed = {r["article"].get("url") for r in results}
+    for row in filings["noise"]:
+        if row.get("url") in claimed:
+            continue
+        claimed.add(row.get("url"))
+        results.append({
+            "article": row,
+            "result": {
+                "signal": "noise",
+                "reason": (
+                    f"Routine filing - '{row['filing_category']}' is a "
+                    f"disclosure type no China signal rule reads"),
+                "entities": [],
+                "metadata": {
+                    "source_category": "cn_disclosure",
+                    "filing_category": row["filing_category"]},
+            },
+        })
+    for row in articles:
+        if row.get("url") in claimed or not row.get("url"):
+            continue
+        claimed.add(row.get("url"))
+        category = (row.get("metadata") or {}).get("source_category")
+        results.append({
+            "article": row,
+            "result": {
+                "signal": "noise",
+                "reason": _UNCLAIMED_REASON.get(
+                    category,
+                    "Examined by every applicable China signal rule and "
+                    "claimed by none"),
+                "entities": [],
+                "metadata": {"source_category": category},
+            },
+        })
+
+    # Who filed it and where it came from, on EVERY row whatever
+    # produced it - placed after the noise rows above are appended so
+    # it covers those too, and before translation, which reads
+    # `filing_language` to skip filings that are already English.
+    attach_source_metadata(results)
 
     # Which US companies each row's own text actually names. Separate
     # from C7 proper, which scopes the SIGNAL to policy rows: across the

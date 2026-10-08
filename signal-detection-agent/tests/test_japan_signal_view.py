@@ -466,6 +466,59 @@ class TestSignalImplication:
         assert isinstance(signal_implication({}), str)
 
 
+class TestDisclosureCaveat:
+    """A disclosure row carries no caveat, of either tier.
+
+    Three versions were tried and each failed the same way. "Judged
+    from the filing's own title" described our parsing rather than the
+    reader's risk. "Its size and terms are in the document itself"
+    pointed at information without supplying any. Printing the title
+    itself carried real detail but put a third near-identical line on
+    a card whose headline and signal sentence already say the same
+    thing.
+
+    The detail belongs in the headline, where the classifier prompt
+    now keeps the qualifiers it used to trim.
+    """
+
+    @staticmethod
+    def _card(reason_code, action, detection, translated_title=None):
+        from pipeline.japan_signal_view import to_jp_signal
+        meta = {"code": "6981", "company": "Murata Manufacturing",
+                "source_category": "jp_disclosure",
+                "signal_reason_code": reason_code,
+                "disclosure_action": action}
+        if translated_title:
+            meta["translated_title"] = translated_title
+        return to_jp_signal({
+            "source_id": f"kabutan-tdnet://6981/{action}",
+            "signal_detection": detection, "signal_score": None,
+            "signal_reason": "r", "published": "2026-09-20T00:00:00Z",
+            "title": "t", "metadata": meta})
+
+    def test_a_routine_filing_carries_no_caveat(self):
+        c = self._card("routine_corporate_filing",
+                       "acquisition of treasury shares", "noise")
+        assert c["classification"] == "Noise"
+        assert c["caveat"] is None
+
+    def test_a_material_action_carries_no_caveat_either(self):
+        """Even with a title full of detail, a caveat here would only
+        restate the headline a third time."""
+        c = self._card("material_corporate_action",
+                       "follow-on investment in OpenAI", "signal",
+                       "SoftBank Group (9984) [x]: Execution of Follow-on "
+                       "Investment (Third Tranche) in OpenAI")
+        assert c["classification"] == "High Signal"
+        assert c["caveat"] is None
+
+    def test_the_card_still_names_the_action(self):
+        """Dropping the caveat must not drop the event itself."""
+        c = self._card("material_corporate_action",
+                       "partial spin-off of Crasus Chemical", "signal")
+        assert c["headline"] == "Filed partial spin-off of Crasus Chemical"
+
+
 class TestIndustryReadingIsLegible:
     """J4 judges one national monthly reading against its own recent run.
 
@@ -942,6 +995,118 @@ class TestDisclosureSentencesAreNotOnePerTier:
         assert "corporate disclosure whose effect" in t
 
 
+class TestMajorShareholderChange:
+    """A 第19条第2項第4号 extraordinary report, graded on its figures.
+
+    The clause says a major shareholder changed and nothing more, so
+    these were WEAK at best - and before that, Noise, because the
+    filing's whole title is "Extraordinary Report" and the model that
+    grades a disclosure had nothing to read.
+
+    No docTypeCode-350 filing covers the same event: a 350 is filed by
+    the HOLDER on crossing 5%, this one by the ISSUER when its own
+    major-shareholder composition changes. Confirmed live against
+    EDINET - no 350 exists for Resonac in the window around its 4号
+    filing. The document is the only source of the number.
+
+    Status is read from the filing's own wording, never from a
+    percentage threshold. The filing cites FIEA Article 24-5(4) and
+    the ordinance clause but never prints the level at which 主要株主
+    status begins, so grading against a hardcoded 10% would rest on
+    an assumption the document does not support. It does state, in
+    words, 主要株主となるもの - "the party becoming a major
+    shareholder" - and that is a filed fact.
+    """
+
+    @staticmethod
+    def _graded(now, was, status=None):
+        from pipeline.japan_signal_classifier import (
+            _MAJOR_SHAREHOLDER_LARGE_MOVE_PTS)
+        delta = round(now - was, 2)
+        return ("SIGNAL" if status in ("became", "ceased")
+                or abs(delta) >= _MAJOR_SHAREHOLDER_LARGE_MOVE_PTS
+                else "WEAK"), delta
+
+    def test_the_real_resonac_filing_is_a_signal(self):
+        """9.59% -> 11.06%, filed as 主要株主となるもの: Capital
+        Research became a major shareholder of Resonac."""
+        assert self._graded(11.06, 9.59, "became") == ("SIGNAL", 1.47)
+
+    def test_gaining_the_status_is_a_signal_on_any_move(self):
+        """The filing says the holder became a major shareholder. That
+        is the event, whatever the size of the step that did it."""
+        assert self._graded(10.02, 9.98, "became")[0] == "SIGNAL"
+
+    def test_losing_the_status_is_a_signal_too(self):
+        assert self._graded(9.4, 10.6, "ceased")[0] == "SIGNAL"
+
+    def test_a_large_move_with_no_status_change_is_still_a_signal(self):
+        assert self._graded(8.4, 6.9)[0] == "SIGNAL"
+
+    def test_drift_with_no_status_change_stays_weak(self):
+        assert self._graded(11.3, 11.0)[0] == "WEAK"
+
+    def test_no_threshold_constant_exists_to_be_assumed(self):
+        """The filing never prints one, so neither does the code."""
+        import pipeline.japan_signal_classifier as jc
+        assert not hasattr(jc, "_MAJOR_SHAREHOLDER_THRESHOLD_PCT")
+
+
+class TestMajorShareholderIsEnglish:
+    """The holder's name reaches the card and the raw row in English.
+
+    A 第19条第2項第4号 filing names its major shareholder in katakana
+    and nowhere else on the row - "キャピタル・リサーチ・アンド・
+    マネージメント・カンパニー" is Capital Research and Management
+    Company. Without translation the one English card carrying real
+    ownership figures states them about a party the reader cannot
+    identify.
+
+    Both forms are stored: the filed Japanese for traceability, the
+    English for display - the same arrangement jp_ownership already
+    uses for filer_name.
+    """
+
+    @staticmethod
+    def _card(**over):
+        from pipeline.japan_signal_view import to_jp_signal
+        meta = {"code": "4004", "company": "Resonac Holdings",
+                "source_category": "jp_extraordinary",
+                "signal_reason_code": "major_shareholder_change",
+                "major_shareholder_name": "キャピタル・リサーチ・アンド・マネージメント・カンパニー",
+                "major_shareholder_pct": 11.06,
+                "major_shareholder_pct_previous": 9.59,
+                "major_shareholder_status_change": "became"}
+        meta.update(over)
+        return to_jp_signal({
+            "source_id": "edinet-extraordinary://E00751/S100Z2WW",
+            "signal_detection": "signal", "signal_score": None,
+            "signal_reason": "r", "published": "2026-09-17T06:00:00Z",
+            "title": "t", "metadata": meta})
+
+    def test_the_headline_uses_the_english_name(self):
+        c = self._card(translated_major_shareholder_name=
+                       "Capital Research and Management Company")
+        assert c["headline"].startswith("Capital Research and Management Company")
+        assert "キャピタル" not in c["headline"]
+
+    def test_the_headline_carries_both_ends_of_the_move(self):
+        c = self._card(translated_major_shareholder_name="Capital Research")
+        assert "11.06%" in c["headline"] and "9.59%" in c["headline"]
+
+    def test_a_sell_down_says_cut(self):
+        c = self._card(translated_major_shareholder_name="Capital Research",
+                       major_shareholder_pct=9.4,
+                       major_shareholder_pct_previous=10.6,
+                       major_shareholder_status_change="ceased")
+        assert c["headline"].startswith("Capital Research cut its holding")
+
+    def test_the_filed_japanese_name_is_the_fallback_not_a_blank(self):
+        """Translation runs after classification, so a row read before
+        it completes still names the holder rather than dropping it."""
+        assert "キャピタル" in self._card()["headline"]
+
+
 class TestExtraordinaryReportReason:
     """EDINET's `current_report_reason` is the ordinance clause the
     filing cites, and the clause IS the event type - a fixed legal
@@ -955,10 +1120,38 @@ class TestExtraordinaryReportReason:
         from pipeline.japan_signal_classifier import _extraordinary_reason
         assert _extraordinary_reason(
             {"current_report_reason": "第19条第2項第4号"}
-        ) == "a change in major shareholders"
+        )[0] == "a change in major shareholders"
         assert _extraordinary_reason(
             {"current_report_reason": "第19条第2項第2号の2"}
-        ) == "a grant of share options"
+        )[0] == "a grant of share options"
+
+    def test_the_clause_grades_the_filing_as_well_as_naming_it(self):
+        """These filings' whole title is "Extraordinary Report", so the
+        model that grades a Kabutan disclosure has nothing to read and
+        answers ROUTINE for every one. The clause is a fixed legal
+        enumeration and a firmer basis than prose, so it carries the
+        tier too.
+        """
+        from pipeline.japan_signal_classifier import _extraordinary_tier
+        # Who owns a large block of the company changed - the same
+        # class of event J6 reads from a large-shareholding filing.
+        assert _extraordinary_tier({"current_report_reason": "第19条第2項第4号"}) == "WEAK"
+        # Employee compensation, filed on a schedule.
+        assert _extraordinary_tier({"current_report_reason": "第19条第2項第2号の2"}) == "ROUTINE"
+        # An AGM passing its agenda is the expected outcome.
+        assert _extraordinary_tier({"current_report_reason": "第19条第2項第9号の2"}) == "ROUTINE"
+
+    def test_no_clause_maps_to_signal_without_a_magnitude(self):
+        """A clause says a major shareholder changed, not by how much.
+        Grading one SIGNAL on event type alone would assert a size the
+        filing never states."""
+        from pipeline.japan_signal_classifier import _EDINET_EXTRAORDINARY_REASONS
+        assert all(tier in ("WEAK", "ROUTINE")
+                   for _, tier in _EDINET_EXTRAORDINARY_REASONS.values())
+
+    def test_an_unmapped_clause_has_no_tier_to_apply(self):
+        from pipeline.japan_signal_classifier import _extraordinary_tier
+        assert _extraordinary_tier({"current_report_reason": "第19条第2項第99号"}) is None
 
     def test_longest_clause_wins(self):
         """"2号の2" must not be matched by the "2号"-style shorter key."""

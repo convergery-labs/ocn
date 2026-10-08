@@ -805,14 +805,21 @@ resource "aws_cloudwatch_event_rule" "news_retrieval_china_market_signal_policy"
   #
   # Bounded rather than all-day because MOFCOM, MIIT, SAMR and CAC publish
   # during Beijing office hours - an overnight poll would re-walk the same
-  # unchanged listings. Mon-Fri for the same reason, accepting that a
-  # weekend announcement waits until Monday morning; that is a real but
-  # small gap, since these four bodies rarely publish at a weekend.
+  # unchanged listings.
+  #
+  # EVERY DAY, not Mon-Fri. This rule was weekday-only on the assumption
+  # that Chinese disclosure follows the working week. Measured against
+  # the stored five years, it does not: 1,715 cninfo filings carry a
+  # SATURDAY publication date, as many as a typical weekday (Mon 439,
+  # Tue 1,795, Fri 1,830, Sat 1,758, Sun 93). A weekday-only schedule
+  # left Saturday's filings to be picked up by Monday's wider window,
+  # which worked but made the window carry the weekend rather than the
+  # schedule. Running daily lets every window be --days-back 1.
   #
   # Not bounded to the TRADING session (01:30-07:00 UTC) the way the
   # filings rule below is: policy is published by ministries on their own
   # schedule and has no relationship to when the exchanges are open.
-  schedule_expression = "cron(0 0-12/4 ? * MON-FRI *)"
+  schedule_expression = "cron(0 0-12/4 * * ? *)"
 }
 
 resource "aws_cloudwatch_event_target" "news_retrieval_china_market_signal_policy" {
@@ -841,7 +848,7 @@ resource "aws_cloudwatch_event_target" "news_retrieval_china_market_signal_polic
         # looking back exactly one day can miss an announcement published
         # late on the Beijing day that straddles the UTC boundary. The
         # extra day costs nothing (global URL dedup) and closes that seam.
-        command = ["python", "__main__.py", "trigger", "--domain", "china_market_signal", "--days-back", "2"]
+        command = ["python", "__main__.py", "trigger", "--domain", "china_market_signal", "--days-back", "1"]
       }
     ]
   })
@@ -860,7 +867,7 @@ resource "aws_cloudwatch_event_rule" "news_retrieval_china_market_signal_filings
   # command is domain-scoped and there is no per-source_type flag. That
   # means policy and press are re-fetched here too, which is harmless
   # (global URL dedup) and costs two extra listing walks a day.
-  schedule_expression = "cron(0 1,8 ? * MON-FRI *)"
+  schedule_expression = "cron(0 1,8 * * ? *)"
 }
 
 resource "aws_cloudwatch_event_target" "news_retrieval_china_market_signal_filings" {
@@ -882,12 +889,19 @@ resource "aws_cloudwatch_event_target" "news_retrieval_china_market_signal_filin
     containerOverrides = [
       {
         name = "news-retrieval"
-        # --days-back 3 covers a weekend of filings on the Monday run
-        # without a separate rule. cninfo and HKEX are both date-RANGE
-        # queries, so a wider window costs one request per company, not
-        # one per day - unlike Japan's EDINET, which loops per day and is
-        # why that domain deliberately keeps its daily window at 1.
-        command = ["python", "__main__.py", "trigger", "--domain", "china_market_signal", "--days-back", "3"]
+        # --days-back 1, because the rule now runs every day including
+        # weekends. It was 3 to let Monday's run reach back over a
+        # weekend of filings - real coverage (1,715 of the stored
+        # filings are Saturday-dated) but carried by the window instead
+        # of the schedule, which made every weekday run re-walk three
+        # days to serve one.
+        #
+        # Widening costs nothing either way: cninfo and HKEX are both
+        # date-RANGE queries, one request per company whatever the
+        # window (measured: days_back 1, 3 and 30 all take the same
+        # time). Unlike Japan's EDINET, which loops per day and is why
+        # that domain keeps its window at 1 for the opposite reason.
+        command = ["python", "__main__.py", "trigger", "--domain", "china_market_signal", "--days-back", "1"]
       }
     ]
   })
@@ -1690,10 +1704,14 @@ resource "aws_cloudwatch_event_rule" "signal_detection_agent_china_signals_filin
   # evening one below are additive and idempotent, not duplicative,
   # even though both fall on the same UTC calendar day.
   #
-  # MON-FRI only, matching the fetch rules: the mainland exchanges and
-  # the ministries both observe the working week, and a weekend pass
-  # would re-pool a window with nothing new in it.
-  schedule_expression = "cron(0 10 ? * MON-FRI *)"
+  # EVERY DAY, matching the fetch rules above. Both were weekday-only
+  # until the stored history was checked: Chinese issuers file at
+  # weekends (1,715 Saturday-dated cninfo filings against 1,830 on
+  # Friday), so a Mon-Fri classify pass left Saturday's fetch unjudged
+  # until Monday - and since the window selects RUNS by date, Monday's
+  # pass pools Monday's runs, never the weekend's. Those rows were
+  # orphaned permanently rather than merely delayed.
+  schedule_expression = "cron(0 10 * * ? *)"
 }
 
 resource "aws_cloudwatch_event_target" "signal_detection_agent_china_signals_filings" {
@@ -1718,6 +1736,58 @@ resource "aws_cloudwatch_event_target" "signal_detection_agent_china_signals_fil
   })
 }
 
+resource "aws_cloudwatch_event_rule" "signal_detection_agent_china_baselines" {
+  name        = "${var.env}-signal-detection-agent-china-baselines"
+  description = "Recompute China C2/C3 per-company baselines from stored history, and re-fetch the underlying revenue figures"
+  # THIS RULE ONLY REFETCHES. Rebuilding the baselines themselves is
+  # no longer its job - classify-china-signals does that in-process
+  # before every pass, so a company filing on the 1st is judged the
+  # same day against a baseline that includes everything up to that
+  # morning rather than waiting for the 22nd. The two cannot be
+  # separate rules: a verdict is written once and the next pass skips
+  # that source_id, so anything judged while the cache was stale keeps
+  # that verdict permanently.
+  #
+  # What is left here is the one half that genuinely cannot run daily:
+  # --refetch pulls revenue from cninfo and Alpha Vantage, one request
+  # per company (~90s against ~5s for a rebuild from stored figures).
+  # Those figures only move when a company files - quarterly at most,
+  # and for half this universe twice a year - so a monthly pull is
+  # already more often than the data changes.
+  #
+  # The 22nd: mainland interim and annual reports cluster around the
+  # end of a month, and the 22nd leaves a company's newest filing
+  # fetched and stored before the figures are re-pulled from it.
+  #
+  # Without this rule the daily rebuild still runs, but on revenue
+  # figures that stop being refreshed - C2 would fall back to what it
+  # can extract from filing text for the 18 companies that have a
+  # structured source.
+  schedule_expression = "cron(0 3 22 * ? *)"
+}
+
+resource "aws_cloudwatch_event_target" "signal_detection_agent_china_baselines" {
+  rule     = aws_cloudwatch_event_rule.signal_detection_agent_china_baselines.name
+  arn      = aws_ecs_cluster.main.arn
+  role_arn = aws_iam_role.ecs_events.arn
+  ecs_target {
+    task_definition_arn = "arn:aws:ecs:${var.aws_region}:${var.aws_account_id}:task-definition/${aws_ecs_task_definition.signal_detection_agent.family}"
+    launch_type         = "FARGATE"
+    network_configuration {
+      subnets         = var.private_subnet_ids
+      security_groups = [var.signal_detection_agent_sg_id]
+    }
+  }
+  input = jsonencode({
+    containerOverrides = [
+      {
+        name    = "signal-detection-agent"
+        command = ["python", "-m", "src", "refresh-china-baselines", "--years", "5", "--refetch"]
+      }
+    ]
+  })
+}
+
 resource "aws_cloudwatch_event_rule" "signal_detection_agent_china_signals_evening" {
   name        = "${var.env}-signal-detection-agent-china-signals-evening"
   description = "Classify pooled china_market_signal news-retrieval runs - second daily pass, catching the afternoon/evening policy and press fetches"
@@ -1731,7 +1801,7 @@ resource "aws_cloudwatch_event_rule" "signal_detection_agent_china_signals_eveni
   # Also the pass that picks up the monthly comtrade_china_trade and
   # nbs_ic_output rows: that fetch runs 05:00 UTC on the 20th
   # (news_retrieval_china_market_signal_monthly), well before this.
-  schedule_expression = "cron(0 14 ? * MON-FRI *)"
+  schedule_expression = "cron(0 14 * * ? *)"
 }
 
 resource "aws_cloudwatch_event_target" "signal_detection_agent_china_signals_evening" {

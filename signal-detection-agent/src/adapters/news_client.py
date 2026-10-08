@@ -23,6 +23,58 @@ def _headers() -> dict[str, str]:
     return {"x-ocn-caller": config.NEWS_RETRIEVAL_SERVICE_CALLER}
 
 
+async def fetch_china_revenue_history(
+    refresh: bool = False, codes: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """The China universe's revenue YoY series, per company and period.
+
+    Fetched from news-retrieval rather than from cninfo and Alpha
+    Vantage directly: reaching external sources is that service's job,
+    and this one should not hold two more sets of API conventions.
+
+    Reads STORED figures by default - a baseline refresh should not
+    trigger twenty upstream calls. `refresh=True` asks news-retrieval
+    to re-fetch first, which takes around ninety seconds across the
+    whole universe against about five seconds for the stored read.
+
+    `codes` narrows that re-fetch to named companies, which is what
+    makes it affordable daily: a company's figures change only when it
+    files, so the daily pass re-fetches just the companies that filed
+    in its window (usually none) while the monthly job refreshes
+    everything. Without `codes` a refresh covers the whole universe,
+    which is still what the monthly job wants.
+
+    Narrowing applies to the FETCH only - the response is always every
+    stored company's series, because per-company baselines are built
+    for the whole universe regardless of who filed today.
+
+    Returns [] on any failure - C2 then builds what it can from filing
+    text, which is the behaviour before this source existed.
+    """
+    params: dict[str, str] = {}
+    if refresh:
+        params["refresh"] = "true"
+        if codes:
+            params["codes"] = ",".join(sorted(set(codes)))
+    try:
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            resp = await client.get(
+                f"{config.NEWS_RETRIEVAL_URL}/market/china/revenue-history",
+                params=params or None)
+            resp.raise_for_status()
+            payload = resp.json()
+    except Exception:
+        logger.exception("Failed to fetch China revenue history")
+        return []
+    rows = payload.get("rows") or []
+    missing = payload.get("no_structured_source") or []
+    logger.info(
+        "[CHINA_FIN] %d revenue observations; %d company/companies have no "
+        "structured source and fall back to filing text: %s",
+        len(rows), len(missing), ", ".join(missing) or "none")
+    return rows
+
+
 async def trigger_run(domain: str, days_back: int = 7) -> int:
     """POST /run to news-retrieval; return run_id.
 

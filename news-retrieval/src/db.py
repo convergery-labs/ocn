@@ -278,6 +278,68 @@ def init_db() -> None:
         # computation, and vintage tracking for ALFRED first-print revisions
         # - none of which fit the article/runs shape. See CLAUDE.md's
         # "Macro Signal Pipeline" section.
+        # One reported financial figure for one company and one
+        # reporting period. The China C2 classifier compares a company's
+        # revenue growth against its OWN past growth, so it needs a
+        # series, and a series has to be stored rather than re-fetched:
+        # a classify pass runs daily and cannot make 20 external calls
+        # every time, nor should a company's history vanish if an
+        # upstream endpoint changes.
+        #
+        # NOT in `articles`. A revenue figure has no url, title, body or
+        # publication date, and forcing it into a table built for
+        # documents would mean inventing four synthetic fields to
+        # satisfy a schema it does not fit. Same split macro_signal
+        # already makes between macro_observations and the articles
+        # table.
+        #
+        # `period_type` is the reporting period the figure covers - FY,
+        # H1, Q1 or Q3 - because an annual growth rate and a quarterly
+        # one measure different spans and must never be pooled. A
+        # Chinese issuer files those four and no others: the half-year
+        # report covers what would be Q2, the annual covers Q4.
+        #
+        # `source` records WHERE the figure came from, because two
+        # sources serve this universe and a reader needs to know which:
+        # cninfo's structured endpoint for the 16 mainland listings,
+        # Alpha Vantage for the two that file with the SEC. Figures from
+        # filing text carry the extraction source instead, so a number
+        # parsed out of a PDF is never mistaken for a reported one.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS company_financials (
+                id            SERIAL PRIMARY KEY,
+                domain        TEXT NOT NULL,
+                code          TEXT NOT NULL,
+                company       TEXT,
+                metric        TEXT NOT NULL,
+                period_type   TEXT NOT NULL,
+                period_year   TEXT NOT NULL,
+                value         NUMERIC,
+                prior_value   NUMERIC,
+                yoy_pct       NUMERIC,
+                source        TEXT NOT NULL,
+                fetched_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        # One row per company, metric and period. A refresh UPSERTs:
+        # a restated figure must REPLACE its earlier value rather than
+        # accumulate beside it, because a company's own series would
+        # otherwise carry the same period twice and narrow its spread.
+        # This is the opposite of macro_observations' vintage handling,
+        # where a revision is deliberately kept alongside the first
+        # print - there the revision history is the signal, here the
+        # company's current stated figure is.
+        conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_company_financials_period
+            ON company_financials (domain, code, metric, period_type, period_year)
+        """)
+        # The read the baseline refresh makes: every figure for one
+        # domain and metric, in one scan.
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_company_financials_domain
+                ON company_financials (domain, metric)
+        """)
+
         conn.execute("""
             CREATE TABLE IF NOT EXISTS macro_observations (
                 id                        SERIAL PRIMARY KEY,

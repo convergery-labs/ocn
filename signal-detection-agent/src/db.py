@@ -396,6 +396,73 @@ def init_db() -> None:
             ALTER TABLE japan_company_habits
                 ADD COLUMN IF NOT EXISTS typical_size_mad_pct NUMERIC
         """)
+        # A company's own baseline for one measured quantity, cached so
+        # the daily classify pass does not have to rebuild it.
+        #
+        # WHY THIS EXISTS. China's C2 and C3 judge a figure against that
+        # COMPANY's own history - "unusual for Hygon", not "unusual for
+        # Chinese semiconductors". Computing that needs years of filings,
+        # but the scheduled classify pass pools a single day. Without a
+        # cache the daily run sees two or three observations per company,
+        # falls below its own trust floor and issues no verdict at all,
+        # while a one-off backfill over four years produces signals -
+        # the same code giving different answers depending on how it was
+        # invoked. The baseline is refreshed periodically from the full
+        # history and read, not recomputed, by the daily pass. Same split
+        # Japan already uses between refresh-japan-habits and
+        # classify-japan-signals.
+        #
+        # GENERAL BY DESIGN, CHINA-ONLY IN PRACTICE. The columns are
+        # market-agnostic because japan_progress_habits is the same
+        # shape - keyed (code, period_type), holding a central value, a
+        # sample size and a trust flag, for the same stated reason that
+        # a company's half-year and quarterly numbers "are genuinely
+        # different numbers". It is the intended second tenant
+        # (domain='japan_market_signal', metric='progress_pct', mad
+        # NULL) and was deliberately NOT migrated in the same change:
+        # it is written by a monthly job and read by the Japan
+        # classifier, so a bad move would surface a month later, and it
+        # cannot be verified locally because the table is empty outside
+        # staging.
+        #
+        # `metric` names WHAT is measured, since one company carries
+        # several independent baselines - China alone needs revenue
+        # growth (C2) and commitment size (C3), which share a key but
+        # not a unit. `period_type` is '' where the measure has no
+        # reporting period.
+        #
+        # `mad` is the median absolute deviation, not a standard
+        # deviation: these distributions are small and fat-tailed, and
+        # a standard deviation is computed from the very outliers it is
+        # meant to detect. Measured on real stored data, one company's
+        # +4,348% quarter scored 2.15 standard deviations and 48 MADs.
+        #
+        # `is_trusted` is the floor decision made at refresh time, so a
+        # reader never has to re-derive it: false means the classifier
+        # declined to judge rather than that the company was ordinary.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS market_signal_baselines (
+                domain        TEXT NOT NULL,
+                code          TEXT NOT NULL,
+                metric        TEXT NOT NULL,
+                period_type   TEXT NOT NULL DEFAULT '',
+                company       TEXT,
+                median        NUMERIC,
+                mad           NUMERIC,
+                sample_size   INTEGER NOT NULL,
+                is_trusted    BOOLEAN NOT NULL,
+                computed_from TEXT,
+                refreshed_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (domain, code, metric, period_type)
+            )
+        """)
+        # Answers "every baseline for this domain" in one scan - the
+        # read the classifier makes once per run.
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_market_baselines_domain
+                ON market_signal_baselines (domain, metric)
+        """)
+
         # Japan Signals spec Section 6.2's own stored comparison point for
         # J2 (results against forecast): "this company's typical progress
         # at the same point in previous years" - same refresh-cache

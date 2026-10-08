@@ -51,12 +51,14 @@ news-retrieval/
     ├── app.py            # FastAPI app factory
     ├── auth.py           # require_auth / require_admin FastAPI dependencies
     ├── pipeline.py       # Fetch + relevance filter pipeline (fetch → LLM title filter)
+    ├── china_financials.py # Structured revenue history for the China universe (cninfo data20 + Alpha Vantage)
     ├── db.py             # Thin adapter: _new_connection() (POSTGRES_* env vars), init_db(), db_utils.configure(); re-exports get_db/transaction/DuplicateError from shared/src/db_utils.py
     ├── seed.py           # Idempotent seed for run_statuses, frequencies, domains, sources
     ├── models/           # DB query functions (repository layer)
     │   ├── api_key_domains.py
     │   ├── articles.py
     │   ├── atomic.py
+    │   ├── company_financials.py  # upsert/read company_financials (reported figures per period)
     │   ├── domains.py
     │   ├── frequencies.py
     │   ├── runs.py
@@ -119,6 +121,7 @@ DynamoDB access for the poller is granted via an IAM role policy (`aws_iam_role_
 | `GET /market/status` | current_status, local_open, local_close | no data |
 | `GET /market/macro` | fed_funds_rate, cpi, treasury_yield_10y, unemployment, nonfarm_payroll, real_gdp, retail_sales, durables — each with date, value, unit; plus top_movers (top_gainers/top_losers/most_actively_traded lists) | no data |
 | `GET /market/sec-filings/{ticker}` | recent 8-K/10-Q/10-K filings: form_type, filed_at, accession_number, primary_doc_url, cik, accepted_at, period_of_report, item_codes, filer_category | no data |
+| `GET /market/china/revenue-history` | China universe revenue YoY per company and reporting period, from `company_financials` (Postgres, not DynamoDB). `?refresh=true` re-fetches upstream first; `?codes=a,b` narrows that re-fetch | never - returns `[]` |
 
 ### SEC Filings
 
@@ -693,6 +696,56 @@ across 389 rows.
   nothing. `column` must also be `szse` for 000/002/300 codes and `sse` for 600/603/688; the
   wrong one likewise returns zero rows silently (derived from the code prefix, not stored).
 
+### `src/china_financials.py` + `company_financials` - structured revenue, not PDF text
+
+C2 (substitution progress) compares a company's revenue growth against **its own** past
+growth, so it needs a clean series per reporting period. Those were recovered by parsing
+filing PDFs, which works but fails invisibly rather than loudly:
+
+- the largest number in a document is not always the company's own figure (a GigaDevice
+  filing's biggest amount was the VALUATION of the company it was investing in)
+- periodic reports lose their table headers to PDF extraction, so a row sitting intact
+  below a shuffled header is never read
+- some issuers state growth qualitatively - BOE's pre-announcements say
+  营业收入同比增长超10% ("grew by MORE than 10%"), which carries no figure at all
+
+All three disappear with a structured source. Confirmed against the PDF-extracted series:
+cninfo's own API returns +121.83 / +17.30 / +52.40 / +56.92 for Hygon's four annual
+periods, exactly what extraction produced - and additionally covers five companies
+extraction could not read at all. C2's trusted baselines went from 28 to 66.
+
+| Source | Covers | Periods |
+|--------|--------|---------|
+| cninfo `data20/financialData/getIncomeStatement` | the 16 mainland-listed names | FY, H1, Q1, Q3 |
+| Alpha Vantage `INCOME_STATEMENT` | Alibaba (BABA), Baidu (BIDU) - they file with the SEC | annual only |
+| (neither) | Tencent, Lenovo - OTC ADRs on neither cninfo nor the SEC | stay on PDF extraction |
+
+Both sources return **identical keys and types** (`code`, `period_type`, `year`, `revenue`,
+`prior_revenue`, `yoy_pct`, `source`), so a consumer cannot depend on which one answered.
+Alpha Vantage quarterly data is deliberately unused: Alibaba's fiscal year ends 31 March,
+so its quarters do not line up with a mainland company's.
+
+The cninfo endpoint is **undocumented** - `sign=1` is required and non-obvious (without it
+the endpoint answers HTTP 500 with `{"msg":"validate fail!"}`), and it could change without
+notice, which is the other reason the PDF path is kept rather than deleted. An HK-only code
+is never sent to it: cninfo answers HTTP 500 for a five-digit code, which would log a
+failure for something working exactly as intended.
+
+**Stored in `company_financials`, not `articles`.** A revenue series is reference data, not
+news: it has no url, no publication event, and a daily classify pass cannot make twenty
+external calls every run. The table **UPSERTS** on
+`(domain, code, metric, period_type, period_year)` - the opposite of this service's usual
+append - because a restated figure must REPLACE its predecessor. Accumulating both would
+put one period into its own baseline twice and narrow the spread around whichever period a
+company restated most.
+
+`GET /market/china/revenue-history` serves the stored rows (~0.3s). `?refresh=true`
+re-fetches upstream first (~90s, one request per company) and `?codes=688041,002371` narrows
+that re-fetch to named companies - what makes a daily refresh affordable, since a company's
+figures change only when it files. The narrowing applies to the FETCH only; the response is
+always the full stored history, because per-company baselines are built for the whole
+universe regardless of who filed today.
+
 ### `src/china_code.py` - the two exchange ids are resolved, not stored
 
 `org_id` and `hkex_stock_id` were hardcoded in `CHINA_TICKER_UNIVERSE` until 2026-10-06.
@@ -763,8 +816,8 @@ walks a day.
 
 | Rule | Schedule (UTC) | `--days-back` | Exists for |
 |------|----------------|---------------|------------|
-| `..._china_market_signal_policy` | `cron(0 0-12/4 ? * MON-FRI *)` | 2 | Policy + press. 08:00-20:00 Beijing, every 4h |
-| `..._china_market_signal_filings` | `cron(0 1,8 ? * MON-FRI *)` | 3 | Pre-open (01:00) and post-close (08:00) against the 01:30-07:00 UTC mainland session |
+| `..._china_market_signal_policy` | `cron(0 0-12/4 * * ? *)` | 1 | Policy + press. 08:00-20:00 Beijing, every 4h, **every day** |
+| `..._china_market_signal_filings` | `cron(0 1,8 * * ? *)` | 1 | Pre-open (01:00) and post-close (08:00) against the 01:30-07:00 UTC mainland session, **every day** |
 | `..._china_market_signal_monthly` | `cron(0 5 20 * ? *)` | 35 | The **only** rule that satisfies the `monthly` gate, so the only one that ever runs `comtrade_china_trade` and `nbs_ic_output` |
 
 Two more rules in the same file belong to **signal-detection-agent**, not this service, and
@@ -773,21 +826,33 @@ and classify on none, leaving articles to accumulate unjudged:
 
 | Rule | Schedule (UTC) | Covers |
 |------|----------------|--------|
-| `..._china_signals_filings` | `cron(0 10 ? * MON-FRI *)` | 2h after the 08:00 post-close filings fetch; also picks up that morning's policy run |
-| `..._china_signals_evening` | `cron(0 14 ? * MON-FRI *)` | 22:00 Beijing, after the 12:00 fetch that ends the 4-hourly policy series; also the pass that picks up the monthly trade rows |
+| `..._china_signals_filings` | `cron(0 10 * * ? *)` | 2h after the 08:00 post-close filings fetch; also picks up that morning's policy run |
+| `..._china_signals_evening` | `cron(0 14 * * ? *)` | 22:00 Beijing, after the 12:00 fetch that ends the 4-hourly policy series; also the pass that picks up the monthly trade rows |
 
 Both run `classify-china-signals`, which defaults to today (UTC) and skips already-classified
 `source_id`s, so the two passes are additive and idempotent rather than duplicative.
 
-Why these `--days-back` values are not all 1:
+**Why the daily rules run every day, and why their window is 1.** Both were `MON-FRI` with a
+2- and 3-day window until the stored history was checked. Chinese issuers file at weekends:
+of five years of stored articles, **1,715 cninfo filings carry a Saturday publication date**,
+against 1,830 on Friday and 1,795 on Tuesday (Sunday is genuinely quiet at 93). That is not a
+timezone artifact - `_china_day()` stamps midday UTC specifically so a date survives the
+conversion in either direction.
 
-- **2 for policy** - the government listings carry a date but no publication *time*, so a run
-  early in the UTC day looking back exactly one day can miss an announcement published late on
-  the Beijing day that straddles the UTC boundary.
-- **3 for filings** - covers a weekend of filings on the Monday run without a separate rule.
-  cninfo and HKEX are both date-RANGE queries, so a wider window costs one request per company,
-  not one per day. (This is the opposite of Japan, whose EDINET fetcher loops per day and is
-  why that domain deliberately keeps its daily window at 1.)
+So the weekend coverage was real but was being carried by the WINDOW rather than the
+schedule: `--days-back 3` existed to let Monday's run reach back over a weekend, which made
+every weekday run re-walk three days to serve one. Running daily lets every window be 1.
+
+It also closed a hole on the classify side, which mattered more: the classify window selects
+RUNS by date, so a Saturday fetch under a `MON-FRI` classify schedule was never judged at all
+- Monday's pass pools Monday's runs, not the weekend's. Those rows were orphaned permanently,
+not merely delayed.
+
+Widening the window was never the cost: cninfo and HKEX are both date-RANGE queries sending
+`seDate=start~today` in a single request per company, so `days_back` 1, 3 and 30 all take the
+same time (measured). This is the opposite of Japan, whose EDINET fetcher loops per day and is
+why that domain keeps its window at 1 for the other reason.
+
 - **35 for monthly** - `_fetch_comtrade_china_trade` derives how many months it walks back from
   `days_back` (`max(4, days_back//30 + 3)`), and Comtrade's own 2-3 month publication lag means
   a narrow window finds nothing at all.
