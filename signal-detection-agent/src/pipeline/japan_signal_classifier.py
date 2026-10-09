@@ -4107,6 +4107,11 @@ def classify_corporate_disclosure(
         # materiality the filing does not have. It is not surfaced as
         # "unusual" either - 56% of stored disclosures carry an English
         # version, so it is the norm, not an exception.
+        # Initialised per filing, not only inside the branch that sets
+        # it: that branch is reached by one clause of one doc type, so
+        # every other disclosure read an unbound local and the whole
+        # batch died on the first Kabutan row.
+        major_shareholder_override: str | None = None
         answer, action = _classify_japan_disclosure_substance(
             company_name, code, headline, model, api_key, base_url, timeout,
         )
@@ -4168,8 +4173,6 @@ def classify_corporate_disclosure(
                 # field; this phrase carries only the figures.
                 action = (f"a major shareholder's holding to {msh_now:.2f}% "
                           f"of voting rights, from {msh_was:.2f}%")
-            else:
-                major_shareholder_override = None
 
             clause = _extraordinary_reason(meta)
             if clause:

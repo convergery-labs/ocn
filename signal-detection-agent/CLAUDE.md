@@ -196,14 +196,16 @@ All seven of the spec's signal types are implemented, plus a triage gate:
 | C2 | Substitution progress - revenue YoY against **this company's own** past rates for the **same period type**, structured figures where available |
 | C3 | Capacity commitment - with restatement collapsing (Hua Hong filed 13 announcements tracking one acquisition over 10 months) |
 | C4 | Accelerator milestone - 4 filters, accelerator-role companies only |
-| C5 | Platform capex - platform-role companies only |
+| C5 | Platform capex - platform-role companies only, against that platform's own capex history |
 | C6 | Trade deviation - per-series MAD over the import side (Comtrade partner-reported) and production side (NBS) |
 | C7 | Named US-company action |
 
 Thresholds are derived from the stored distribution (MAD, not standard deviation - outlier
 resistant), never lifted from the spec. Trust floors make the classifier refuse to judge
 rather than fabricate a baseline: `_C2_MIN_OBSERVATIONS = 3`, `_C3_MIN_OBSERVATIONS = 3`,
-`_C6_MIN_PERIODS = 6`.
+`_C5_MIN_OBSERVATIONS = 3`, `_C6_MIN_PERIODS = 6`. Below the floor the baseline fields are
+ABSENT rather than zero, so "not measured" stays distinguishable from "measured and
+ordinary".
 
 **Three is forced by the data, not chosen.** Zero companies have eight observations in any
 single period type - five of the twenty listed in 2022 or later, so their entire filing
@@ -252,9 +254,31 @@ H1/FY.
 | | Means |
 |---|---|
 | `signal` | cleared the company's own band |
-| `weak_signal` | cleared the weak band but not the signal band |
+| `weak_signal` | cleared the weak band but not the signal band, **or** broke the company's own pattern on growth too small to call substitution - see below |
 | `noise` | **judged and found ordinary**, or a filing type no rule reads |
 | `waiting` | a rule reads this shape but cannot judge it yet |
+
+**C2's third weak path: a break on a flat history.** A company whose past is tightly
+clustered has a small MAD by construction, so an ordinary move scores enormous - China
+Northern Rare Earth's +36.8% sits 17.8 MADs above a half-year median of -18.1%. Those
+rows used to be `noise` (they fail the growth floor) and their reason text read "+17.8
+MADs ... within its usual range", a contradiction in one sentence.
+
+They are now `weak_signal` when the deviation clears `_C2_SIGNAL_MADS` and growth is not
+negative. Measured over the 88 observations with two priors and a known next period: the 6
+rows in this band had a median NEXT period of +25.6%, four of six still above +25%, and
+none went negative - not ordinary, but not the above-floor population either (+72.4%
+median, 7 of 7 above +25%). Two magnitudes, two verdicts: this band is weak, never signal.
+`pct >= 0` excludes genuine declines - a company whose revenue FELL is not substitution
+progress whatever its spread.
+
+**Evidence limit, recorded rather than buried:** n=6, 95% interval 30%-90%, and it needed
+the trust floor relaxed to two priors to find a measurable sample at all. Adopted on
+judgment, not on a result that clears the bar the rest of this module holds. Revisit once
+enough of these rows have a known next period to test at n>=30. No observation floor on
+this band, deliberately - it admits n=1 rows where the denominator is `_C2_MIN_MAD_PCT`
+rather than a measured spread, labelled by `mad_is_floor` and the reason text, and capped
+at weak so an assumed spread can never produce a signal.
 
 **Every pooled article gets a row - noise is stored, never dropped.** A dropped article is
 indistinguishable from one never fetched, and because the daily pass skips by `source_id`,
@@ -328,13 +352,44 @@ metadata dict and they disagreed - C1 carried no code at all, gate1 carried neit
 filing_url - so `GET /results?code=688981` silently missed whole signal types and a reader
 could not open the document a verdict came from.
 
-**No China-specific read route exists, and none is needed.** The generic `GET /results`
-returns the whole `metadata` JSONB, so `read_through`, `direction`, `would_confirm` and
-every extracted figure come back as stored. `GET /results?source_type=china_market_signal&code=688981`
-filters to one company - `code` is a generic filter on `metadata.code`, serving Japan and
-China alike. A card-shaping view (Japan's `japan_signal_view.py` equivalent) is deliberately
-not built while the classifier is still being tuned: raw metadata shows the fields a view
-would hide.
+**Results are read through the generic `GET /results`.** It returns the whole `metadata`
+JSONB, so `read_through`, `direction`, `would_confirm` and every extracted figure come back
+as stored. `GET /results?source_type=china_market_signal&code=688981` filters to one
+company - `code` is a generic filter on `metadata.code`, serving Japan and China alike. A
+card-shaping view (Japan's `japan_signal_view.py` equivalent) is deliberately not built
+while the classifier is still being tuned: raw metadata shows the fields a view would hide.
+
+**One China route exists: `GET /china-signals/universe`** - the 20 tracked companies
+(`code`, `company`, `native_name`, `hk_code`, `signal_roles`, `read_through` with direction
+and relationship), served from `CHINA_COMPANIES` in memory. It is reference data, not
+results, and exists because the alternative was paging ~9k classification rows to recover a
+20-row company list. Same role and shape as `/japan-signals/universe`. `native_name` and
+`hk_code` are duplicated from news-retrieval's `CHINA_TICKER_UNIVERSE`, which stays the
+source of truth for fetching - checked equal at 20 companies on 2026-10-09, and
+research-universe is the intended owner of both.
+
+**Money fields follow one rule: every `*_value` is CNY.** `currency` names what the filing
+stated; branch on `native_value`, not on `currency`. Present means the value is converted
+and `currency` describes `native_value`; absent means `currency` describes the value
+itself. FX is the ECB reference rate for the filing's OWN publication date
+(frankfurter.app, cached per currency/date), never the run date - so a reclassify
+reproduces the same figure rather than re-pricing four years of history at today's rate.
+`fx_rate`, `fx_rate_as_of` and `fx_rate_source` (`ecb` / `fallback`) travel with every
+converted figure. The fallback table exists so a dollar amount never enters a renminbi
+baseline unconverted - a ~7x error - not because the approximation is good.
+
+**`issuer` names the body that published the document**, with `issuer_source` recording
+whether it was read from the title (`document`) or defaulted from the feed (`source`).
+news-retrieval's own `issuing_body` is fixed per feed and therefore wrong whenever one body
+publishes on another's site: 8 of 87 MIIT-fed documents were issued by a provincial
+communications administration and all 8 read as the ministry. A default that cannot be told
+apart from a fact is how that happened, which is why both fields exist.
+
+**`supports`/`weakens` are omitted where no testable claim fits.** C1's template asserts a
+US-listed supplier will disclose a licence denial attributing it to the measure - true of a
+trade remedy or export control, false of a statistics bulletin, an industry plan or an
+exhibition notice. Gated on C1's own `binding` verdict rather than a new judgment: 11 of 13
+stored C1 rows are `checkpoint_source: not_applicable`.
 
 ## Classification Retention (Postgres)
 

@@ -65,6 +65,40 @@ src/
 │                                     classify_taiwan_signal_batch() (top-level: rank +
 │                                     clause-lookup + translate, called by
 │                                     controllers/run.py's run_taiwan_signal_classification)
+│   ├── china_companies.py      The ONE static table for china_market_signal -
+│                                     CHINA_COMPANIES keyed by exchange code, holding
+│                                     each company's native_name, hk_code, signal_roles
+│                                     and read_through (tickers + direction +
+│                                     relationship). codes_with_role(),
+│                                     read_through_for() and china_company_universe()
+│                                     are DERIVED views over it, never maintained
+│                                     beside it - three parallel structures used to
+│                                     hold these facts and a missed edit failed
+│                                     silently
+│   └── china_signal_classifier.py  Deterministic + LLM classifier for
+│                                     china_market_signal - gate_filings() (Gate 1
+│                                     triage, pure regex, discards ~93% before any
+│                                     LLM call), classify_policy_binding() (C1, the
+│                                     one judgment call), classify_substitution_
+│                                     progress() (C2), classify_capacity_commitment()
+│                                     (C3), classify_accelerator_milestone() (C4),
+│                                     classify_platform_capex() (C5),
+│                                     classify_trade_deviation() (C6),
+│                                     classify_us_company_action() (C7);
+│                                     compute_c2/c3/c5_baselines() (written to
+│                                     market_signal_baselines by the refresh job,
+│                                     read by the daily pass), point_in_time_baseline()
+│                                     and universe_yoy_floors() (only observations
+│                                     PRECEDING a filing's own period may judge it),
+│                                     _to_cny()/_fx_lookup() (ECB rate pinned to the
+│                                     filing's publication date, cached per
+│                                     currency/date), resolve_issuer() (the body that
+│                                     published the document, title first and feed
+│                                     only as fallback), attach_source_metadata()
+│                                     (copies the article's identifying fields onto
+│                                     every row centrally), classify_china_signal_
+│                                     batch() (top-level, called by controllers/
+│                                     run.py's run_china_signal_classification)
 └── adapters/
     ├── news_client.py   Infrastructure - async HTTP client for news-retrieval:
     │                                     trigger_run(), fetch_latest_run(),

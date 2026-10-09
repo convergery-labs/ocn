@@ -78,7 +78,8 @@ from pipeline.japan_signal_classifier import (
 from pipeline.japan_companies import japan_ticker_universe
 from pipeline.china_signal_classifier import (
     FILING_RANK_PERIODIC, classify_china_signal_batch, compute_c2_baselines,
-    compute_c3_baselines, filing_authority, filing_period)
+    compute_c3_baselines, compute_c5_baselines, filing_authority,
+    filing_period)
 from models.market_baselines import load_baselines, upsert_baselines
 from pipeline.korea_signal_classifier import classify_korea_signal_batch
 from pipeline.korea_signal_summary import generate_korea_signal_summary
@@ -1091,7 +1092,8 @@ async def refresh_china_baselines(
             len(filed_codes), refetch_filed_since, ", ".join(sorted(filed_codes)))
     rows = compute_c2_baselines(
         all_articles, revenue_series=revenue_series,
-    ) + compute_c3_baselines(all_articles)
+    ) + compute_c3_baselines(all_articles) + compute_c5_baselines(
+        all_articles)
     written = upsert_baselines(config.CHINA_SIGNAL_DOMAIN, rows)
     trusted = sum(1 for r in rows if r["is_trusted"])
     logger.info(
@@ -1179,6 +1181,8 @@ async def run_china_signal_classification(job_id: int, from_date: str, to_date: 
     baselines = load_baselines(config.CHINA_SIGNAL_DOMAIN, "revenue_yoy")
     c3_baselines = load_baselines(
         config.CHINA_SIGNAL_DOMAIN, "commitment_value")
+    c5_baselines = load_baselines(
+        config.CHINA_SIGNAL_DOMAIN, "capex_value")
     if not baselines:
         logger.warning(
             "[CHINA] no cached baselines - C2 will only judge companies "
@@ -1198,7 +1202,7 @@ async def run_china_signal_classification(job_id: int, from_date: str, to_date: 
 
     classified = classify_china_signal_batch(
         pending, baselines=baselines, c3_baselines=c3_baselines,
-        period_series=period_series)
+        c5_baselines=c5_baselines, period_series=period_series)
 
     # Re-checked rather than assumed, in ONE batched query. The
     # pre-filter above removed everything classified before this run
