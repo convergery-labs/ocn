@@ -1400,30 +1400,159 @@ _EN_UNIT_MULTIPLIER = {"billion": 10**9, "million": 10**6}
 # differently depending only on which exchange the company filed with.
 # 61 of 460 extracted amounts are USD-denominated.
 #
-# A FIXED rate, deliberately, and it is an approximation rather than a
-# quotation. C3 asks whether a commitment is unusual against that
-# company's own past commitments, measured in MADs; the answer does
-# not turn on a few percent of FX. A live rate would make a verdict
-# depend on the day it was computed and make a backfill
-# irreproducible, which is a worse failure than being a few percent
-# out. Recorded on the row as `fx_rate` so a reader can see the
-# assumption rather than infer it.
-_FX_TO_CNY = {
-    "US$": 7.1, "USD": 7.1, "$": 7.1,
-    "HK$": 0.91, "HKD": 0.91,
-    "EUR": 7.7, "€": 7.7,
-    "JPY": 0.047, "¥": 1.0,   # a bare ¥ in a Chinese filing is RMB
-    "RMB": 1.0, "CNY": 1.0,
+# The rate is pinned to the filing's OWN PUBLICATION DATE, not to the
+# day the classifier runs. This is the property that matters:
+#
+#   - A 2023 filing converts at the 2023 rate whichever day it is
+#     classified, so a reclassify reproduces the same figure and a
+#     verdict never moves because a job ran on a different day. A
+#     run-date rate would have made today's three reclassifies
+#     produce three different numbers for the same document.
+#   - A company's own baseline spans years. Converting its whole
+#     history at one current rate misstates the old filings; using
+#     the run-date rate for all of them injects FX drift into a MAD
+#     that is supposed to measure spending, not currency.
+#
+# The rate is LOOKED UP for that date from the ECB reference series
+# (frankfurter.app - ECB data, free, no key, date-queryable). A
+# historical rate is a fixed fact: 2023-02-07 is 6.7858 today and
+# will be 6.7858 next year, so a live lookup here does NOT cost
+# reproducibility the way a run-date rate would.
+#
+# Cached per (date, currency) for the life of the process. A backfill
+# classifies thousands of filings but they cluster on a few hundred
+# distinct dates, and only the handful carrying a non-renminbi figure
+# ever reach this - measured on the stored history: 1 row.
+#
+# _FX_FALLBACK_BANDS is the backstop when the lookup fails - network
+# down, API changed, a date the series has no entry for (weekends and
+# holidays return the prior close, but a very recent date may not
+# exist yet). Approximate annual averages, deliberately coarse: they
+# exist so a US$ figure never enters a renminbi baseline unconverted,
+# which is a 7x error, not so they are precise. A row converted this
+# way is marked `fx_rate_source: "fallback"` so it is identifiable.
+_FX_FALLBACK_BANDS: list[tuple[str, dict[str, float]]] = [
+    ("2026-01-01", {"USD": 7.10, "HKD": 0.91}),
+    ("2025-01-01", {"USD": 7.20, "HKD": 0.92}),
+    ("2024-01-01", {"USD": 7.12, "HKD": 0.91}),
+    ("2023-01-01", {"USD": 6.79, "HKD": 0.87}),
+    ("2022-01-01", {"USD": 6.73, "HKD": 0.86}),
+    ("0000-01-01", {"USD": 6.90, "HKD": 0.88}),
+]
+_FX_API = "https://api.frankfurter.app"
+_FX_TIMEOUT = 8
+_FX_USER_AGENT = "ocn-signal-detection-agent/1.0"
+_FX_CACHE: dict[tuple[str, str], float | None] = {}
+
+
+def _fx_lookup(code: str, date: str) -> float | None:
+    """The ECB rate for one currency on one date, or None.
+
+    None means "could not be established" and sends the caller to the
+    fallback band - never to 1.0, which would silently treat a dollar
+    figure as renminbi.
+    """
+    key = (code, date)
+    if key in _FX_CACHE:
+        return _FX_CACHE[key]
+    rate: float | None = None
+    try:
+        # A User-Agent is REQUIRED, not politeness: the API returns
+        # 403 to urllib's default one. Confirmed live - the same
+        # request succeeds with any UA set and fails without.
+        req = Request(f"{_FX_API}/{date}?from={code}&to=CNY",
+                      headers={"Accept": "application/json",
+                               "User-Agent": _FX_USER_AGENT})
+        with urlopen(req, timeout=_FX_TIMEOUT) as resp:
+            rate = (json.loads(resp.read().decode("utf-8"))
+                    .get("rates", {}).get("CNY"))
+    except Exception as exc:  # noqa: BLE001 - any failure is a fallback
+        logger.warning("[CHINA] fx lookup failed %s %s: %s", code, date, exc)
+    _FX_CACHE[key] = rate
+    return rate
+# Currencies with no dated series: one rate, every period.
+_FX_FLAT_TO_CNY = {"EUR": 7.7, "JPY": 0.047, "RMB": 1.0, "CNY": 1.0}
+# Marker spellings a filing uses -> the key the tables above hold.
+_FX_MARKER_TO_CODE = {
+    "US$": "USD", "USD": "USD", "$": "USD",
+    "HK$": "HKD", "HKD": "HKD",
+    "EUR": "EUR", "€": "EUR", "JPY": "JPY",
+    "RMB": "CNY", "CNY": "CNY", "¥": "CNY",  # a bare ¥ in a Chinese filing
 }
 
 
-def _to_cny(value: float, currency: str | None) -> tuple[float, float]:
-    """(value in CNY, the rate applied). Unknown currency is left as-is
-    at rate 1.0 - guessing would be worse than a figure a reader can
-    see is unconverted."""
-    rate = _FX_TO_CNY.get((currency or "").strip().upper()) \
-        or _FX_TO_CNY.get((currency or "").strip()) or 1.0
-    return value * rate, rate
+def _fx_fallback(code: str, published: str) -> tuple[float, str]:
+    """(rate, band start) from the hardcoded bands - the lookup's
+    backstop. An absent or unparseable date takes the newest band: a
+    filing we cannot date is almost always a recent one, and refusing
+    to convert would put an unconverted US$ figure into a renminbi
+    baseline, the 7x error this block exists to prevent.
+    """
+    for start, rates in _FX_FALLBACK_BANDS:
+        if published >= start:
+            return rates.get(code, 1.0), start
+    return _FX_FALLBACK_BANDS[0][1].get(code, 1.0), _FX_FALLBACK_BANDS[0][0]
+
+
+def _to_cny(value: float, currency: str | None,
+            published: str | None = None,
+            ) -> tuple[float, float, str, str]:
+    """(value in CNY, the rate applied, the rate's date, its source).
+
+    The rate is the ECB reference rate for the filing's OWN
+    publication date, so the same document always converts to the
+    same figure however often it is reclassified. `source` is "ecb"
+    when the lookup answered and "fallback" when it did not, so a row
+    converted on an approximation is identifiable rather than
+    indistinguishable from a quoted one.
+
+    An unknown currency is left as-is at rate 1.0 - guessing would be
+    worse than a figure a reader can see is unconverted.
+    """
+    code = _FX_MARKER_TO_CODE.get((currency or "").strip().upper()) \
+        or _FX_MARKER_TO_CODE.get((currency or "").strip())
+    if code in _FX_FLAT_TO_CNY:
+        rate = _FX_FLAT_TO_CNY[code]
+        return value * rate, rate, "", ""
+    if not code:
+        return value, 1.0, "", ""
+    # Dateless filings take today's rate rather than no conversion.
+    # Undated rows are rare and recent; an unconverted dollar figure
+    # in a renminbi baseline is the worse outcome.
+    stamp = (published or "")[:10] or _utc_today()
+    rate = _fx_lookup(code, stamp)
+    if rate:
+        return value * rate, rate, stamp, "ecb"
+    rate, band = _fx_fallback(code, stamp)
+    return value * rate, rate, band, "fallback"
+
+
+def _utc_today() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+# Marker as a filing writes it -> ISO 4217. The extractor keeps the
+# marker verbatim beside the raw text it came from, which is right
+# there; a `currency` field a consumer switches on is not the place
+# for three spellings of the same currency ("US$", "USD", "$").
+_ISO_CURRENCY = {
+    "US$": "USD", "USD": "USD", "$": "USD", "美元": "USD",
+    "HK$": "HKD", "HKD": "HKD", "港元": "HKD", "港币": "HKD",
+    "EUR": "EUR", "€": "EUR",
+    "JPY": "JPY",
+    "RMB": "CNY", "CNY": "CNY", "¥": "CNY", "人民币": "CNY", "元": "CNY",
+}
+
+
+def _iso_currency(marker: str | None) -> str:
+    """ISO code for a filed currency marker, CNY when absent or
+    unrecognised - a mainland filing that names no currency is
+    renminbi by convention, the same assumption _to_cny already
+    makes at rate 1.0."""
+    raw = (marker or "").strip()
+    return (_ISO_CURRENCY.get(raw.upper())
+            or _ISO_CURRENCY.get(raw) or "CNY")
 # A percentage, with its surrounding words kept so a consumer can tell a
 # growth rate from an ownership stake - 88.20% (order growth) and 49%
 # (fund stake) are both "a percent" and mean completely different things.
@@ -2050,8 +2179,16 @@ def _extract_yoy_changes(text: str) -> list[dict[str, Any]]:
     return out
 
 
-def extract_filing_figures(body: str) -> dict[str, Any]:
+def extract_filing_figures(
+    body: str, published: str | None = None,
+) -> dict[str, Any]:
     """Pull the numeric facts out of one candidate filing.
+
+    `published` is the filing's own publication date (YYYY-MM-DD or an
+    ISO timestamp). It selects the FX band a non-renminbi amount is
+    converted at, so a 2023 filing keeps its 2023 rate however often
+    it is reclassified. Omitting it converts at the newest band, which
+    is right for a filing being classified the day it appears.
 
     Returns amounts normalised to their base currency unit plus the
     percentages with their surrounding context. No judgment, no
@@ -2161,7 +2298,7 @@ def extract_filing_figures(body: str) -> dict[str, Any]:
             # filed figure is kept beside it, never overwritten - a
             # reader checking against the document needs the number
             # the document states.
-            cny, rate = _to_cny(native, currency)
+            cny, rate, band, src = _to_cny(native, currency, published)
             # English names the qualifier on EITHER side: "a US$100
             # billion sovereign fund" puts it after the figure, where
             # Chinese puts it before ("投前估值约为..."). Both sides are
@@ -2178,6 +2315,8 @@ def extract_filing_figures(body: str) -> dict[str, Any]:
             if rate != 1.0:
                 entry["native_value"] = native
                 entry["fx_rate"] = rate
+                entry["fx_rate_as_of"] = band
+                entry["fx_rate_source"] = src
             # The same two exclusions the Chinese path applies - an
             # English filing names other parties' money just as often.
             # Lenovo's quarterly results mention "Alat, a US$100
@@ -2242,6 +2381,18 @@ def extract_filing_figures(body: str) -> dict[str, Any]:
              if not a.get("per_unit") and not a.get("valuation_term")
              and not a.get("aggregate_term") and not a.get("result_term")),
             default=None),
+        # The entry max_amount came from, so a consumer can say what
+        # currency the figure was FILED in. `value` is always CNY (see
+        # _to_cny), which made every downstream row look renminbi-
+        # denominated even when the filing stated US$ or HK$ - the one
+        # thing a reader checking against the document needs to know.
+        # Kept as the whole entry rather than just the code so
+        # native_value and fx_rate travel with it.
+        "max_amount_entry": max(
+            (a for a in amounts
+             if not a.get("per_unit") and not a.get("valuation_term")
+             and not a.get("aggregate_term") and not a.get("result_term")),
+            key=lambda a: a["value"], default=None),
     }
 
 
@@ -2289,6 +2440,110 @@ _C6_WEAK_MADS = 2.0
 # there - real, but a 15% month in semiconductor trade is ordinary. The
 # floor stops a very stable series from flagging its own normal noise.
 _C6_MIN_MAD_PCT = 10.0
+
+# HS commodity code -> the sector the goods belong to.
+#
+# A LOOKUP, not an inference, and that distinction is the whole reason
+# this is here and a ticker mapping is not. "HS 8542 is integrated
+# circuits, which is the semiconductor sector" is a fact about the
+# tariff code. "Dutch 8542 exports fell, therefore ASML" would be a
+# claim about companies the series does not contain - a reporter-side
+# export figure says nothing about which firm gained or lost. The
+# frontend asked for tickers here first; this is the half that can be
+# stated honestly.
+#
+# Keyed on the first four digits so a more specific code (85423110)
+# still resolves. Unknown codes get no sector rather than a guess.
+_C6_SECTOR_BY_HS4 = {
+    "8542": "Semiconductors",
+    "8486": "Semiconductor Equipment",
+}
+
+
+def _c6_sector(commodity_code: str | None) -> str | None:
+    """The sector for an HS code, or None when it is not one we map."""
+    hs4 = (commodity_code or "").strip()[:4]
+    return _C6_SECTOR_BY_HS4.get(hs4)
+
+
+# ---------------------------------------------------------------------------
+# Issuer: which body actually published the document
+# ---------------------------------------------------------------------------
+#
+# A policy or trade row names no company, so a reader has nothing to
+# attribute it to. news-retrieval stores `issuing_body` for the four
+# ministry sources (MIIT/MOFCOM/SAMR/CAC) but it is the SOURCE's name,
+# fixed per feed, and that is wrong whenever a body publishes on
+# another's site: measured over the stored history, 8 of 87 MIIT-fed
+# documents were issued by a PROVINCIAL communications administration
+# ("湖北通信管理局赴襄阳..." is Hubei's, not the ministry's), and all 8
+# were attributed to MIIT.
+#
+# So the issuer is read from the DOCUMENT first and the feed only as a
+# fallback, with `issuer_source` recording which - a default that
+# cannot be told apart from a fact is how the Hubei error happened.
+_ISSUER_BY_SOURCE_TYPE = {
+    "miit_policy": "Ministry of Industry and Information Technology (MIIT)",
+    "mofcom_policy": "Ministry of Commerce (MOFCOM)",
+    "samr_action": "State Administration for Market Regulation (SAMR)",
+    "cac_review": "Cyberspace Administration of China (CAC)",
+    "nbs_ic_output": "National Bureau of Statistics (NBS)",
+    "comtrade_china_trade": "UN Comtrade",
+    "cn_state_press": "Xinhua",
+    "cninfo_filing": "cninfo (Shenzhen/Shanghai disclosure)",
+    "hkex_filing": "HKEX",
+}
+
+# Province and municipality names as a filing writes them, mapped to
+# the English a reader expects. Mainland bodies are named
+# "<place><body>" with no separator, so the place has to be matched
+# from a known list rather than split on punctuation.
+_CN_PROVINCES = {
+    "北京": "Beijing", "天津": "Tianjin", "上海": "Shanghai",
+    "重庆": "Chongqing", "河北": "Hebei", "山西": "Shanxi",
+    "辽宁": "Liaoning", "吉林": "Jilin", "黑龙江": "Heilongjiang",
+    "江苏": "Jiangsu", "浙江": "Zhejiang", "安徽": "Anhui",
+    "福建": "Fujian", "江西": "Jiangxi", "山东": "Shandong",
+    "河南": "Henan", "湖北": "Hubei", "湖南": "Hunan",
+    "广东": "Guangdong", "海南": "Hainan", "四川": "Sichuan",
+    "贵州": "Guizhou", "云南": "Yunnan", "陕西": "Shaanxi",
+    "甘肃": "Gansu", "青海": "Qinghai", "台湾": "Taiwan",
+    "内蒙古": "Inner Mongolia", "广西": "Guangxi", "西藏": "Tibet",
+    "宁夏": "Ningxia", "新疆": "Xinjiang",
+}
+# The provincial body types seen in this feed, longest first so
+# "通信管理局" is not matched by a shorter pattern inside it.
+_CN_PROVINCIAL_BODIES = [
+    ("通信管理局", "Communications Administration"),
+    ("工业和信息化厅", "Department of Industry and Information Technology"),
+    ("市场监督管理局", "Administration for Market Regulation"),
+    ("发展和改革委员会", "Development and Reform Commission"),
+]
+_CN_PROVINCIAL_RE = re.compile(
+    "(" + "|".join(sorted(_CN_PROVINCES, key=len, reverse=True)) + ")"
+    "(" + "|".join(b for b, _ in _CN_PROVINCIAL_BODIES) + ")")
+
+
+def resolve_issuer(title: str | None,
+                   source_type: str | None) -> tuple[str | None, str]:
+    """(issuer, where it came from) for one document.
+
+    Returns ``("Hubei Communications Administration", "document")``
+    when the title names a provincial body, otherwise the feed's own
+    body with ``"source"``, otherwise ``(None, "")`` - an unmapped
+    source gets no issuer rather than a guess.
+
+    Only the TITLE is read, not the body: a document names dozens of
+    bodies in its text (the ones it cites, the ones it instructs) and
+    the issuer is the one in the heading.
+    """
+    m = _CN_PROVINCIAL_RE.search(title or "")
+    if m:
+        place = _CN_PROVINCES[m.group(1)]
+        body = dict(_CN_PROVINCIAL_BODIES)[m.group(2)]
+        return f"{place} {body}", "document"
+    fallback = _ISSUER_BY_SOURCE_TYPE.get(source_type or "")
+    return (fallback, "source") if fallback else (None, "")
 
 
 def classify_trade_deviation(
@@ -2370,6 +2625,7 @@ def classify_trade_deviation(
                     "signal_type": "C6",
                     "reporter": reporter,
                     "commodity_code": commodity,
+                    "sector": _c6_sector(commodity),
                     "period": meta.get("period"),
                     "mom_pct": round(latest_change, 2),
                     "series_median_pct": round(median, 2),
@@ -2413,6 +2669,33 @@ def classify_trade_deviation(
 # knows what it is replacing.
 _C5_GUIDANCE_CHANGE_PCT = 20.0
 
+# C5's own trailing baseline, added so a capex figure can be read
+# against the platform's OWN spending history and not only against the
+# spec's flat 20%. Same three reasons C2 and C3 have one:
+#
+#   - 20% means something different to Tencent, whose capex swings by
+#     tens of percent between quarters, than to a platform that has
+#     spent flat for two years.
+#   - A filing that states no change at all (most of them - only 1 of
+#     10 stored rows carried capex_change_pct) is currently
+#     unjudgeable. A trailing median gives it a comparison the filing
+#     itself does not supply.
+#   - The frontend needs the same baseline fields C2 already returns,
+#     and inventing a second shape for the same idea would be worse
+#     than reusing C2's.
+#
+# The floors match C3's rather than C2's, because this is a VALUE
+# series (yuan of capex) not a RATE series (percent growth), and a
+# value series needs the fraction-of-median floor to stop a company
+# with three near-identical quarters scoring every later move as
+# enormous. _C5_MIN_OBSERVATIONS is 3 for the reason the module
+# docstring gives for C2 and C3: it is the floor at which a spread
+# can be computed at all, and this universe cannot fill more.
+_C5_MIN_OBSERVATIONS = 3
+_C5_SIGNAL_MADS = 3.0
+_C5_WEAK_MADS = 2.0
+_C5_MIN_MAD_FRACTION = 0.25
+
 # The three listed platforms. Passed as codes rather than names because
 # an article carries metadata.code, and a name match would need the
 # alias handling the universe already does upstream.
@@ -2425,9 +2708,16 @@ _C5_PLATFORM_CODES = codes_with_role("platform")
 _C5_CAPEX_RE = re.compile(
     r"(?P<label>capital expenditures?|capex|资本开支|资本支出)"
     r"[^.。]{0,80}?"
-    r"(?:RMB|US\$|人民币)?\s*(?P<num>[0-9][0-9,]*(?:\.[0-9]+)?)\s*"
+    # The currency marker is CAPTURED, not just matched past: capex_value
+    # is reported in whatever the filing stated, so a consumer needs to
+    # know whether "52.8bn" is renminbi or dollars.
+    r"(?P<cur>RMB|US\$|HK\$|人民币|港元|美元)?\s*"
+    r"(?P<num>[0-9][0-9,]*(?:\.[0-9]+)?)\s*"
     r"(?P<unit>billion|million|亿元|亿)",
     re.I)
+# Currency markers resolve through the shared _iso_currency table -
+# C5 had its own copy briefly, which is exactly how two spellings of
+# the same currency drift apart.
 _C5_CAPEX_UNIT = {
     "billion": 10**9, "million": 10**6, "亿元": 10**8, "亿": 10**8}
 
@@ -2437,18 +2727,57 @@ _C5_CAPEX_UNIT = {
 # millions") further up the document. Confirmed live after the PDF page
 # budget was raised; before that the row was never fetched at all.
 #
-# Only read when a unit header is present, and only the FIRST figure on
-# the row, which is the current period - the rest are prior periods, the
-# same column convention the mainland results tables use.
+# Only read when a unit header is present.
+#
+# WHICH COLUMN. The first figure is NOT always the one the filing is
+# about. Tencent's interim table runs five columns - three quarters
+# then two cumulative totals - "52,784 31,936 19,107 84,720 46,583" in
+# a filing titled "THREE AND SIX MONTHS ENDED 30 JUNE 2026". The first
+# is the QUARTER; the half-year the title names is 84,720, the fourth.
+# Taking the first labelled that quarterly figure H1, so the stored
+# value and its own period_type contradicted each other. Measured over
+# the stored history: 6 of 7 Tencent rows are multi-column and every
+# one was mislabelled this way.
+#
+# So the row is captured whole and the column chosen by what the TITLE
+# reports: a cumulative period (H1, Q3-as-nine-months) takes the first
+# cumulative column, which sits after the per-quarter ones. A single
+# quarter, or a row with one figure, still takes the first.
+_C5_TABLE_CUMULATIVE_COLS = 2
 _C5_TABLE_UNIT_RE = re.compile(
-    r"(?i)(?:RMB|US\$|人民币)?\s*in\s+(millions?|billions?|thousands?)")
+    r"(?i)(?P<cur>RMB|US\$|HK\$|人民币|港元|美元)?\s*"
+    r"in\s+(?P<unit>millions?|billions?|thousands?)")
 _C5_TABLE_UNIT_MULTIPLIER = {
     "million": 10**6, "millions": 10**6,
     "billion": 10**9, "billions": 10**9,
     "thousand": 10**3, "thousands": 10**3}
 _C5_CAPEX_TABLE_ROW_RE = re.compile(
     r"(?i)capital expenditures?\s*(?:\([a-z]\))?\s*"
-    r"(?P<num>[0-9][0-9,]*(?:\.[0-9]+)?)")
+    r"(?P<num>[0-9][0-9,]*(?:\.[0-9]+)?)"
+    # The remaining columns on the same row, so the right one can be
+    # picked. Bounded rather than greedy - the row ends at the next
+    # label, and a runaway match would swallow the following line.
+    r"(?P<rest>(?:\s+[0-9][0-9,]*(?:\.[0-9]+)?){0,6})")
+
+
+def _c5_table_column(row_match: "re.Match[str]", period: str | None) -> float:
+    """The figure on a capex table row that matches the filing's own
+    reporting period.
+
+    A cumulative title (H1, or a Q3 filing reporting nine months) takes
+    the first cumulative column - the per-quarter columns come first,
+    the running totals after. Anything else takes the first figure.
+    See _C5_TABLE_CUMULATIVE_COLS for the measurement behind this.
+    """
+    cols = [float(c.replace(",", ""))
+            for c in [row_match.group("num")]
+            + (row_match.group("rest") or "").split()]
+    ptype = (period or "")[4:]
+    if ptype in ("H1", "Q3") and len(cols) > _C5_TABLE_CUMULATIVE_COLS:
+        # The cumulative block is the last _C5_TABLE_CUMULATIVE_COLS
+        # columns (current period, then prior year's same period).
+        return cols[-_C5_TABLE_CUMULATIVE_COLS]
+    return cols[0]
 # The change the filing states about that figure, within the same
 # sentence - "an increase of 75% compared to ...".
 _C5_CAPEX_CHANGE_RE = re.compile(
@@ -2458,6 +2787,7 @@ _C5_CAPEX_CHANGE_RE = re.compile(
 
 def classify_platform_capex(
     articles: list[dict[str, Any]],
+    baselines: dict[tuple[str, str], dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """C5: a platform's stated capital expenditure and its own change.
 
@@ -2470,7 +2800,24 @@ def classify_platform_capex(
     figure with no stated change, or a smaller one, is Weak. There is no
     Noise case: a platform disclosing its AI capex is always at least
     worth recording, which is the same floor the spec gives C7.
+
+    `baselines`, when supplied, adds the same per-company spread
+    measure C2 and C3 carry - median, MAD, deviation and sample size
+    against that platform's own capex history. It does not override the
+    stated-change verdict above, it SUPPLEMENTS it: the spec's 20% is a
+    statement the filing makes about itself, while the deviation says
+    whether the figure is unusual for this company. A filing stating no
+    change at all - most of them - can now still be placed against its
+    own history, which is the gap this closes. Without baselines the
+    behaviour is exactly as before.
     """
+    # A cached baseline from the refresh job beats anything derivable
+    # from one batch, same precedence C2 and C3 use.
+    cached: dict[str, tuple[float, float, int]] = {
+        code: (float(b["median"]), float(b["mad"]), int(b["sample_size"]))
+        for (code, _period), b in (baselines or {}).items()
+        if b.get("median") is not None and b.get("mad") is not None
+    }
     results: list[dict[str, Any]] = []
     for article in articles:
         meta = article.get("metadata") or {}
@@ -2479,10 +2826,12 @@ def classify_platform_capex(
         body = re.sub(r"\s+", " ", article.get("body") or "")
         m = _C5_CAPEX_RE.search(body)
         value = None
+        currency = None
         if m:
             try:
                 value = (float(m.group("num").replace(",", ""))
                          * _C5_CAPEX_UNIT[m.group("unit").lower()])
+                currency = _iso_currency(m.group("cur"))
             except (ValueError, KeyError):
                 value = None
         if value is None:
@@ -2493,8 +2842,13 @@ def classify_platform_capex(
             if not (unit_m and row_m):
                 continue
             try:
-                value = (float(row_m.group("num").replace(",", ""))
-                         * _C5_TABLE_UNIT_MULTIPLIER[unit_m.group(1).lower()])
+                value = (_c5_table_column(
+                    row_m, _filing_period(article.get("title") or ""))
+                         * _C5_TABLE_UNIT_MULTIPLIER[
+                             unit_m.group("unit").lower()])
+                # Table form carries its currency in the same header as
+                # its unit ("RMB in millions"), not beside the figure.
+                currency = _iso_currency(unit_m.group("cur"))
             except (ValueError, KeyError):
                 continue
             m = row_m
@@ -2514,15 +2868,21 @@ def classify_platform_capex(
             except ValueError:
                 change_pct = None
 
+        # Converted at the band covering the filing's OWN publication
+        # date, so a reclassify reproduces the figure - see
+        # _FX_BANDS_TO_CNY. A renminbi filing passes through at 1.0.
+        capex_cny, fx_rate, fx_band, fx_src = _to_cny(
+            value, currency, str(article.get("published") or ""))
+
         if change_pct is not None and abs(change_pct) >= _C5_GUIDANCE_CHANGE_PCT:
             signal = "signal"
             reason = (f"{meta.get('company')} capital expenditure "
-                      f"{value / 1e9:.1f}bn, {change_pct:+.0f}% vs prior "
+                      f"{capex_cny / 1e9:.1f}bn, {change_pct:+.0f}% vs prior "
                       f"period (spec threshold {_C5_GUIDANCE_CHANGE_PCT:.0f}%)")
         else:
             signal = "weak_signal"
             reason = (f"{meta.get('company')} capital expenditure "
-                      f"{value / 1e9:.1f}bn"
+                      f"{capex_cny / 1e9:.1f}bn"
                       + (f", {change_pct:+.0f}%" if change_pct is not None
                          else ", no stated change"))
 
@@ -2531,11 +2891,48 @@ def classify_platform_capex(
             "signal_type": "C5",
             "code": meta.get("code"),
             "company": meta.get("company"),
-            "capex_value": value,
+            # CNY, like every other money field in this domain. C5
+            # briefly stored the figure AS FILED while C3 converted,
+            # which made one `currency` field mean two different
+            # things depending on the signal type - a reader could not
+            # tell whether "currency": "USD" described the value
+            # beside it or the native_value below it. One rule now:
+            # every *_value is renminbi, `currency` names what the
+            # filing said, native_value/fx_rate recover it.
+            "capex_value": capex_cny,
             "capex_raw": m.group(0).strip()[:80],
+            "currency": currency,
+            # The reporting period this figure belongs to. _filing_period
+            # returns "2025H1"; the type is what follows the year, the
+            # same split _period_year makes from the other end. Empty
+            # when the title names no period - stated, not guessed.
+            "period_type": (
+                (_filing_period(article.get("title") or "") or "")[4:]),
         }
+        if fx_rate != 1.0:
+            # Same three fields C3 emits, so one reader rule covers
+            # both: native_value present means the *_value beside it
+            # is converted and `currency` describes native_value.
+            capex_meta["native_value"] = value
+            capex_meta["fx_rate"] = fx_rate
+            capex_meta["fx_rate_as_of"] = fx_band
+            capex_meta["fx_rate_source"] = fx_src
         if change_pct is not None:
             capex_meta["capex_change_pct"] = change_pct
+
+        # The same spread measure C2 reports, against this platform's
+        # own capex history. Absent - not zero, not invented - when
+        # there is no trusted baseline for the company: a reader can
+        # tell "not measured" from "measured and ordinary", which a
+        # default of 0.0 would have destroyed.
+        base = cached.get(meta.get("code") or "?")
+        if base:
+            c5_median, c5_mad, c5_n = base
+            capex_meta["company_median_value"] = round(c5_median, 2)
+            capex_meta["company_mad_value"] = round(c5_mad, 2)
+            capex_meta["deviation_mads"] = round(
+                (value - c5_median) / c5_mad, 2) if c5_mad else 0.0
+            capex_meta["baseline_observations"] = c5_n
         results.append({
             "article": article,
             "result": {"signal": signal, "reason": reason,
@@ -3289,6 +3686,41 @@ def _c2_result(article: dict[str, Any], company: str, period_type: str,
         signal = "signal"
     elif pct >= wk_floor and deviation >= _C2_WEAK_MADS:
         signal = "weak_signal"
+    # A break from the company's own pattern that clears the spread
+    # test but not the growth floor. Previously `noise`, which was the
+    # wrong bucket: measured over the 88 observations with two priors
+    # and a known next period, the 6 rows in this band had a median
+    # NEXT period of +25.6%, four of six still above +25%, and NONE
+    # went negative. That is not "ordinary" - but it is not the
+    # above-floor population either, which ran +72.4% median with 7 of
+    # 7 above +25%. Two different magnitudes, so two different
+    # verdicts: this band is weak, never signal.
+    #
+    # `pct >= 0` because the whole failure the growth floor exists to
+    # stop is a company whose revenue FELL scoring high on a flat
+    # history - Loongson's -0.28% at 10.0 MADs. A decline is not
+    # substitution progress whatever its spread.
+    #
+    # EVIDENCE LIMIT, recorded rather than buried: n=6, 95% interval
+    # 30%-90%, and it needed the trust floor relaxed to two priors to
+    # find a measurable sample at all (at the three the classifier
+    # actually enforces, every floor from 0 to 80 gave one signal).
+    # Adopted on the judgment that these rows are worth surfacing as
+    # weak rather than discarding; revisit once enough of them have a
+    # known next period to test at n>=30.
+    #
+    # NO observation floor here, deliberately. It admits n=1 rows -
+    # Hua Hong at 4.3 MADs and SMIC at 3.6 off a SINGLE prior figure,
+    # where the denominator is _C2_MIN_MAD_PCT rather than a measured
+    # spread. Those were considered and kept: a company breaking its
+    # own pattern is worth surfacing whether that pattern rests on one
+    # prior figure or three, and the n=1 case is already labelled
+    # where a reader will see it - `mad_is_floor` in the metadata and
+    # "no spread to measure against" in the reason text. The band
+    # tops out at weak, so an assumed spread can never produce a
+    # signal on its own.
+    elif deviation >= _C2_SIGNAL_MADS and pct >= 0:
+        signal = "weak_signal"
     else:
         signal = "noise"
     return {
@@ -3321,9 +3753,33 @@ def _c2_result(article: dict[str, Any], company: str, period_type: str,
                 # missing is more useful than implying it exists -
                 # customer wins and share data would settle it, and
                 # neither is in a revenue line.
-                + (" - potential competitive pressure on the US names "
-                   "it competes with; substitution not established "
-                   "without customer-win or market-share evidence"
+                # Three endings, one per population, because one
+                # sentence cannot be true of all three.
+                #
+                # "within its usual range" used to be attached to every
+                # noise verdict regardless of cause, which made the
+                # text flatly wrong for the break-on-a-flat-history
+                # rows: China Northern Rare Earth's +36.8% read "+17.8
+                # MADs ... within its usual range", a contradiction in
+                # one sentence.
+                #
+                # Those rows are now weak (see the band above), and
+                # they get their own ending rather than the standard
+                # weak one: their median next period was +25.6%
+                # against +72.4% for rows that cleared the growth
+                # floor, so claiming "competitive pressure" would
+                # overstate what the figure supports. Say what it
+                # actually is - a break from the company's own
+                # pattern, on growth too small to call substitution.
+                + ((f" - breaks this company's own pattern but grows "
+                    f"{pct:+.1f}%, below the {wk_floor:+.1f}% floor "
+                    f"for substitution progress; a flat history makes "
+                    f"a small move score high, so read the spread with "
+                    f"that in mind")
+                   if (signal == "weak_signal" and pct < wk_floor) else
+                   (" - potential competitive pressure on the US names "
+                    "it competes with; substitution not established "
+                    "without customer-win or market-share evidence")
                    if signal != "noise" else
                    " - within its usual range")),
             "metadata": {
@@ -3728,6 +4184,65 @@ def _c3_transaction_key(article: dict[str, Any]) -> tuple[str, str]:
     return (meta.get("company") or "?", subject[:24])
 
 
+def compute_c5_baselines(
+    articles: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Every platform's capex baseline, from the full history.
+
+    The C5 half of the refresh, in the shape compute_c3_baselines
+    already uses - same table, same row keys, so market_signal_baselines
+    stores all three metrics without a schema change.
+
+    Capex IS periodic (a quarter or a year states one), unlike a
+    commitment, but the figure is keyed per company rather than per
+    period type here: a platform reports capex on one cadence, so
+    splitting its handful of observations by period type would push
+    every series under the observation floor and judge nothing. C2
+    splits because a company files FY, H1, Q1 and Q3 figures whose
+    growth rates genuinely differ; capex has no such split in this
+    data.
+    """
+    import statistics as _st
+
+    rows_out = classify_platform_capex(articles)
+    by_code: dict[str, list[float]] = {}
+    names: dict[str, str] = {}
+    for r in rows_out:
+        meta = r["result"]["metadata"]
+        value = meta.get("capex_value")
+        code = meta.get("code") or "?"
+        if value:
+            by_code.setdefault(code, []).append(float(value))
+            names[code] = meta.get("company") or code
+
+    out: list[dict[str, Any]] = []
+    for code, values in sorted(by_code.items()):
+        # Distinct, for the reason C3 does it: one filing restates
+        # another's figure and the same number twice is one
+        # observation, not two.
+        distinct = sorted(set(values))
+        trusted = len(distinct) >= _C5_MIN_OBSERVATIONS
+        median = _st.median(distinct) if distinct else None
+        mad = None
+        if trusted:
+            mad = max(_st.median([abs(a - median) for a in distinct]),
+                      median * _C5_MIN_MAD_FRACTION)
+        out.append({
+            "code": code,
+            "metric": "capex_value",
+            "period_type": "",
+            "company": names.get(code),
+            "median": round(median, 2) if median is not None else None,
+            "mad": round(mad, 2) if mad is not None else None,
+            "sample_size": len(distinct),
+            "is_trusted": trusted,
+            "computed_from": "platform capex disclosures",
+        })
+    logger.info("[CHINA] c5 baselines computed: %d platforms, %d trusted",
+                len(out), sum(1 for r in out if r["is_trusted"]))
+    return out
+
+
 def compute_c3_baselines(
     articles: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -3812,16 +4327,21 @@ def classify_capacity_commitment(
     for (company, _), rows in sorted(chains.items()):
         rows.sort(key=lambda a: str(a.get("published") or ""))
         first = rows[0]
-        figures = extract_filing_figures(first.get("body") or "")
+        figures = extract_filing_figures(
+            first.get("body") or "", str(first.get("published") or ""))
         amount = figures["max_amount"]
+        entry = figures.get("max_amount_entry")
         # The announcement itself may carry no figure while a later
         # filing in the same chain does - take the first one that does,
         # since it describes the same transaction.
         if amount is None:
             for row in rows[1:]:
-                amount = extract_filing_figures(
-                    row.get("body") or "")["max_amount"]
+                later = extract_filing_figures(
+                    row.get("body") or "",
+                    str(row.get("published") or ""))
+                amount = later["max_amount"]
                 if amount is not None:
+                    entry = later.get("max_amount_entry")
                     break
 
         metadata: dict[str, Any] = {
@@ -3834,6 +4354,24 @@ def classify_capacity_commitment(
         }
         if amount is not None:
             metadata["commitment_value"] = amount
+            # commitment_value is CNY whatever the filing stated, so
+            # name the filed currency beside it - a HK$ or US$ figure
+            # otherwise reads as renminbi. Normalised to an ISO code:
+            # the extractor keeps the marker as written ("US$"), which
+            # is right for `amounts[].currency` next to its raw text
+            # but not for a consumer switching on a currency field.
+            # Defaults to CNY - a mainland filing with no marker is
+            # renminbi by convention, which is what _to_cny assumed.
+            metadata["currency"] = _iso_currency(
+                (entry or {}).get("currency"))
+            if (entry or {}).get("fx_rate"):
+                metadata["native_value"] = entry["native_value"]
+                metadata["fx_rate"] = entry["fx_rate"]
+                # Which rate band was applied, so "¥14.9bn" is
+                # auditable as "$2.1bn at 7.08, the 2023 rate" rather
+                # than a number a reader has to take on trust.
+                metadata["fx_rate_as_of"] = entry.get("fx_rate_as_of") or ""
+                metadata["fx_rate_source"] = entry.get("fx_rate_source") or ""
 
         reason = (f"{company} capital commitment"
                   + (f" {amount / 1e9:.2f}bn" if amount else " (no figure stated)")
@@ -4831,7 +5369,25 @@ def attach_checkpoint(results: list[dict[str, Any]],
         # No US ticker attached - a policy measure or a trade series.
         # Those get their own pair rather than a template that opens by
         # referring to companies the row does not name.
+        #
+        # C1's template asserts a US-listed supplier will disclose a
+        # licence denial over this measure. That is true of a trade
+        # remedy or an export control and FALSE of a statistics
+        # bulletin, an exhibition opening or a five-year plan - and
+        # the stored C1 rows are mostly the latter: of 11, one is an
+        # antidumping ruling and the rest are monthly software-industry
+        # figures, a trade-show notice and provincial plans. Attaching
+        # a testable claim to those invents a prediction nobody made.
+        #
+        # `binding` already separates them - it is C1's own judgment of
+        # whether the document compels anyone to do anything - so the
+        # template is withheld unless the measure is BINDING. NULL is
+        # the honest answer elsewhere, and the frontend renders these
+        # only when present.
         if not tickers:
+            if signal_type == "C1" and meta.get("binding") != "BINDING":
+                meta["checkpoint_source"] = "not_applicable"
+                return "not_applicable"
             pair = _CHECKPOINT_UNATTACHED.get(signal_type or "")
             if pair:
                 meta["supports"], meta["weakens"] = pair
@@ -4847,8 +5403,11 @@ def attach_checkpoint(results: list[dict[str, Any]],
 
     with ThreadPoolExecutor(max_workers=_CHECKPOINT_CONCURRENCY) as executor:
         sources = list(executor.map(_fill, results))
-    logger.info("[CHINA] checkpoint attached: %d model, %d template",
-                sources.count("model"), sources.count("template"))
+    logger.info(
+        "[CHINA] checkpoint attached: %d model, %d template, %d "
+        "not applicable (no testable claim the document supports)",
+        sources.count("model"), sources.count("template"),
+        sources.count("not_applicable"))
 
 
 # ---------------------------------------------------------------------------
@@ -5125,6 +5684,23 @@ def attach_source_metadata(results: list[dict[str, Any]]) -> None:
         if summary and not metadata.get("summary"):
             metadata["summary"] = summary
 
+        # Who issued the document. Policy and trade rows name no
+        # company, so without this a reader has nothing to attribute
+        # them to - and the feed's own `issuing_body` is wrong
+        # whenever one body publishes on another's site. Resolved
+        # centrally rather than per classifier for the reason this
+        # whole function exists: C1 carried no code at all until the
+        # copying moved here, and per-rule metadata disagreed.
+        if not metadata.get("issuer"):
+            issuer, issuer_source = resolve_issuer(
+                article.get("title"), source.get("source_type"))
+            if issuer:
+                metadata["issuer"] = issuer
+                # "document" means read from the title, "source" means
+                # the feed's default. A reader can tell a fact from a
+                # fallback, which is what the provincial bug cost.
+                metadata["issuer_source"] = issuer_source
+
 
 # Why an article that reached a classifier was not claimed by one,
 # keyed by source_category. The reason names the gate that actually
@@ -5160,6 +5736,7 @@ def classify_china_signal_batch(
     model: str | None = None,
     baselines: dict[tuple[str, str], dict[str, Any]] | None = None,
     c3_baselines: dict[tuple[str, str], dict[str, Any]] | None = None,
+    c5_baselines: dict[tuple[str, str], dict[str, Any]] | None = None,
     period_series: dict[tuple[str, str], list[dict[str, Any]]] | None = None,
 ) -> list[dict[str, Any]]:
     """Run every implemented China classifier on one pooled batch and
@@ -5261,7 +5838,8 @@ def classify_china_signal_batch(
         articles, baselines=baselines, period_series=period_series))
 
     # --- C5: platform capex ---------------------------------------------
-    results.extend(classify_platform_capex(articles))
+    results.extend(classify_platform_capex(
+        articles, baselines=c5_baselines))
 
     # --- C6: trade data -------------------------------------------------
     results.extend(classify_trade_deviation(articles))
@@ -5323,7 +5901,8 @@ def classify_china_signal_batch(
         # is a shape the table has never seen - extracting figures from
         # either would store numbers nothing will ever compare.
         if verdict == "candidate":
-            figures = extract_filing_figures(row.get("body") or "")
+            figures = extract_filing_figures(
+                row.get("body") or "", str(row.get("published") or ""))
             # Only attached when something was found. A JV supplemental
             # notice genuinely carries no figures, and an empty list
             # would read as "extraction failed" rather than "none

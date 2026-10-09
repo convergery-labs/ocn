@@ -11,6 +11,7 @@ from adapters.news_client import fetch_macro_series_total
 from auth import require_auth
 from controllers.run import generate_korea_signal_summary_for_date
 from models.jobs import get_job, get_results_summary, list_all_results, list_jobs, list_results, list_taiwan_periods
+from pipeline.china_companies import china_company_universe
 from pipeline.japan_companies import company_for, valuation_for
 from pipeline.japan_signal_view import to_jp_signal
 from pipeline.japan_companies import japan_ticker_universe
@@ -120,6 +121,35 @@ async def get_japan_signal_universe(
         }
         companies.append(entry)
     return {"companies": companies}
+
+
+@router.get("/china-signals/universe")
+async def get_china_signal_universe(
+    caller: dict[str, Any] = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return the static 20-company china_market_signal tracked
+    universe - reference data, not classification results, so this
+    reads from memory rather than agent_classifications.
+
+    Exists so a frontend can fetch this once and join it client-side by
+    metadata.code against GET /results, rather than paging ~9k
+    classification rows to recover a 20-row company list. Same role
+    and shape as /japan-signals/universe.
+
+    Each company carries its codes (mainland and, where dual-listed,
+    Hong Kong), its native name, which classifiers apply to it
+    (`signal_roles`), and every US name its signals read to - with
+    `direction` (which way that name moves on this company's good
+    news) and `relationship` (why the two are linked at all).
+
+    The read-through links are ANALYST JUDGMENTS transcribed from the
+    China Signals spec, not filed facts - no issuer discloses "our
+    gains come out of Applied Materials". A consumer presenting them
+    should not imply the issuer stated them. See china_companies.py's
+    own docstring, which also records that one ticker (HPQ) has no
+    match in research-universe.
+    """
+    return {"companies": china_company_universe()}
 
 
 @router.get("/japan-signals/results")
