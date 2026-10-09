@@ -1015,6 +1015,53 @@ class TestDisclosureSentencesAreNotOnePerTier:
         assert "corporate disclosure whose effect" in t
 
 
+class TestDisclosureClassifierRunsForEveryFiling:
+    """classify_corporate_disclosure must survive a filing that is not
+    a major-shareholder report.
+
+    `major_shareholder_override` was assigned only inside the branch
+    that handles a 第19条第2項第4号 extraordinary report - one clause
+    of one doc type. Every other disclosure read an unbound local and
+    raised UnboundLocalError, which killed the whole batch on its
+    first Kabutan row. The earlier tests exercised the override logic
+    directly and never called this function, so none of them saw it.
+    """
+
+    def test_an_ordinary_disclosure_does_not_raise(self, monkeypatch):
+        import pipeline.japan_signal_classifier as jc
+        monkeypatch.setattr(
+            jc, "_classify_japan_disclosure_substance",
+            lambda *a, **k: ("ROUTINE", "acquisition of treasury shares"))
+        out = jc.classify_corporate_disclosure(
+            [{"title": "Murata (6981) [x]: Notice Regarding Acquisition "
+                       "of Treasury Shares",
+              "url": "kabutan-tdnet://6981/x", "published": "2026-09-20",
+              "metadata": {"code": "6981", "company": "Murata Manufacturing",
+                           "source_category": "jp_disclosure"}}],
+            model="m")
+        assert len(out) == 1
+        assert out[0]["result"]["signal"] in ("signal", "weak_signal", "noise")
+
+    def test_a_major_shareholder_filing_still_overrides(self, monkeypatch):
+        import pipeline.japan_signal_classifier as jc
+        monkeypatch.setattr(
+            jc, "_classify_japan_disclosure_substance",
+            lambda *a, **k: ("ROUTINE", None))
+        out = jc.classify_corporate_disclosure(
+            [{"title": "Resonac (4004) [x]: Extraordinary Report",
+              "url": "edinet-extraordinary://E00751/S100Z2WW",
+              "published": "2026-09-17",
+              "metadata": {"code": "4004", "company": "Resonac Holdings",
+                           "source_category": "jp_extraordinary",
+                           "current_report_reason": "第19条第2項第4号",
+                           "major_shareholder_name": "Capital Research",
+                           "major_shareholder_pct": 11.06,
+                           "major_shareholder_pct_previous": 9.59,
+                           "major_shareholder_status_change": "became"}}],
+            model="m")
+        assert out[0]["result"]["signal"] == "signal"
+
+
 class TestMajorShareholderChange:
     """A 第19条第2項第4号 extraordinary report, graded on its figures.
 
